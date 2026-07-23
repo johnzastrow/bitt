@@ -7,7 +7,7 @@
 
 Requirements are grouped by area. Each carries a stable REQ-ID used for roadmap traceability.
 
-**Status:** Phase 1 complete and verified (16/54). Phase 2 next.
+**Status:** Phases 1 and 2 complete and verified (30/54). Phase 3 next.
 
 This is a reduction of the bit-tabby-derived scope from 79 requirements to 54. The pre-revision document is in git history. See [PROJECT.md](PROJECT.md) for the reasoning behind each cut.
 
@@ -20,21 +20,21 @@ This is a reduction of the bit-tabby-derived scope from 79 requirements to 54. T
 The accounting spine. Everything else calls into this; nothing else writes entries directly.
 
 - [x] **LEDGER-01**: Posted entries are append-only — the system never updates or deletes one. Enforced by a single write boundary in code, backed by a database abort trigger enabled by default and disableable via configuration for development and manual repair
-- [ ] **LEDGER-02**: A correction is recorded as a reversing entry referencing the original, never as an edit
+- [x] **LEDGER-02**: A correction is recorded as a reversing entry referencing the original, never as an edit
 - [x] **LEDGER-03**: Tab balances are derived by summing ledger entries; no mutable balance column exists as a source of truth
 - [x] **LEDGER-04**: All monetary amounts are stored and computed as integer USD cents; no floating-point arithmetic appears anywhere in the money path, including serialization and display formatting
 - [x] **LEDGER-05**: Every entry records an effective timestamp (when it applies), a created timestamp (when it was recorded), and the user who created it
 - [x] **LEDGER-06**: Every entry receives a server-assigned monotonic sequence number defining authoritative ordering independent of client clocks
-- [ ] **LEDGER-07**: Every entry carries a client-supplied idempotency key with a database-level unique constraint, so a repeated or replayed write can never double-post
+- [x] **LEDGER-07**: Every entry carries a client-supplied idempotency key with a database-level unique constraint, so a repeated or replayed write can never double-post
 
 ### Tabs & Items (TAB)
 
 - [x] **TAB-01**: Provider can create a Services tab — recurring charges on a schedule, with no defined end
 - [ ] **TAB-02**: Provider can create a Payoff tab — a fixed total drawn down by payments, with an expected payment schedule
-- [ ] **TAB-03**: Provider can attach an existing user to a tab as Payee; the tab then appears on that user's dashboard
+- [x] **TAB-03**: Provider can attach an existing user to a tab as Payee; the tab then appears on that user's dashboard
 - [x] **TAB-04**: A tab carries one or more line items, each with its own amount; the items sum to the tab's periodic charge
 - [x] **TAB-05**: Items carry no balance of their own — payments settle against the tab as a whole, with no allocation rules
-- [ ] **TAB-06**: A tab balance may be negative (owed) or positive (credit), and both parties can view the tab's full entry history
+- [x] **TAB-06**: A tab balance may be negative (owed) or positive (credit), and both parties can view the tab's full entry history
 
 ### Schedules & Periods (SCHED)
 
@@ -53,11 +53,11 @@ The accounting spine. Everything else calls into this; nothing else writes entri
 
 ### Payments & Settlement (PAY)
 
-- [ ] **PAY-01**: Payee can record a payment in a single tap from the dashboard, with amount and date prefilled
-- [ ] **PAY-02**: A payment records its method (cash, transfer, other), since money moves outside the app
-- [ ] **PAY-03**: Provider can record a payment on a Payee's behalf, attributed to the Provider on the entry
-- [ ] **PAY-04**: A recorded payment can be undone, implemented as a reversing entry rather than a deletion
-- [ ] **PAY-05**: A payment made in advance of anything owed becomes a credit that automatically offsets future charges until exhausted
+- [x] **PAY-01**: Payee can record a payment in a single tap from the dashboard, with amount and date prefilled
+- [x] **PAY-02**: A payment records its method (cash, transfer, other), since money moves outside the app
+- [x] **PAY-03**: Provider can record a payment on a Payee's behalf, attributed to the Provider on the entry
+- [x] **PAY-04**: A recorded payment can be undone, implemented as a reversing entry rather than a deletion
+- [x] **PAY-05**: A payment made in advance of anything owed becomes a credit that automatically offsets future charges until exhausted
 
 ### Payoff Tabs (PAYOFF)
 
@@ -82,15 +82,15 @@ Driven entirely by the schedule's due dates. Reuses the lazy posting path.
 - [x] **AUTH-01**: User can create an account with email and password, hashed with Argon2id
 - [x] **AUTH-02**: User can log in and remain logged in across sessions via secure, HttpOnly, SameSite cookies, and can log out from any page
 - [x] **AUTH-03**: A fresh deployment presents a one-time setup screen creating the first admin account, which locks permanently once completed
-- [ ] **AUTH-04**: Admin can add and remove user accounts, and may also hold the Provider or Payee role on tabs
-- [ ] **AUTH-05**: Every request is authorized against the specific tab it touches; a user can never read or write a tab they do not participate in, and may hold Provider on some tabs and Payee on others
+- [x] **AUTH-04**: Admin can add and remove user accounts, and may also hold the Provider or Payee role on tabs
+- [x] **AUTH-05**: Every request is authorized against the specific tab it touches; a user can never read or write a tab they do not participate in, and may hold Provider on some tabs and Payee on others
 
 ### Interface (UI)
 
-- [ ] **UI-01**: The dashboard presents each active tab as a card showing current balance and status at a glance
+- [x] **UI-01**: The dashboard presents each active tab as a card showing current balance and status at a glance
 - [x] **UI-02**: The interface is mobile-first and fully usable on desktop
-- [ ] **UI-03**: Settling from the dashboard takes one tap plus one confirmation, with every field prefilled and immediate visual feedback on success
-- [ ] **UI-04**: Colors, spacing, and type are defined as design tokens using the Chalk & Pastel palette rather than hardcoded values
+- [x] **UI-03**: Settling from the dashboard takes one tap plus one confirmation, with every field prefilled and immediate visual feedback on success
+- [x] **UI-04**: Colors, spacing, and type are defined as design tokens using the Chalk & Pastel palette rather than hardcoded values
 - [ ] **UI-05**: The app installs to a phone home screen as a PWA and opens to a cached shell; all data operations require a connection
 
 ### Deployment & Data (DEPLOY)
@@ -159,18 +159,18 @@ Requirement-to-phase mapping. Every phase after Phase 1 adds to an application a
 | REQ-ID | Phase | Status |
 |--------|-------|--------|
 | LEDGER-01 | Phase 1 | Complete |
-| LEDGER-02 | Phase 2 | Pending |
+| LEDGER-02 | Phase 2 | Complete |
 | LEDGER-03 | Phase 1 | Complete |
 | LEDGER-04 | Phase 1 | Complete |
 | LEDGER-05 | Phase 1 | Complete |
 | LEDGER-06 | Phase 1 | Complete |
-| LEDGER-07 | Phase 2 | Pending |
+| LEDGER-07 | Phase 2 | Complete |
 | TAB-01 | Phase 1 | Complete |
 | TAB-02 | Phase 4 | Pending |
-| TAB-03 | Phase 2 | Pending |
+| TAB-03 | Phase 2 | Complete |
 | TAB-04 | Phase 1 | Complete |
 | TAB-05 | Phase 1 | Complete |
-| TAB-06 | Phase 2 | Pending |
+| TAB-06 | Phase 2 | Complete |
 | SCHED-01 | Phase 3 | Pending |
 | SCHED-02 | Phase 3 | Pending |
 | SCHED-03 | Phase 3 | Pending |
@@ -180,11 +180,11 @@ Requirement-to-phase mapping. Every phase after Phase 1 adds to an application a
 | CHG-02 | Phase 3 | Pending |
 | CHG-03 | Phase 1 | Complete |
 | CHG-04 | Phase 3 | Pending |
-| PAY-01 | Phase 2 | Pending |
-| PAY-02 | Phase 2 | Pending |
-| PAY-03 | Phase 2 | Pending |
-| PAY-04 | Phase 2 | Pending |
-| PAY-05 | Phase 2 | Pending |
+| PAY-01 | Phase 2 | Complete |
+| PAY-02 | Phase 2 | Complete |
+| PAY-03 | Phase 2 | Complete |
+| PAY-04 | Phase 2 | Complete |
+| PAY-05 | Phase 2 | Complete |
 | PAYOFF-01 | Phase 4 | Pending |
 | PAYOFF-02 | Phase 4 | Pending |
 | PAYOFF-03 | Phase 4 | Pending |
@@ -198,12 +198,12 @@ Requirement-to-phase mapping. Every phase after Phase 1 adds to an application a
 | AUTH-01 | Phase 1 | Complete |
 | AUTH-02 | Phase 1 | Complete |
 | AUTH-03 | Phase 1 | Complete |
-| AUTH-04 | Phase 2 | Pending |
-| AUTH-05 | Phase 2 | Pending |
-| UI-01 | Phase 2 | Pending |
+| AUTH-04 | Phase 2 | Complete |
+| AUTH-05 | Phase 2 | Complete |
+| UI-01 | Phase 2 | Complete |
 | UI-02 | Phase 1 | Complete |
-| UI-03 | Phase 2 | Pending |
-| UI-04 | Phase 2 | Pending |
+| UI-03 | Phase 2 | Complete |
+| UI-04 | Phase 2 | Complete |
 | UI-05 | Phase 5 | Pending |
 | DEPLOY-01 | Phase 1 | Complete |
 | DEPLOY-02 | Phase 1 | Complete |

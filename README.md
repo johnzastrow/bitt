@@ -10,12 +10,23 @@ Built for personal, self-hosted home use: family phone plans, shared insurance, 
 
 ## Status
 
-Pre-implementation. Scope is defined; no application code yet.
+**Usable.** Phases 1 and 2 of 5 complete — 30 of 54 v1 requirements.
+
+```
+make build && ./bittabby     # http://localhost:8080
+```
+
+A fresh deployment opens on a one-time setup screen. From there you can add a
+second person, create a tab with line items, post charges, attach the other
+person as payee, settle in one tap plus one confirmation, record a payment on
+someone's behalf, undo anything as a reversing entry, and pay ahead to build a
+credit. Recurrence, payoff tabs, late fees, and packaging are still to come.
 
 - [docs/PROJECT.md](docs/PROJECT.md) — what this is, what it deliberately is not, and why
 - [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — 54 v1 requirements with stable IDs
 - [docs/planning/ROADMAP.md](docs/planning/ROADMAP.md) — five phases with exit criteria
 - [docs/planning/STATE.md](docs/planning/STATE.md) — where things currently stand
+- [docs/planning/HANDOFF.md](docs/planning/HANDOFF.md) — pick the work up cold
 
 ## Core value
 
@@ -30,6 +41,8 @@ That commitment drives the architecture: entries are append-only and never edite
 | Stack | Go, server-rendered with templ and htmx. One language, one static binary |
 | Data | SQLite first, MariaDB second, behind a single repository interface |
 | Recurrence | Due periods post lazily inside the read transaction — no background scheduler |
+| Idempotency | Every form carries a key; a double-tapped submit posts exactly once |
+| Corrections | Undo posts a reversing entry; the original stays visible |
 | Money | Integer USD cents. USD only |
 | Tabs | Services (recurring, no end) and Payoff (fixed total drawn down) |
 | Items | Amounts that sum to the periodic charge, so cost changes are visible. No per-item balances |

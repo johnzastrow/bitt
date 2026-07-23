@@ -6,7 +6,7 @@ Requirement text lives in [REQUIREMENTS.md](../REQUIREMENTS.md); reasoning lives
 
 ---
 
-## Phase 1 — Walking skeleton
+## Phase 1 — Walking skeleton  -- COMPLETE
 
 **Goal:** a single binary you can run, log into, and see a tab with a correct balance.
 
@@ -25,7 +25,7 @@ Requirement text lives in [REQUIREMENTS.md](../REQUIREMENTS.md); reasoning lives
 
 ---
 
-## Phase 2 — The settle loop
+## Phase 2 — The settle loop  -- COMPLETE
 
 **Goal:** the product. Two people, one tab, payments recorded and undone, balance always right.
 
@@ -45,7 +45,7 @@ Requirement text lives in [REQUIREMENTS.md](../REQUIREMENTS.md); reasoning lives
 
 ---
 
-## Phase 3 — Recurrence
+## Phase 3 — Recurrence  -- NEXT
 
 **Goal:** tabs charge themselves on a schedule, and both parties can see what changed.
 

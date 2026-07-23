@@ -1,6 +1,7 @@
 # BitTabby — Handoff
 
-**Written:** 2026-07-23. Updated at the end of Phase 3.
+**Written:** 2026-07-23. Updated at the end of Phase 4 (plus a UI reorganization,
+versioning, and a logo).
 
 This is written to be read cold, by someone (or some session) with no memory of
 the work. It covers what exists, why it is shaped this way, what to do next, and
@@ -67,20 +68,36 @@ theme switching, multi-currency, and **any background scheduler process**.
 
 ## Where things stand
 
-Phases 1, 2, and 3 are complete and verified. 38 of 54 requirements.
+Phases 1 through 4 are complete and verified. 49 of 54 requirements. The
+roadmap is now **six phases**: Phase 5 is notifications (added by user request),
+Phase 6 is ship.
 
 | Commit | What |
 |---|---|
-| `a49ce5d` | Baseline: the original bit-tabby docs, preserved |
-| `a54f5f7` | Scope revision, 79 requirements to 54, reordered |
 | `030a84e` | Phase 1 — walking skeleton |
-| `ec5655c` | Phase 1 status |
 | `9ef145e` | Phase 2 — the settle loop |
-| `529f00f` | Phase 2 status and a cold-start handoff |
-| (this one) | Phase 3 — recurrence |
+| `8a6d25e` | Phase 3 — recurrence |
+| `8d3e989` | Phase 4 — payoff tabs, late fees, interest; versioning; logo |
+| `4da3c2d` | UI: tab page grouped into Day-to-day / Setup, notes everywhere |
+| `cb11413` | Payoff: loan amount required so the principal always posts |
 
-Full suite green including `-race`. Coverage: money 96%, ledger 92%,
-schedule 87%, web 67%, sqlite 66%, auth 44%.
+Full suite green including `-race`. Coverage: fee 96%, money 96%, ledger ~90%,
+schedule 87%, sqlite ~73%, web ~71%, auth 44%.
+
+**Running now:** the demo binary is live on `:8080` (migrated through 0005). To
+restart from cold: `make build && BITT_SECURE_COOKIES=false ./bittabby`.
+
+### The one live-data gotcha to know about
+
+The demo database has a "Car Loan" Payoff tab that is **set up wrong**, on
+purpose-as-a-lesson: its $22,000 went into a *line item* ("Evergreen Payment")
+instead of the loan amount, so it has no principal charge and reads as paid off.
+This is exactly the confusion `cb11413` closes. If the user asks about it: the
+fix is to post $22,000 as a charge (Day to day → Post a charge) and change the
+$22,000 line item to the real monthly payment. Do NOT edit their ledger directly
+— it is append-only and theirs. On a Payoff tab, the **loan amount is a charge
+(the principal); line items are the expected payment per period** — two
+different things, and conflating them is the trap.
 
 ---
 
@@ -88,15 +105,26 @@ schedule 87%, web 67%, sqlite 66%, auth 44%.
 
 ```
 cmd/bittabby/          main, config load, graceful shutdown, embedded tzdata
+internal/version/      the version constant; ldflags inject commit/date
 internal/money/        Cents (int64). No float anywhere in the money path
 internal/schedule/     pure period arithmetic. No database, no clock, no I/O
+internal/fee/          pure late-fee sizing (fixed/percent, cap, rounding)
 internal/store/        persistence CONTRACT (interfaces only, no SQL)
 internal/store/sqlite/ the only implementation, plus embedded migrations
-internal/ledger/       the ONLY write boundary for financial entries;
-                       also accrual (accrual.go) and statements (statement.go)
+internal/ledger/       the ONLY write boundary for financial entries. accrual.go
+                       (period charges), fees.go, interest.go, payoff.go,
+                       statement.go -- all accrual runs lazily on read
 internal/auth/         Argon2id, sessions, CSRF
 internal/web/          routes, handlers, templ views, embedded static assets
 ```
+
+The three pure packages (`money`, `schedule`, `fee`) have no I/O and are tested
+exhaustively on their own — that is where the awkward arithmetic (DST, month-end,
+rounding, caps) is pinned before any wiring. Every accrual type — period charges,
+late fees, interest — follows one pattern: a claim table with a `(tab, period)`
+primary key and append-only triggers, written in the same transaction as its
+entry, so it happens exactly once even under concurrent reads. Copy that pattern
+for any new accrual; do not invent a second one.
 
 **`internal/ledger` is the only thing that writes entries.** Not a convention —
 `store.EntryStore` exposes no update or delete method at all, and SQLite abort
@@ -305,6 +333,49 @@ different on purpose.
 **Version lives in `internal/version`** (a constant `Number`, ldflags inject
 commit/date). Shown in the footer and healthz. Bump `Number` on every functional
 change per semver; add a CHANGELOG entry. The Makefile injects provenance only.
+
+---
+
+## The tab page layout (as of the UI reorg, `4da3c2d`)
+
+`views.TabDetail` is organized top to bottom as: **orientation** (always visible —
+name, kind, balance, schedule/fee summary, loan progress, upcoming notice), then
+two `<details>` groups — **Day to day** (open: payment, charge, read-only items,
+periods, people, history) and **Setup & configuration** (collapsed, provider/
+admin only: tab details, schedule, late fee, interest, line-item editing). The
+groups are native `<details>` (no JS, CSP-safe); styles are under
+"Setup / Operational collapsible groups" in `app.css`. A payee sees only
+orientation + Day-to-day.
+
+Every transaction entry point takes a **note**: the full payment form, the
+dashboard settle card, one-off charges (memo), and fee waivers (reason).
+
+---
+
+## Phase 5 is next: notifications
+
+Not in the original 54; added when the user asked for payment reminders. The
+design is recorded in ROADMAP.md and is deliberately constrained:
+
+- **External cron drives it**, hitting an authenticated `/internal/tick`
+  endpoint. No timer inside the binary — a background scheduler is the
+  Out-of-Scope item that stalled the predecessor, and the ledger stays lazy.
+- **Idempotent via a sent-notifications claim table**, the same pattern as
+  `posted_periods` / `posted_fees` / `posted_interest`: a re-run of the same hour
+  sends nothing twice, a missed hour sends late rather than never.
+- Email and ntfy delivery; per-user, per-event preferences; secrets via env/file.
+- Deliver: a payment request two weeks before a due date, reminders one week and
+  one day before (configurable), and notices on a payment made and a payment
+  missed, to all parties on a tab.
+
+**The load-bearing rule:** this is the first outbound side effect in the app. It
+must stay entirely off the balance path — a failed or double send can never
+touch a ledger. The in-app half already ships (the two-week upcoming-payment
+notice, `Server.upcoming`); Phase 5 is only the pushed-delivery half.
+
+After Phase 5, **Phase 6 — ship**: MariaDB as a second backend (DEPLOY-02 kept
+the repository interface clean for exactly this), Docker as non-root, PWA shell,
+backup/restore. 5 requirements: UI-05, DEPLOY-03/05/06/07.
 
 ---
 

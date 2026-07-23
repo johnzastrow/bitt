@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/johnzastrow/bitt/internal/ledger"
 	"github.com/johnzastrow/bitt/internal/money"
+	"github.com/johnzastrow/bitt/internal/schedule"
 	"github.com/johnzastrow/bitt/internal/store"
 )
 
@@ -21,10 +23,25 @@ type TabCard struct {
 	// IdempotencyKey is minted per render, so a double-tapped settle posts once
 	// (LEDGER-07).
 	IdempotencyKey string
+	// NextDue is when the tab's next scheduled charge lands, zero if the tab is
+	// billed by hand (SCHED-05).
+	NextDue schedule.Date
+	// JustPosted counts the cycles this very render brought current, so a
+	// balance that moved on load says why (SCHED-03).
+	JustPosted int
+	// Custom opens the settle amount for editing, so a partial payment or a
+	// payment beyond the balance can be recorded from the dashboard (PAY-05).
+	Custom bool
+	// Error is a message about what was just typed, shown on the card itself
+	// rather than as a status code htmx would decline to swap.
+	Error string
 }
 
 // CanSettle reports whether the settle control should appear.
 func (c TabCard) CanSettle() bool { return c.SettleAmount > 0 }
+
+// Scheduled reports whether the tab bills itself.
+func (c TabCard) Scheduled() bool { return !c.NextDue.IsZero() }
 
 // Dashboard lists the tabs the signed-in user participates in (UI-01).
 templ Dashboard(p Page, cards []TabCard) {
@@ -54,16 +71,27 @@ templ Dashboard(p Page, cards []TabCard) {
 // TabCardView renders one dashboard card. It is also returned on its own as the
 // htmx response to a settle, so the card updates in place (UI-03).
 templ TabCardView(p Page, c TabCard) {
-	<div class={ "card", "tabcard", balanceClass(c.Balance) }>
+	<div class={ "card", "tabcard", balanceClass(c.Balance), archivedClass(c.Tab) }>
 		<a class="cardhead" href={ tabHref(c.Tab.ID) }>
 			<div class="rowbetween">
 				<h2>{ c.Tab.Name }</h2>
 				<span class={ "amount", balanceClass(c.Balance) }>{ c.Balance.Display() }</span>
 			</div>
-			<p class="muted small">{ balanceLabel(c.Balance) } &middot; you are the { string(c.Role) }</p>
+			<p class="muted small">
+				{ balanceLabel(c.Balance) } &middot; you are the { string(c.Role) }
+				if c.Tab.ArchivedAt != nil {
+					&middot; archived
+				}
+			</p>
+			if c.Scheduled() {
+				<p class="muted small">Next charge { c.NextDue.Display() }</p>
+			}
+			if c.JustPosted > 0 {
+				<p class="small posted">{ postedNote(c.JustPosted) }</p>
+			}
 		</a>
-		if c.CanSettle() {
-			<div class="cardfoot">
+		<div class="cardfoot">
+			if c.CanSettle() {
 				<button
 					class="primary settle"
 					hx-get={ settleConfirmPath(c.Tab.ID) }
@@ -72,19 +100,42 @@ templ TabCardView(p Page, c TabCard) {
 				>
 					{ fmt.Sprintf("Settle %s", c.SettleAmount.Display()) }
 				</button>
-			</div>
-		}
+				<button
+					class="ghost settle"
+					hx-get={ settleCustomPath(c.Tab.ID) }
+					hx-target={ "#" + cardID(c.Tab.ID) }
+					hx-swap="innerHTML"
+				>Other amount</button>
+			} else {
+				// Nothing is owed, but paying ahead is still allowed and builds
+				// a credit against the next charge (PAY-05).
+				<button
+					class="ghost settle"
+					hx-get={ settleCustomPath(c.Tab.ID) }
+					hx-target={ "#" + cardID(c.Tab.ID) }
+					hx-swap="innerHTML"
+				>Record a payment</button>
+			}
+		</div>
 	</div>
 }
 
 // SettleConfirm is the second half of "one tap plus one confirmation" (UI-03).
-// Every field is prefilled; confirming needs no typing.
+//
+// Two modes. The default prefills the whole outstanding balance and needs no
+// typing, which is the case that has to stay fast. "Pay a different amount"
+// opens the figure for editing, for a partial payment or for paying ahead into
+// credit (PAY-05) -- both of which the ledger has always accepted, and which
+// previously meant leaving the dashboard for the tab page.
 templ SettleConfirm(p Page, c TabCard) {
 	<div class={ "card", "tabcard", "confirming" }>
 		<div class="rowbetween">
 			<h2>{ c.Tab.Name }</h2>
 			<span class={ "amount", balanceClass(c.Balance) }>{ c.Balance.Display() }</span>
 		</div>
+		if c.Error != "" {
+			<p class="confirmerr">{ c.Error }</p>
+		}
 		<form
 			class="confirmform"
 			hx-post={ settlePath(c.Tab.ID) }
@@ -93,10 +144,29 @@ templ SettleConfirm(p Page, c TabCard) {
 		>
 			<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
 			<input type="hidden" name="idempotency_key" value={ c.IdempotencyKey }/>
-			<input type="hidden" name="amount" value={ c.SettleAmount.String() }/>
-			<p class="confirmq">
-				Record a payment of <strong>{ c.SettleAmount.Display() }</strong>?
-			</p>
+			if c.Custom {
+				<label class="methodrow">
+					How much?
+					<input
+						type="text"
+						name="amount"
+						inputmode="decimal"
+						required
+						autofocus
+						value={ prefill(c.SettleAmount) }
+						placeholder="0.00"
+						aria-label="Payment amount"
+					/>
+				</label>
+				<p class="muted small">
+					{ balanceLabel(c.Balance) }. Anything beyond that becomes a credit against the next charge.
+				</p>
+			} else {
+				<input type="hidden" name="amount" value={ c.SettleAmount.String() }/>
+				<p class="confirmq">
+					Record a payment of <strong>{ c.SettleAmount.Display() }</strong>?
+				</p>
+			}
 			<label class="methodrow">
 				How was it paid?
 				<select name="method">
@@ -113,7 +183,22 @@ templ SettleConfirm(p Page, c TabCard) {
 					hx-target={ "#" + cardID(c.Tab.ID) }
 					hx-swap="innerHTML"
 				>Cancel</button>
-				<button class="primary" type="submit">Confirm payment</button>
+				if !c.Custom {
+					<button
+						type="button"
+						class="ghost"
+						hx-get={ settleCustomPath(c.Tab.ID) }
+						hx-target={ "#" + cardID(c.Tab.ID) }
+						hx-swap="innerHTML"
+					>Different amount</button>
+				}
+				<button class="primary" type="submit">
+					if c.Custom {
+						Record payment
+					} else {
+						Confirm payment
+					}
+				</button>
 			</div>
 		</form>
 	</div>
@@ -134,6 +219,14 @@ templ NewTab(p Page) {
 					What this covers
 					<input type="text" name="description" placeholder="Optional"/>
 				</label>
+				<label>
+					Kind
+					<select name="kind">
+						for _, k := range store.TabKinds() {
+							<option value={ string(k) }>{ k.Label() } &mdash; { k.Describe() }</option>
+						}
+					</select>
+				</label>
 				<fieldset class="stack">
 					<legend>Line items</legend>
 					<p class="muted small">
@@ -147,10 +240,53 @@ templ NewTab(p Page) {
 						</div>
 					}
 				</fieldset>
+				@ScheduleFields(schedule.Schedule{})
 				<button class="primary" type="submit">Create tab</button>
 			</form>
 		</section>
 	}
+}
+
+// ScheduleFields is the recurrence control, shared by the create form and the
+// tab page so both offer exactly the same choices (SCHED-01).
+//
+// The empty recurrence is a real option and is listed first: a tab billed
+// entirely by hand stays legitimate, and clearing a schedule uses this same
+// control rather than a separate "remove" action.
+templ ScheduleFields(current schedule.Schedule) {
+	<fieldset class="stack">
+		<legend>Schedule</legend>
+		<label>
+			Charge this tab
+			<select name="schedule_kind">
+				<option value="" selected?={ !current.Set() }>Only when I post a charge by hand</option>
+				for _, k := range schedule.Kinds() {
+					<option value={ string(k) } selected?={ current.Kind == k }>{ kindLabel(k) }</option>
+				}
+			</select>
+		</label>
+		<label>
+			Starting on
+			<input
+				type="date"
+				name="schedule_anchor"
+				value={ anchorValue(current) }
+			/>
+		</label>
+		<label>
+			The charge lands
+			<select name="schedule_billing">
+				for _, b := range schedule.Billings() {
+					<option value={ string(b) } selected?={ current.Billing == b }>{ b.Label() }</option>
+				}
+			</select>
+		</label>
+		<p class="muted small">
+			Periods post when someone opens the tab, so a tab left alone catches up the moment it is looked at.
+			A start date on the 29th, 30th, or 31st lands on the last day of any month that is shorter, and returns to
+			the chosen day afterward.
+		</p>
+	</fieldset>
 }
 
 // HistoryRow pairs an entry with what the viewer may do to it.
@@ -172,18 +308,54 @@ type TabDetailData struct {
 	Role           store.Role
 	IdempotencyKey string
 	SettleAmount   money.Cents
+	// Statements is the per-period view, newest first (CHG-04).
+	Statements []ledger.Statement
+	// Scheduled reports whether the tab bills itself, and NextDue when the next
+	// charge lands (SCHED-05).
+	Scheduled bool
+	NextDue   schedule.Date
+	// JustPosted counts the cycles this render brought current (SCHED-03).
+	JustPosted int
+	// Today is the current date in the instance timezone.
+	Today schedule.Date
+	// CanManage covers the tab's own settings: name, kind, schedule, items,
+	// and people. Its Provider may, and so may a global administrator.
+	CanManage bool
+	// CanTransact covers moving money, which is membership only.
+	CanTransact bool
+	// AsAdmin reports that the viewer is here on the administrator role rather
+	// than as a participant, which the page says out loud.
+	AsAdmin bool
 }
 
 // IsProvider reports whether the viewer bills on this tab.
 func (d TabDetailData) IsProvider() bool { return d.Role == store.RoleProvider }
 
+// Archived reports whether the tab has been retired from the active list.
+func (d TabDetailData) Archived() bool { return d.Tab.ArchivedAt != nil }
+
 // TabDetail shows a tab, its people, its derived balance, and its history.
 templ TabDetail(p Page, d TabDetailData) {
 	@Layout(p) {
+		if d.AsAdmin {
+			<p class="banner banner-error">
+				You are not on this tab. You are seeing it as an administrator, and that access is logged.
+				You can change its settings; recording payments is for the people on it.
+			</p>
+		}
+		if d.Archived() {
+			<p class="banner">
+				This tab is archived. It has stopped billing and sits below the active ones. Its history is untouched.
+			</p>
+		}
 		<section class={ "card", "tabhero", balanceClass(d.Balance) }>
 			<div class="rowbetween">
 				<div>
 					<h1>{ d.Tab.Name }</h1>
+					<p class="kindline">
+						<span class={ "pill", "pill-kind-" + string(d.Tab.Kind) }>{ d.Tab.Kind.Label() }</span>
+						<span class="muted small">{ d.Tab.Kind.Describe() }</span>
+					</p>
 					if d.Tab.Description != "" {
 						<p class="muted">{ d.Tab.Description }</p>
 					}
@@ -193,9 +365,19 @@ templ TabDetail(p Page, d TabDetailData) {
 					<span class="muted small">{ balanceLabel(d.Balance) }</span>
 				</div>
 			</div>
+			<p class="muted small schedline">
+				{ d.Tab.Schedule.Describe() }
+				if d.Scheduled {
+					&middot; next charge { d.NextDue.Display() }
+				}
+			</p>
+			if d.JustPosted > 0 {
+				<p class="small posted">{ postedNote(d.JustPosted) }</p>
+			}
 		</section>
-		<section class="card">
-			<h2>Record a payment</h2>
+		if d.CanTransact {
+			<section class="card">
+				<h2>Record a payment</h2>
 			if d.SettleAmount > 0 {
 				<p class="muted small">
 					if d.IsProvider() {
@@ -226,8 +408,48 @@ templ TabDetail(p Page, d TabDetailData) {
 				</select>
 				<input type="text" name="memo" placeholder="Note (optional)" aria-label="Note"/>
 				<button class="primary" type="submit">Record payment</button>
-			</form>
-		</section>
+				</form>
+			</section>
+		}
+		if d.CanManage {
+			<section class="card">
+				<h2>Tab details</h2>
+				<form method="post" action={ detailsAction(d.Tab.ID) } class="stack">
+					<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+					<label>
+						Name
+						<input type="text" name="name" value={ d.Tab.Name } required maxlength="120"/>
+					</label>
+					<label>
+						What this covers
+						<input type="text" name="description" value={ d.Tab.Description } maxlength="500" placeholder="Optional"/>
+					</label>
+					<label>
+						Kind
+						<select name="kind">
+							for _, k := range store.TabKinds() {
+								<option value={ string(k) } selected?={ d.Tab.Kind == k }>
+									{ k.Label() } &mdash; { k.Describe() }
+								</option>
+							}
+						</select>
+					</label>
+					<button class="primary" type="submit">Save details</button>
+				</form>
+				<p class="muted small">
+					Changing the kind changes how the tab is presented and measured, never what it has already charged.
+					Every change here is written to the log.
+				</p>
+				<form method="post" action={ archiveAction(d.Tab.ID) } class="inline archiveform">
+					<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+					if d.Archived() {
+						<button type="submit">Reactivate this tab</button>
+					} else {
+						<button type="submit">Archive this tab</button>
+					}
+				</form>
+			</section>
+		}
 		if d.IsProvider() {
 			<section class="card">
 				<h2>Post a charge</h2>
@@ -239,29 +461,110 @@ templ TabDetail(p Page, d TabDetailData) {
 					<button class="primary" type="submit">Post charge</button>
 				</form>
 				<p class="muted small">
-					Recurring tabs charge themselves on a schedule from Phase 3. Until then a charge is posted by hand.
+					A one-off charge, on top of whatever the schedule posts.
 				</p>
 			</section>
 		}
-		if len(d.Items) > 0 {
+		if d.CanManage {
+			<section class="card">
+				<h2>Schedule</h2>
+				<form method="post" action={ scheduleAction(d.Tab.ID) } class="stack">
+					<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+					@ScheduleFields(d.Tab.Schedule)
+					<button class="primary" type="submit">Save schedule</button>
+				</form>
+			</section>
+		}
+		if len(d.Items) > 0 || d.CanManage {
 			<section class="card">
 				<h2>What this covers</h2>
-				<table class="items">
-					<tbody>
-						for _, it := range d.Items {
+				if len(d.Items) == 0 {
+					<p class="muted">No line items yet. A scheduled period with no items posts a charge of nothing.</p>
+				} else {
+					<table class="items">
+						<tbody>
+							for _, it := range d.Items {
+								<tr>
+									<td>{ it.Name }</td>
+									<td class="right">{ it.Amount.Display() }</td>
+								</tr>
+							}
+						</tbody>
+						<tfoot>
 							<tr>
-								<td>{ it.Name }</td>
-								<td class="right">{ it.Amount.Display() }</td>
+								<td>Per period</td>
+								<td class="right">{ d.ItemTotal.Display() }</td>
 							</tr>
+						</tfoot>
+					</table>
+				}
+				if d.CanManage {
+					// Behind a disclosure so the common case -- reading what the
+					// tab covers -- is not a screen of input boxes.
+					<details class="editor">
+						<summary>Change what this covers</summary>
+						<p class="muted small">
+							A change applies from the next period onward. Periods already posted keep the breakdown they
+							captured, so what was billed stays what was billed (CHG-02).
+						</p>
+						for _, it := range d.Items {
+							<div class="itemedit">
+								<form method="post" action={ itemAction(d.Tab.ID, it.ID) } class="inlineform">
+									<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+									<input type="text" name="name" value={ it.Name } required aria-label="Item name"/>
+									<input type="text" name="amount" inputmode="decimal" value={ it.Amount.String() } required aria-label="Item amount"/>
+									<button type="submit">Save</button>
+								</form>
+								<form method="post" action={ itemRemoveAction(d.Tab.ID, it.ID) } class="inline">
+									<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+									<button class="link" type="submit">Remove</button>
+								</form>
+							</div>
 						}
-					</tbody>
-					<tfoot>
-						<tr>
-							<td>Per period</td>
-							<td class="right">{ d.ItemTotal.Display() }</td>
-						</tr>
-					</tfoot>
-				</table>
+						<form method="post" action={ itemsAction(d.Tab.ID) } class="inlineform">
+							<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+							<input type="text" name="name" placeholder="Add a line item" required aria-label="New item name"/>
+							<input type="text" name="amount" inputmode="decimal" placeholder="0.00" required aria-label="New item amount"/>
+							<button type="submit">Add item</button>
+						</form>
+					</details>
+				}
+			</section>
+		}
+		if len(d.Statements) > 0 {
+			<section class="card">
+				<h2>Periods</h2>
+				<ul class="statements">
+					for _, st := range d.Statements {
+						<li class={ "statement", statementClass(st) }>
+							<div class="rowbetween">
+								<div>
+									<strong>{ periodRange(st) }</strong>
+									<p class="muted small">
+										Due { st.Period.DueOn.Display() } &middot; { statementStatus(st) }
+									</p>
+								</div>
+								<span class={ "amount", "owed" }>{ st.Charge.Display() }</span>
+							</div>
+							if len(st.Items) > 0 {
+								<table class="items breakdown">
+									<tbody>
+										for _, it := range st.Items {
+											<tr>
+												<td>{ it.Name }</td>
+												<td class="right">{ it.Amount.Display() }</td>
+											</tr>
+										}
+									</tbody>
+								</table>
+							}
+						</li>
+					}
+				</ul>
+				<p class="muted small">
+					Payments are applied to the oldest open period first. Nothing here is stored -- every figure is
+					computed from the ledger entries that produce the balance above.
+				</p>
 			</section>
 		}
 		<section class="card">
@@ -271,10 +574,16 @@ templ TabDetail(p Page, d TabDetailData) {
 					<li>
 						<span>{ who.DisplayName }</span>
 						<span class={ "pill", "pill-" + string(who.Role) }>{ string(who.Role) }</span>
+						if d.CanManage {
+							<form method="post" action={ participantRemoveAction(d.Tab.ID, who.UserID) } class="inline pushright">
+								<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+								<button class="link" type="submit">Remove</button>
+							</form>
+						}
 					</li>
 				}
 			</ul>
-			if d.IsProvider() {
+			if d.CanManage {
 				if len(d.Attachable) > 0 {
 					<form method="post" action={ participantAction(d.Tab.ID) } class="inlineform">
 						<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
@@ -367,6 +676,11 @@ func settlePath(id int64) string {
 	return "/tabs/" + strconv.FormatInt(id, 10) + "/settle"
 }
 
+// settleCustomPath opens the same confirmation with the amount editable.
+func settleCustomPath(id int64) string {
+	return "/tabs/" + strconv.FormatInt(id, 10) + "/settle?custom=1"
+}
+
 func chargeAction(id int64) templ.SafeURL {
 	return templ.SafeURL("/tabs/" + strconv.FormatInt(id, 10) + "/charges")
 }
@@ -382,6 +696,114 @@ func participantAction(id int64) templ.SafeURL {
 func undoAction(tabID, seq int64) templ.SafeURL {
 	return templ.SafeURL("/tabs/" + strconv.FormatInt(tabID, 10) +
 		"/entries/" + strconv.FormatInt(seq, 10) + "/undo")
+}
+
+func detailsAction(id int64) templ.SafeURL {
+	return templ.SafeURL("/tabs/" + strconv.FormatInt(id, 10) + "/details")
+}
+
+func archiveAction(id int64) templ.SafeURL {
+	return templ.SafeURL("/tabs/" + strconv.FormatInt(id, 10) + "/archive")
+}
+
+func participantRemoveAction(tabID, userID int64) templ.SafeURL {
+	return templ.SafeURL("/tabs/" + strconv.FormatInt(tabID, 10) +
+		"/participants/" + strconv.FormatInt(userID, 10) + "/remove")
+}
+
+func scheduleAction(id int64) templ.SafeURL {
+	return templ.SafeURL("/tabs/" + strconv.FormatInt(id, 10) + "/schedule")
+}
+
+func itemsAction(id int64) templ.SafeURL {
+	return templ.SafeURL("/tabs/" + strconv.FormatInt(id, 10) + "/items")
+}
+
+func itemAction(tabID, itemID int64) templ.SafeURL {
+	return templ.SafeURL("/tabs/" + strconv.FormatInt(tabID, 10) +
+		"/items/" + strconv.FormatInt(itemID, 10))
+}
+
+func itemRemoveAction(tabID, itemID int64) templ.SafeURL {
+	return templ.SafeURL("/tabs/" + strconv.FormatInt(tabID, 10) +
+		"/items/" + strconv.FormatInt(itemID, 10) + "/remove")
+}
+
+// kindLabel names a recurrence in the words the form asks its question in.
+func kindLabel(k schedule.Kind) string {
+	switch k {
+	case schedule.Weekly:
+		return "Every week"
+	case schedule.Biweekly:
+		return "Every two weeks"
+	case schedule.MonthlyDay:
+		return "Every month, on the start date's day"
+	case schedule.MonthlyLast:
+		return "Every month, on the last day"
+	default:
+		return string(k)
+	}
+}
+
+// anchorValue fills the date input. A tab with no schedule yet leaves it blank
+// rather than proposing a date the Provider did not choose.
+func anchorValue(s schedule.Schedule) string {
+	if s.Anchor.IsZero() {
+		return ""
+	}
+	return s.Anchor.String()
+}
+
+// postedNote explains a balance that moved on load, since a charge appearing
+// without anyone posting one is otherwise startling (SCHED-03).
+func postedNote(n int) string {
+	if n == 1 {
+		return "1 period came due and was posted just now."
+	}
+	return fmt.Sprintf("%d periods came due and were posted just now.", n)
+}
+
+// periodRange names the days a cycle covers. End is exclusive, so the label
+// names the last day actually inside it.
+func periodRange(st ledger.Statement) string {
+	return st.Period.Start.Display() + " to " + st.Period.End.AddDays(-1).Display()
+}
+
+func statementStatus(st ledger.Statement) string {
+	switch {
+	case st.Reversed:
+		return "undone"
+	case st.Settled():
+		return "paid"
+	case st.Overdue:
+		return fmt.Sprintf("%s overdue", st.Outstanding().Display())
+	case st.Paid > 0:
+		return fmt.Sprintf("%s of %s paid", st.Paid.Display(), st.Charge.Display())
+	default:
+		return fmt.Sprintf("%s outstanding", st.Outstanding().Display())
+	}
+}
+
+func statementClass(st ledger.Statement) string {
+	switch {
+	case st.Reversed:
+		return "reversal"
+	case st.Settled():
+		return "settled"
+	case st.Overdue:
+		return "overdue"
+	default:
+		return "owed"
+	}
+}
+
+// archivedClass dims a retired tab on the dashboard. It still holds a real
+// balance and a real history, so it recedes rather than disappearing.
+func archivedClass(t store.Tab) string {
+	if t.ArchivedAt != nil {
+		return "archived"
+	}
+	return ""
 }
 
 // balanceClass colors by direction. Negative means the Payee owes (TAB-06).

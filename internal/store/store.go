@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/johnzastrow/bitt/internal/money"
+	"github.com/johnzastrow/bitt/internal/schedule"
 )
 
 // Sentinel errors. Implementations must translate driver errors into these so
@@ -70,6 +71,34 @@ const (
 func (k TabKind) Valid() bool {
 	return k == TabServices || k == TabPayoff
 }
+
+// Label names the kind for display, in the vocabulary REQUIREMENTS.md and
+// PROJECT.md already use.
+func (k TabKind) Label() string {
+	switch k {
+	case TabServices:
+		return "Services"
+	case TabPayoff:
+		return "Payoff"
+	default:
+		return ""
+	}
+}
+
+// Describe explains the kind in the one line that distinguishes them.
+func (k TabKind) Describe() string {
+	switch k {
+	case TabServices:
+		return "Recurring, with no defined end"
+	case TabPayoff:
+		return "A fixed total drawn down by payments"
+	default:
+		return ""
+	}
+}
+
+// TabKinds lists the selectable kinds in display order.
+func TabKinds() []TabKind { return []TabKind{TabServices, TabPayoff} }
 
 // Role is a user's relationship to a specific tab.
 type Role string
@@ -169,6 +198,25 @@ type Tab struct {
 	CreatedBy   int64
 	CreatedAt   time.Time
 	ArchivedAt  *time.Time
+	// Schedule is the tab's recurrence (SCHED-01). A zero Kind means the tab is
+	// billed only by hand, which stays a legitimate way to run one (CHG-03).
+	Schedule schedule.Schedule
+}
+
+// PostedPeriod records that one billing cycle has been charged, and points at
+// the entry that charged it. It is the claim that makes lazy accrual safe under
+// concurrent reads (SCHED-04).
+type PostedPeriod struct {
+	TabID    int64
+	Key      string
+	EntrySeq int64
+	// Start and End bound the cycle; DueOn is when its charge was owed. All
+	// three are captured at post time so a later schedule change cannot rewrite
+	// what a cycle was billed under (SCHED-05).
+	Start    schedule.Date
+	End      schedule.Date
+	DueOn    schedule.Date
+	PostedAt time.Time
 }
 
 // TabItem is a line in a tab's breakdown. Items carry an amount so that cost
@@ -295,8 +343,46 @@ type TabStore interface {
 	// is enforced by the query rather than filtered afterward (AUTH-05).
 	ListTabsForUser(ctx context.Context, userID int64) ([]Tab, error)
 
+	// UpdateTabDetails changes a tab's name, description, and kind.
+	//
+	// None of the three is referenced by any entry, so this cannot disturb a
+	// balance: switching a tab between Services and Payoff changes how it is
+	// presented and measured, never what it has charged. Callers are expected
+	// to log the change, since a tab changing kind is the sort of thing that
+	// needs explaining later.
+	UpdateTabDetails(ctx context.Context, tabID int64, name, description string, kind TabKind) error
+
+	// SetTabArchived retires a tab from the active dashboard, or brings it
+	// back. Archiving is not deletion: the entries, the balance, and the
+	// history all stay exactly as they were, and an archived tab stops
+	// accruing scheduled charges.
+	SetTabArchived(ctx context.Context, tabID int64, archived bool) error
+
+	// SetSchedule replaces a tab's recurrence (SCHED-01). A zero schedule
+	// clears it, returning the tab to manual billing. It never touches posted
+	// periods, so changing a schedule cannot retroactively re-bill.
+	SetSchedule(ctx context.Context, tabID int64, s schedule.Schedule) error
+
 	ListItems(ctx context.Context, tabID int64) ([]TabItem, error)
+	// ListItemHistory returns every item the tab has ever carried, superseded
+	// and retired ones included. Catching up a tab that has been left alone
+	// needs to know what each period's items were at the time, not what they
+	// are now (CHG-02).
+	ListItemHistory(ctx context.Context, tabID int64) ([]TabItem, error)
+	GetItem(ctx context.Context, itemID int64) (TabItem, error)
 	AddItem(ctx context.Context, item TabItem) (TabItem, error)
+
+	// UpdateItem changes a line item's name or amount (CHG-02).
+	//
+	// Implementations supersede rather than overwrite: the existing row is
+	// marked removed and a replacement takes its position. Posted entries are
+	// unaffected either way, because each carries its own item snapshot -- but
+	// superseding also keeps the tab's own record of what it used to charge,
+	// instead of quietly losing it.
+	UpdateItem(ctx context.Context, itemID int64, name string, amount money.Cents) (TabItem, error)
+	// RemoveItem retires a line item from future periods, leaving every period
+	// already posted exactly as it was.
+	RemoveItem(ctx context.Context, itemID int64) error
 
 	AddParticipant(ctx context.Context, p Participant) error
 	RemoveParticipant(ctx context.Context, tabID, userID int64) error
@@ -313,9 +399,27 @@ type EntryStore interface {
 	// idempotency key returns the already-posted entry with replayed=true
 	// rather than writing a second row.
 	PostEntry(ctx context.Context, e NewEntry) (posted Entry, replayed bool, err error)
+
+	// PostPeriodEntry appends a scheduled charge and claims its billing cycle
+	// in the same transaction (SCHED-03).
+	//
+	// The claim is what enforces "exactly once" (SCHED-04). Implementations
+	// must write the entry and the claim together, so that losing the race on
+	// the claim also rolls back the entry -- a claim written afterward, or in a
+	// separate transaction, leaves a window in which two readers each post a
+	// charge. A cycle already claimed returns the entry that claimed it with
+	// replayed=true, exactly as a replayed idempotency key does.
+	PostPeriodEntry(ctx context.Context, p PostedPeriod, e NewEntry) (posted Entry, replayed bool, err error)
+	// ListPostedPeriods returns a tab's charged cycles, newest first.
+	ListPostedPeriods(ctx context.Context, tabID int64) ([]PostedPeriod, error)
+
 	GetEntry(ctx context.Context, seq int64) (Entry, error)
 	ListEntries(ctx context.Context, tabID int64) ([]Entry, error)
 	ListEntryItems(ctx context.Context, entrySeq int64) ([]EntryItem, error)
+	// ListEntryItemsForTab returns every entry's item snapshot for one tab,
+	// keyed by entry sequence. A statement page needs the breakdown of many
+	// entries at once, and one query is preferable to one per period (CHG-04).
+	ListEntryItemsForTab(ctx context.Context, tabID int64) (map[int64][]EntryItem, error)
 	// SumEntries derives the tab balance by summation. There is no cached
 	// balance column anywhere in the schema (LEDGER-03).
 	SumEntries(ctx context.Context, tabID int64) (money.Cents, error)

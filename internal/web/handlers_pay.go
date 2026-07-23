@@ -32,15 +32,23 @@ func (s *Server) getCard(w http.ResponseWriter, r *http.Request) {
 }
 
 // getSettleConfirm returns the confirmation fragment, every field prefilled.
+//
+// The "custom" variant opens the amount for editing so a partial payment, or a
+// payment beyond the balance, can be recorded without leaving the dashboard
+// (PAY-01, PAY-05). The default remains one tap plus one confirmation with
+// nothing to type (UI-03).
 func (s *Server) getSettleConfirm(w http.ResponseWriter, r *http.Request) {
 	user := userFrom(r.Context())
 	card, ok := s.cardFor(w, r, user)
 	if !ok {
 		return
 	}
-	if !card.CanSettle() {
-		// Nothing owed: hand back the plain card rather than a confirmation
-		// that would post a zero payment.
+	card.Custom = r.URL.Query().Get("custom") != ""
+
+	// Nothing owed: the full-amount confirmation would post a zero payment, so
+	// hand back the plain card instead. A custom amount is still allowed, since
+	// paying a settled tab ahead is a legitimate way to build credit (PAY-05).
+	if !card.CanSettle() && !card.Custom {
 		s.render(w, r, http.StatusOK, views.TabCardView(s.page(w, r, ""), card))
 		return
 	}
@@ -65,15 +73,36 @@ func (s *Server) postSettle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tab, err := s.authorizeTab(r, id, user.ID)
+	acc, err := s.authorizeTab(r, id, user)
 	if err != nil {
 		s.denyTab(w, r, err)
+		return
+	}
+	tab := acc.Tab
+
+	// Moving money is membership only. authorizeTab admits administrators so
+	// they can manage a tab they do not belong to, but recording a payment is a
+	// statement about something that happened between two people, and an
+	// administrator is not one of them.
+	if !acc.CanTransact() {
+		s.log.Warn("payment denied: not a participant",
+			"tab_id", tab.ID, "user_id", user.ID, "path", r.URL.Path)
+		http.NotFound(w, r)
 		return
 	}
 
 	if _, err := s.recordPayment(r, tab, user); err != nil {
 		if errors.Is(err, errBadInput) {
-			http.Error(w, "That payment could not be recorded.", http.StatusBadRequest)
+			// Re-render the confirmation carrying the message rather than
+			// answering 400. htmx does not swap a non-2xx response, so a status
+			// code alone would leave the card looking like nothing happened.
+			card, ok := s.cardFor(w, r, user)
+			if !ok {
+				return
+			}
+			card.Custom = true
+			card.Error = err.Error()
+			s.render(w, r, http.StatusOK, views.SettleConfirm(s.page(w, r, ""), card))
 			return
 		}
 		s.serverError(w, r, err)
@@ -140,8 +169,20 @@ func settleAmount(balance money.Cents) money.Cents {
 // Full-page payment form (PAY-01, PAY-02, PAY-03)
 // ---------------------------------------------------------------------------
 
-// errBadInput marks a validation failure the caller should report as 400.
+// errBadInput marks a validation failure caused by what the user typed, rather
+// than by anything going wrong.
 var errBadInput = errors.New("web: invalid input")
+
+// badInput carries a message written for the person who typed it.
+//
+// It matches errBadInput under errors.Is while its Error text stays clean, so a
+// handler can show it verbatim. Wrapping with errors.Join instead put the
+// sentinel's own text in front of the message and it reached the screen.
+type badInput string
+
+func (e badInput) Error() string { return string(e) }
+
+func (e badInput) Is(target error) bool { return target == errBadInput }
 
 func (s *Server) postPayment(w http.ResponseWriter, r *http.Request) {
 	user := userFrom(r.Context())
@@ -160,16 +201,28 @@ func (s *Server) postPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tab, err := s.authorizeTab(r, id, user.ID)
+	acc, err := s.authorizeTab(r, id, user)
 	if err != nil {
 		s.denyTab(w, r, err)
+		return
+	}
+	tab := acc.Tab
+
+	// Moving money is membership only. authorizeTab admits administrators so
+	// they can manage a tab they do not belong to, but recording a payment is a
+	// statement about something that happened between two people, and an
+	// administrator is not one of them.
+	if !acc.CanTransact() {
+		s.log.Warn("payment denied: not a participant",
+			"tab_id", tab.ID, "user_id", user.ID, "path", r.URL.Path)
+		http.NotFound(w, r)
 		return
 	}
 
 	entry, err := s.recordPayment(r, tab, user)
 	if err != nil {
 		if errors.Is(err, errBadInput) {
-			redirectWith(w, r, tabPath(id), "err", strings.TrimPrefix(err.Error(), "web: invalid input: "))
+			redirectWith(w, r, tabPath(id), "err", err.Error())
 			return
 		}
 		s.serverError(w, r, err)
@@ -191,10 +244,10 @@ func (s *Server) postPayment(w http.ResponseWriter, r *http.Request) {
 func (s *Server) recordPayment(r *http.Request, tab store.Tab, user *store.User) (store.Entry, error) {
 	amount, err := money.Parse(r.PostFormValue("amount"))
 	if err != nil {
-		return store.Entry{}, errors.Join(errBadInput, errors.New("That amount is not a valid dollar figure."))
+		return store.Entry{}, badInput("That amount is not a valid dollar figure.")
 	}
 	if amount <= 0 {
-		return store.Entry{}, errors.Join(errBadInput, errors.New("A payment must be greater than zero."))
+		return store.Entry{}, badInput("A payment must be greater than zero.")
 	}
 
 	method := store.PaymentMethod(strings.TrimSpace(r.PostFormValue("method")))
@@ -202,7 +255,7 @@ func (s *Server) recordPayment(r *http.Request, tab store.Tab, user *store.User)
 		method = store.MethodOther
 	}
 	if !method.Valid() {
-		return store.Entry{}, errors.Join(errBadInput, errors.New("That is not a recognized payment method."))
+		return store.Entry{}, badInput("That is not a recognized payment method.")
 	}
 
 	memo := strings.TrimSpace(r.PostFormValue("memo"))
@@ -258,11 +311,12 @@ func (s *Server) postUndo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tab, err := s.authorizeTab(r, id, user.ID)
+	acc, err := s.authorizeTab(r, id, user)
 	if err != nil {
 		s.denyTab(w, r, err)
 		return
 	}
+	tab := acc.Tab
 
 	// The entry must belong to this tab. Without this check, a participant on
 	// one tab could reverse an entry on another by guessing a sequence number.
@@ -327,11 +381,12 @@ func (s *Server) postParticipant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tab, err := s.authorizeTab(r, id, user.ID)
+	acc, err := s.authorizeTab(r, id, user)
 	if err != nil {
 		s.denyTab(w, r, err)
 		return
 	}
+	tab := acc.Tab
 
 	// Only a Provider decides who is on their tab.
 	role, err := s.store.ParticipantRole(r.Context(), tab.ID, user.ID)
@@ -375,4 +430,47 @@ func (s *Server) postParticipant(w http.ResponseWriter, r *http.Request) {
 
 	s.log.Info("payee attached", "tab_id", tab.ID, "payee_user_id", target.ID, "by_user_id", user.ID)
 	redirectWith(w, r, tabPath(id), "ok", target.DisplayName+" is now on this tab.")
+}
+
+// postParticipantRemove detaches someone from a tab (TAB-03).
+//
+// The store refuses to remove a tab's last Provider inside the write
+// transaction, so a tab cannot be left unbillable and unreachable by any
+// provider-role check. Nothing about the ledger changes: entries the removed
+// person recorded stay, still attributed to them (LEDGER-05).
+func (s *Server) postParticipantRemove(w http.ResponseWriter, r *http.Request) {
+	user := userFrom(r.Context())
+
+	id, ok := pathID(r, "id")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	targetID, ok := pathID(r, "userID")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	access, ok := s.requireTabManager(w, r, id, user, "Only the provider can change who is on this tab.")
+	if !ok {
+		return
+	}
+
+	if err := s.store.RemoveParticipant(r.Context(), access.Tab.ID, targetID); err != nil {
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			redirectWith(w, r, tabPath(id), "err", "They are not on this tab.")
+		case errors.Is(err, store.ErrConflict):
+			redirectWith(w, r, tabPath(id), "err", "A tab must keep at least one provider.")
+		default:
+			s.serverError(w, r, err)
+		}
+		return
+	}
+
+	s.log.Info("participant removed",
+		"tab_id", access.Tab.ID, "removed_user_id", targetID,
+		"by_user_id", user.ID, "as_admin", access.Admin)
+	redirectWith(w, r, tabPath(id), "ok", "Removed from this tab. Their entries stay in the history.")
 }

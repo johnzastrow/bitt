@@ -10,17 +10,22 @@ Built for personal, self-hosted home use: family phone plans, shared insurance, 
 
 ## Status
 
-**Usable.** Phases 1 and 2 of 5 complete — 30 of 54 v1 requirements.
+**Usable.** Phases 1 to 3 of 5 complete — 39 of 54 v1 requirements.
 
 ```
 make build && ./bittabby     # http://localhost:8080
 ```
 
 A fresh deployment opens on a one-time setup screen. From there you can add a
-second person, create a tab with line items, post charges, attach the other
-person as payee, settle in one tap plus one confirmation, record a payment on
-someone's behalf, undo anything as a reversing entry, and pay ahead to build a
-credit. Recurrence, payoff tabs, late fees, and packaging are still to come.
+second person, create a tab with line items, give it a schedule so it bills
+itself, post one-off charges as well, attach the other person as payee, settle
+in one tap plus one confirmation or pay any other amount, record a payment on
+someone's behalf, undo anything as a reversing entry, pay ahead to build a
+credit, and read a per-period statement showing what each cycle covered and what
+has been paid against it. Tabs come in two kinds, Services and Payoff, and a
+tab's name, kind, people, and schedule stay editable after creation; a tab can
+be archived, which stops it billing without touching its history. Payoff
+progress tracking, late fees, and packaging are still to come.
 
 - [docs/PROJECT.md](docs/PROJECT.md) — what this is, what it deliberately is not, and why
 - [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — 54 v1 requirements with stable IDs

@@ -15,6 +15,13 @@ import (
 	"syscall"
 	"time"
 
+	// Period boundaries are computed in the instance timezone (SCHED-02), which
+	// means time.LoadLocation has to work. A static binary in a scratch
+	// container has no system zoneinfo to read, so the database is embedded
+	// here rather than left as a deployment prerequisite (DEPLOY-04). It costs
+	// roughly 450KB and removes an entire class of "works on my machine".
+	_ "time/tzdata"
+
 	"github.com/johnzastrow/bitt/internal/auth"
 	"github.com/johnzastrow/bitt/internal/config"
 	"github.com/johnzastrow/bitt/internal/ledger"

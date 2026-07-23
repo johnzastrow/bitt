@@ -7,24 +7,31 @@ import (
 	"time"
 
 	"github.com/johnzastrow/bitt/internal/money"
+	"github.com/johnzastrow/bitt/internal/schedule"
 	"github.com/johnzastrow/bitt/internal/store"
 )
 
 const (
-	tabColumns = `id, name, kind, description, created_by, created_at, archived_at`
+	tabColumns = `id, name, kind, description, created_by, created_at, archived_at, ` +
+		`schedule_kind, schedule_anchor, schedule_billing`
 	// same list qualified for joins; kept literal rather than derived, since a
 	// helper that rewrites SQL strings is more machinery than two constants.
-	tabColumnsT = `t.id, t.name, t.kind, t.description, t.created_by, t.created_at, t.archived_at`
+	tabColumnsT = `t.id, t.name, t.kind, t.description, t.created_by, t.created_at, t.archived_at, ` +
+		`t.schedule_kind, t.schedule_anchor, t.schedule_billing`
 )
 
 func scanTab(row interface{ Scan(...any) error }) (store.Tab, error) {
 	var (
-		t        store.Tab
-		kind     string
-		created  string
-		archived sql.NullString
+		t         store.Tab
+		kind      string
+		created   string
+		archived  sql.NullString
+		schedKind string
+		anchor    string
+		billing   string
 	)
-	if err := row.Scan(&t.ID, &t.Name, &kind, &t.Description, &t.CreatedBy, &created, &archived); err != nil {
+	if err := row.Scan(&t.ID, &t.Name, &kind, &t.Description, &t.CreatedBy, &created, &archived,
+		&schedKind, &anchor, &billing); err != nil {
 		return store.Tab{}, translate(err)
 	}
 	t.Kind = store.TabKind(kind)
@@ -36,7 +43,42 @@ func scanTab(row interface{ Scan(...any) error }) (store.Tab, error) {
 	if t.ArchivedAt, err = fromNullText(archived); err != nil {
 		return store.Tab{}, fmt.Errorf("sqlite: parse tab archived_at: %w", err)
 	}
+	if t.Schedule, err = scheduleFrom(schedKind, anchor, billing); err != nil {
+		return store.Tab{}, fmt.Errorf("sqlite: parse tab schedule: %w", err)
+	}
 	return t, nil
+}
+
+// scheduleFrom rebuilds a schedule from its three stored columns. All three are
+// empty for a tab that is billed by hand, which is not an error.
+func scheduleFrom(kind, anchor, billing string) (schedule.Schedule, error) {
+	if kind == "" && anchor == "" && billing == "" {
+		return schedule.Schedule{}, nil
+	}
+	s := schedule.Schedule{
+		Kind:    schedule.Kind(kind),
+		Billing: schedule.Billing(billing),
+	}
+	if anchor != "" {
+		d, err := schedule.ParseDate(anchor)
+		if err != nil {
+			return schedule.Schedule{}, err
+		}
+		s.Anchor = d
+	}
+	return s, nil
+}
+
+// scheduleText flattens a schedule into its stored columns. An unset schedule
+// writes three empty strings rather than nulls (DEPLOY-02).
+func scheduleText(s schedule.Schedule) (kind, anchor, billing string) {
+	if !s.Set() {
+		return "", "", ""
+	}
+	if !s.Anchor.IsZero() {
+		anchor = s.Anchor.String()
+	}
+	return string(s.Kind), anchor, string(s.Billing)
 }
 
 // CreateTab inserts a tab, its items, and its creating Provider atomically.
@@ -56,10 +98,13 @@ func (d *DB) CreateTab(ctx context.Context, t store.Tab, items []store.TabItem) 
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	schedKind, anchor, billing := scheduleText(t.Schedule)
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO tabs (name, kind, description, created_by, created_at, archived_at)
-         VALUES (?, ?, ?, ?, ?, NULL)`,
-		t.Name, string(t.Kind), t.Description, t.CreatedBy, toText(t.CreatedAt))
+		`INSERT INTO tabs (name, kind, description, created_by, created_at, archived_at,
+                           schedule_kind, schedule_anchor, schedule_billing)
+         VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+		t.Name, string(t.Kind), t.Description, t.CreatedBy, toText(t.CreatedAt),
+		schedKind, anchor, billing)
 	if err != nil {
 		return store.Tab{}, translate(err)
 	}
@@ -122,10 +167,36 @@ func (d *DB) ListTabsForUser(ctx context.Context, userID int64) ([]store.Tab, er
 	return out, translate(rows.Err())
 }
 
-// ListItems returns a tab's active items in display order (TAB-04).
+const itemColumns = `id, tab_id, name, amount_cents, position, created_at, removed_at`
+
+func scanItem(row interface{ Scan(...any) error }) (store.TabItem, error) {
+	var (
+		it      store.TabItem
+		amount  int64
+		created string
+		removed sql.NullString
+	)
+	if err := row.Scan(&it.ID, &it.TabID, &it.Name, &amount, &it.Position, &created, &removed); err != nil {
+		return store.TabItem{}, translate(err)
+	}
+	it.Amount = money.Cents(amount)
+
+	var err error
+	if it.CreatedAt, err = parseTime(created); err != nil {
+		return store.TabItem{}, fmt.Errorf("sqlite: parse item created_at: %w", err)
+	}
+	if it.RemovedAt, err = fromNullText(removed); err != nil {
+		return store.TabItem{}, fmt.Errorf("sqlite: parse item removed_at: %w", err)
+	}
+	return it, nil
+}
+
+// ListItems returns a tab's active items in display order (TAB-04). Superseded
+// and retired items are excluded: they belong to the periods that already
+// captured them, not to the next one to post.
 func (d *DB) ListItems(ctx context.Context, tabID int64) ([]store.TabItem, error) {
 	rows, err := d.db.QueryContext(ctx,
-		`SELECT id, tab_id, name, amount_cents, position, created_at, removed_at
+		`SELECT `+itemColumns+`
          FROM tab_items
          WHERE tab_id = ? AND removed_at IS NULL
          ORDER BY position, id`, tabID)
@@ -136,25 +207,197 @@ func (d *DB) ListItems(ctx context.Context, tabID int64) ([]store.TabItem, error
 
 	var out []store.TabItem
 	for rows.Next() {
-		var (
-			it      store.TabItem
-			amount  int64
-			created string
-			removed sql.NullString
-		)
-		if err := rows.Scan(&it.ID, &it.TabID, &it.Name, &amount, &it.Position, &created, &removed); err != nil {
-			return nil, translate(err)
-		}
-		it.Amount = money.Cents(amount)
-		if it.CreatedAt, err = parseTime(created); err != nil {
-			return nil, fmt.Errorf("sqlite: parse item created_at: %w", err)
-		}
-		if it.RemovedAt, err = fromNullText(removed); err != nil {
+		it, err := scanItem(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, it)
 	}
 	return out, translate(rows.Err())
+}
+
+// ListItemHistory returns every item the tab has ever carried, including
+// superseded and retired rows, oldest first within each position (CHG-02).
+func (d *DB) ListItemHistory(ctx context.Context, tabID int64) ([]store.TabItem, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT `+itemColumns+`
+         FROM tab_items
+         WHERE tab_id = ?
+         ORDER BY position, created_at, id`, tabID)
+	if err != nil {
+		return nil, translate(err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []store.TabItem
+	for rows.Next() {
+		it, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, it)
+	}
+	return out, translate(rows.Err())
+}
+
+// UpdateTabDetails changes a tab's name, description, and kind.
+//
+// None of the three appears on an entry, so this cannot move a balance. A tab
+// switching between Services and Payoff changes how it is presented and
+// measured, never what it has already charged.
+func (d *DB) UpdateTabDetails(ctx context.Context, tabID int64, name, description string, kind store.TabKind) error {
+	if !kind.Valid() {
+		return fmt.Errorf("sqlite: invalid tab kind %q", kind)
+	}
+	res, err := d.db.ExecContext(ctx,
+		`UPDATE tabs SET name = ?, description = ?, kind = ? WHERE id = ?`,
+		name, description, string(kind), tabID)
+	if err != nil {
+		return translate(err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqlite: update tab: %w", err)
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+// SetTabArchived retires a tab from the active dashboard, or brings it back.
+//
+// Archiving is not deletion and deliberately touches nothing else: the entries,
+// the balance, the posted periods, and the history all stay exactly as they
+// were. What changes is that the tab sorts below the active ones and stops
+// accruing scheduled charges.
+func (d *DB) SetTabArchived(ctx context.Context, tabID int64, archived bool) error {
+	var at any
+	if archived {
+		at = nowText()
+	}
+	res, err := d.db.ExecContext(ctx,
+		`UPDATE tabs SET archived_at = ? WHERE id = ?`, at, tabID)
+	if err != nil {
+		return translate(err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqlite: set tab archived: %w", err)
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+// SetSchedule replaces a tab's recurrence (SCHED-01).
+//
+// It writes only the three schedule columns. Nothing here touches
+// posted_periods, so changing or clearing a schedule can never re-bill or
+// un-bill a cycle that has already posted.
+func (d *DB) SetSchedule(ctx context.Context, tabID int64, s schedule.Schedule) error {
+	if s.Set() {
+		if err := s.Validate(); err != nil {
+			return fmt.Errorf("sqlite: %w", err)
+		}
+	}
+	kind, anchor, billing := scheduleText(s)
+
+	res, err := d.db.ExecContext(ctx,
+		`UPDATE tabs SET schedule_kind = ?, schedule_anchor = ?, schedule_billing = ? WHERE id = ?`,
+		kind, anchor, billing, tabID)
+	if err != nil {
+		return translate(err)
+	}
+	// A tab id that matched nothing is a missing tab, not a silent success.
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqlite: set schedule: %w", err)
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+// GetItem loads one line item, so a caller can authorize against its tab
+// before changing it.
+func (d *DB) GetItem(ctx context.Context, itemID int64) (store.TabItem, error) {
+	return scanItem(d.db.QueryRowContext(ctx,
+		`SELECT `+itemColumns+` FROM tab_items WHERE id = ?`, itemID))
+}
+
+// UpdateItem changes an item's name or amount by superseding it (CHG-02).
+//
+// The existing row is marked removed and a replacement takes its position, in
+// one transaction. Two reasons for supersede rather than an in-place UPDATE:
+// the tab keeps a record of what it used to charge, and the change is visibly
+// dated rather than appearing to have always been true.
+//
+// Posted entries are untouched. They carry their own item snapshot, so a change
+// here reaches the next period to post and nothing already billed (CHG-01).
+func (d *DB) UpdateItem(ctx context.Context, itemID int64, name string, amount money.Cents) (store.TabItem, error) {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return store.TabItem{}, fmt.Errorf("sqlite: begin update item: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	old, err := scanItem(tx.QueryRowContext(ctx,
+		`SELECT `+itemColumns+` FROM tab_items WHERE id = ? AND removed_at IS NULL`, itemID))
+	if err != nil {
+		return store.TabItem{}, err
+	}
+
+	now := time.Now().UTC()
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE tab_items SET removed_at = ? WHERE id = ?`, toText(now), itemID); err != nil {
+		return store.TabItem{}, translate(err)
+	}
+
+	replacement := store.TabItem{
+		TabID:     old.TabID,
+		Name:      name,
+		Amount:    amount,
+		Position:  old.Position,
+		CreatedAt: now,
+	}
+	res, err := tx.ExecContext(ctx,
+		`INSERT INTO tab_items (tab_id, name, amount_cents, position, created_at, removed_at)
+         VALUES (?, ?, ?, ?, ?, NULL)`,
+		replacement.TabID, replacement.Name, int64(replacement.Amount),
+		replacement.Position, toText(now))
+	if err != nil {
+		return store.TabItem{}, translate(err)
+	}
+	if replacement.ID, err = res.LastInsertId(); err != nil {
+		return store.TabItem{}, fmt.Errorf("sqlite: replacement item id: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return store.TabItem{}, fmt.Errorf("sqlite: commit update item: %w", err)
+	}
+	return replacement, nil
+}
+
+// RemoveItem retires an item from future periods (CHG-02). Periods already
+// posted keep it, because they hold their own snapshot.
+func (d *DB) RemoveItem(ctx context.Context, itemID int64) error {
+	res, err := d.db.ExecContext(ctx,
+		`UPDATE tab_items SET removed_at = ? WHERE id = ? AND removed_at IS NULL`,
+		nowText(), itemID)
+	if err != nil {
+		return translate(err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqlite: remove item: %w", err)
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
 }
 
 // AddItem appends an item to a tab.

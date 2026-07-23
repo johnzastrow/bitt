@@ -1,6 +1,6 @@
 # BitTabby — Handoff
 
-**Written:** 2026-07-23, pausing after Phase 2 for a reboot.
+**Written:** 2026-07-23. Updated at the end of Phase 3.
 
 This is written to be read cold, by someone (or some session) with no memory of
 the work. It covers what exists, why it is shaped this way, what to do next, and
@@ -8,7 +8,7 @@ the traps.
 
 ---
 
-## Restarting after the reboot
+## Getting running
 
 ```bash
 cd /home/jcz/Github/bitt
@@ -17,8 +17,8 @@ make check                                          # generate, fmt, vet, test
 make build && ./bittabby                            # http://localhost:8080
 ```
 
-Nothing is left running. No background processes, no open ports, no
-uncommitted work. `git status` should be clean at commit `9ef145e`.
+No background processes and no scheduler: recurrence posts inside the read
+path, so nothing needs to have been running for balances to be right.
 
 The demo database from the earlier walkthrough is at `data/bitt.db`
 (gitignored). Delete that file to get the first-run setup screen back.
@@ -67,7 +67,7 @@ theme switching, multi-currency, and **any background scheduler process**.
 
 ## Where things stand
 
-Phases 1 and 2 are complete and verified. 30 of 54 requirements.
+Phases 1, 2, and 3 are complete and verified. 38 of 54 requirements.
 
 | Commit | What |
 |---|---|
@@ -76,20 +76,24 @@ Phases 1 and 2 are complete and verified. 30 of 54 requirements.
 | `030a84e` | Phase 1 — walking skeleton |
 | `ec5655c` | Phase 1 status |
 | `9ef145e` | Phase 2 — the settle loop |
+| `529f00f` | Phase 2 status and a cold-start handoff |
+| (this one) | Phase 3 — recurrence |
 
-Full suite green including `-race`. Coverage: money 96%, ledger 84%,
-sqlite 72%, web 68%, auth 44%.
+Full suite green including `-race`. Coverage: money 96%, ledger 92%,
+schedule 87%, web 67%, sqlite 66%, auth 44%.
 
 ---
 
 ## Architecture, and why
 
 ```
-cmd/bittabby/          main, config load, graceful shutdown
+cmd/bittabby/          main, config load, graceful shutdown, embedded tzdata
 internal/money/        Cents (int64). No float anywhere in the money path
+internal/schedule/     pure period arithmetic. No database, no clock, no I/O
 internal/store/        persistence CONTRACT (interfaces only, no SQL)
 internal/store/sqlite/ the only implementation, plus embedded migrations
-internal/ledger/       the ONLY write boundary for financial entries
+internal/ledger/       the ONLY write boundary for financial entries;
+                       also accrual (accrual.go) and statements (statement.go)
 internal/auth/         Argon2id, sessions, CSRF
 internal/web/          routes, handlers, templ views, embedded static assets
 ```
@@ -119,45 +123,76 @@ additive if it is ever built.
 
 ---
 
-## Phase 3 is next: recurrence
+## Phase 3 landed. Here is what it actually did
 
-8 requirements: SCHED-01 through 05, CHG-01, CHG-02, CHG-04.
+**`internal/schedule` is pure calendar arithmetic.** No database, no clock of its
+own, no instants except at one boundary. Everything is civil dates: a period has
+come due when its due *date* has arrived in the instance timezone. Nothing adds a
+duration to a timestamp, so a 23- or 25-hour day cannot move a boundary.
 
-**The design decision is already made and must not be relitigated:** due periods
-post **lazily, inside the transaction that reads the tab**. There is no
-background scheduler, no timer goroutine, no cron. Catch-up after downtime is
-inherent — whatever periods are due get posted the moment anyone looks. A unique
-constraint on `(tab, period)` makes concurrent reads incapable of
-double-posting.
+**Every period is computed from the anchor, never chained off its predecessor.**
+That is what makes a day-31 anchor land on February 28th and come back to March
+31st instead of sticking at the 28th forever (SCHED-02).
 
-A scheduler process is exactly what made this expensive in the predecessor. If
-Phase 3 starts growing a timer, stop and re-read this paragraph.
+**Billing timing is the Provider's choice per tab**, in advance or in arrears.
+A retainer is owed up front and metered work is owed after the fact, and one
+convention could not honestly serve both. The period *key* is always the cycle's
+start date, never the posting date, so changing the rule cannot re-bill a cycle.
 
-**Where the risk actually is: date arithmetic.** Build a table-driven test suite
-first, before any UI:
+**Accrual runs in the read path**, in `Server.accrueTab`, called from the
+dashboard and from the tab page. That is the entire scheduler. If a read path is
+ever added that does not call it, tabs reached only that way silently stop
+billing.
 
-- All four schedule kinds: weekly, every two weeks, monthly on day N, monthly on
-  last day
-- Month-end anchors: a day-31 anchor must land correctly in February and return
-  to the 31st in March
-- DST transitions in the instance timezone
-- Leap years
-- A tab left alone six months must post six months of periods, each exactly once
-- Concurrent reads of an overdue tab must produce one entry per period
+**`posted_periods` is the whole concurrency story.** The claim and the entry
+share one transaction, and the claim carries a `(tab_id, period_key)` primary
+key. A reader that loses the race has its entry rolled back with the claim.
+Nothing reads-then-writes, so there is no window to lose. Verified live: twenty
+simultaneous reads of an overdue tab produced exactly one charge per cycle.
 
-**Suggested shape:** a new `internal/schedule` package holding pure period
-arithmetic with no database dependency, tested exhaustively on its own, then
-wired into the tab read path. Keeping the arithmetic pure is what makes it
-cheap to test the nasty cases.
+**Item changes supersede rather than overwrite.** `UpdateItem` marks the old row
+removed and inserts a replacement at the same position. Catch-up then bills each
+cycle for the items the tab carried *at that cycle's due date*, via
+`ledger.ItemsAsOf` — so a tab left alone for six months does not bill six months
+at today's prices. Cycles that came due before the tab existed clamp to the
+tab's creation time, otherwise a backdated anchor posts a run of zeroes.
 
-**Schema you will need:** a `posted_periods` table with a unique constraint on
-`(tab_id, period_key)`, plus schedule columns on `tabs` (anchor date, kind,
-interval). Migration `0003_schedules.sql`. Follow the pattern in
-`0001_initial.sql` — the header comments there explain the portability rules
-that keep MariaDB viable in Phase 5.
+**Two gotchas worth keeping.** `time.Date` resolves a non-existent local midnight
+*backwards*: asking for 2026-09-06 00:00 in America/Santiago returns 2026-09-05
+23:00, the previous calendar day. `Date.Time` walks forward to fix that; do not
+remove the loop. And the binary embeds `time/tzdata`, because a static binary in
+a scratch container has no zoneinfo to read and every period boundary depends on
+`time.LoadLocation`.
 
-Note that `entry_items` already snapshots the item breakdown at post time, so
-CHG-01 is largely wiring rather than new persistence.
+## Authorization, which changed in Phase 3
+
+Read this before touching any tab route.
+
+There are now **two ways to reach a tab**, and they do not grant the same
+things. `tabAccess` in `internal/web/handlers_tabs.go` is the whole model:
+
+- **Participation** is the ordinary way, and is what AUTH-05 describes.
+- **The global administrator role** is a deliberate second way, added so a tab
+  whose Provider has left the household can be renamed, archived, or repaired
+  without someone editing the database by hand.
+
+`CanManage()` covers a tab's own settings -- name, kind, schedule, items,
+people. Its Provider may, and so may an administrator, on any tab.
+
+`CanTransact()` covers moving money -- charges, payments, undo -- and is
+**membership only**. An administrator looking after the instance is not a party
+to what two other people owe each other. This is not a nicety: during
+development, `authorizeTab` was widened for administrators and the payment
+handlers kept calling it without a second check, so an administrator could post
+a payment to a stranger's tab. A test caught it. Do not let a new money-moving
+route call `authorizeTab` and stop there.
+
+Every administrative access to a non-member tab is logged at WARN. That log line
+is what makes the exception auditable rather than invisible, and REQUIREMENTS.md
+carries the amendment to AUTH-05 in its own words.
+
+For everyone else nothing changed, including the 404-not-403 response that keeps
+tab ids unenumerable.
 
 ---
 
@@ -181,13 +216,27 @@ curl then correctly switches to GET on the redirect.
 **`go:embed` cannot reach outside its own package directory.** Migrations live
 at `internal/store/sqlite/migrations/` for exactly this reason.
 
+**A charge can appear without anyone posting one.** Reading a tab bills it, so a
+balance moves on load. The page says so rather than letting the number move
+silently; that note is not decoration.
+
 **Deactivating the last admin is guarded inside the write transaction**, not in
 the handler. A check-then-act in the handler lets two concurrent requests both
 see a spare admin and both proceed, locking everyone out of the instance. There
 is a concurrency test for this. Do not move the check up a layer.
 
 **Foreign tabs answer 404, not 403**, so tab ids cannot be enumerated. Same for
-admin routes to non-admins. This is deliberate; do not "fix" it to 403.
+admin routes to non-admins. This is deliberate; do not "fix" it to 403. A
+participant who merely lacks the Provider role gets a message instead, because
+they can already see the tab and a 404 would tell them nothing true.
+
+**Archiving a tab must stop it accruing.** The guard is in `Server.accrueTab`.
+Without it, archiving would only hide a tab from the dashboard while it quietly
+kept billing.
+
+**`errors.Join(errBadInput, ...)` put the sentinel's own text on the screen.**
+User-facing validation messages now use the `badInput` string type, which
+matches `errBadInput` under `errors.Is` while its `Error()` stays clean.
 
 ---
 
@@ -205,6 +254,38 @@ can forbid every external origin.
 
 **UI-04 (design tokens) was implemented in Phase 1** though scheduled for
 Phase 2; it was free to do while writing the first stylesheet.
+
+**TAB-02 (Payoff tabs) came forward from Phase 4** in Phase 3. The schema had
+permitted `payoff` since `0001_initial`; only the UI was withholding it, and a
+tab that could not state what kind it was made the whole page harder to read.
+Phase 4 still owns PAYOFF-01 to 03 -- progress against the original total,
+on-track status, and auto-settling at zero.
+
+**Settling for a partial or larger amount** and **editing a tab's name,
+description, and kind** were not in Phase 3's requirement list. Both came from
+using the thing. The ledger had always accepted any positive payment; only the
+dashboard's hidden amount field was forcing the whole balance.
+
+---
+
+## Phase 4 is next: payoff tabs and late fees
+
+11 requirements: TAB-02; PAYOFF-01, 02, 03; FEE-01 through 07.
+
+**Fees must reuse the Phase 3 accrual path.** A fee is another thing that becomes
+true when someone looks at the tab, exactly like a period charge. If Phase 4
+starts growing its own posting mechanism, stop and reconcile the two --
+ROADMAP.md flags this as the phase's risk, and it is the same mistake a
+background scheduler would have been.
+
+`ledger.Statement.Overdue` already computes the condition FEE-01 triggers on:
+an unsettled cycle past its due date. Grace is an offset from `Period.DueOn`.
+The claim table generalizes: a fee needs its own key namespace on
+`(tab_id, period_key)` so a fee and its cycle's charge do not collide.
+
+FEE-03 (percentage fees computed on the overdue period charge, never on a
+balance containing fees) is why `Statement.Charge` is the period's own charge
+rather than anything derived from the running balance.
 
 ---
 

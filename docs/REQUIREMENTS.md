@@ -7,7 +7,7 @@
 
 Requirements are grouped by area. Each carries a stable REQ-ID used for roadmap traceability.
 
-**Status:** Phases 1 and 2 complete and verified (30/54). Phase 3 next.
+**Status:** Phases 1, 2, and 3 complete and verified (39/54, TAB-02 pulled forward). Phase 4 next.
 
 This is a reduction of the bit-tabby-derived scope from 79 requirements to 54. The pre-revision document is in git history. See [PROJECT.md](PROJECT.md) for the reasoning behind each cut.
 
@@ -30,7 +30,7 @@ The accounting spine. Everything else calls into this; nothing else writes entri
 ### Tabs & Items (TAB)
 
 - [x] **TAB-01**: Provider can create a Services tab — recurring charges on a schedule, with no defined end
-- [ ] **TAB-02**: Provider can create a Payoff tab — a fixed total drawn down by payments, with an expected payment schedule
+- [x] **TAB-02**: Provider can create a Payoff tab — a fixed total drawn down by payments, with an expected payment schedule
 - [x] **TAB-03**: Provider can attach an existing user to a tab as Payee; the tab then appears on that user's dashboard
 - [x] **TAB-04**: A tab carries one or more line items, each with its own amount; the items sum to the tab's periodic charge
 - [x] **TAB-05**: Items carry no balance of their own — payments settle against the tab as a whole, with no allocation rules
@@ -38,18 +38,18 @@ The accounting spine. Everything else calls into this; nothing else writes entri
 
 ### Schedules & Periods (SCHED)
 
-- [ ] **SCHED-01**: A tab's schedule is an anchor date plus one of: weekly, every two weeks, monthly on a given day, or monthly on the last day
-- [ ] **SCHED-02**: Period boundaries are computed in the instance-wide configured timezone and do not drift at month end — a day-31 anchor lands correctly in February and returns to the 31st afterward
-- [ ] **SCHED-03**: Due periods are posted lazily, computed and written inside the transaction that reads the tab, so no background scheduler process exists and catch-up after downtime is inherent rather than engineered
-- [ ] **SCHED-04**: A unique constraint on (tab, period) makes posting a period twice impossible, including under concurrent reads
-- [ ] **SCHED-05**: Every period carries a due date derived from the schedule, with no invoice record required to supply one
+- [x] **SCHED-01**: A tab's schedule is an anchor date plus one of: weekly, every two weeks, monthly on a given day, or monthly on the last day
+- [x] **SCHED-02**: Period boundaries are computed in the instance-wide configured timezone and do not drift at month end — a day-31 anchor lands correctly in February and returns to the 31st afterward
+- [x] **SCHED-03**: Due periods are posted lazily, computed and written inside the transaction that reads the tab, so no background scheduler process exists and catch-up after downtime is inherent rather than engineered
+- [x] **SCHED-04**: A unique constraint on (tab, period) makes posting a period twice impossible, including under concurrent reads
+- [x] **SCHED-05**: Every period carries a due date derived from the schedule, with no invoice record required to supply one
 
 ### Charges & Statements (CHG)
 
-- [ ] **CHG-01**: Each posted period snapshots its item breakdown, so both parties can see exactly which line changed and when a cost shifted
-- [ ] **CHG-02**: Provider can change an item's amount or add an item; the change takes effect the following period and never alters posted entries
+- [x] **CHG-01**: Each posted period snapshots its item breakdown, so both parties can see exactly which line changed and when a cost shifted
+- [x] **CHG-02**: Provider can change an item's amount or add an item; the change takes effect the following period and never alters posted entries
 - [x] **CHG-03**: Provider can post a one-off charge or a correcting adjustment to any tab
-- [ ] **CHG-04**: A period statement renders the charge, its item breakdown, its due date, and the payments applied to it — computed from ledger entries and stored nowhere separately
+- [x] **CHG-04**: A period statement renders the charge, its item breakdown, its due date, and the payments applied to it — computed from ledger entries and stored nowhere separately
 
 ### Payments & Settlement (PAY)
 
@@ -83,7 +83,8 @@ Driven entirely by the schedule's due dates. Reuses the lazy posting path.
 - [x] **AUTH-02**: User can log in and remain logged in across sessions via secure, HttpOnly, SameSite cookies, and can log out from any page
 - [x] **AUTH-03**: A fresh deployment presents a one-time setup screen creating the first admin account, which locks permanently once completed
 - [x] **AUTH-04**: Admin can add and remove user accounts, and may also hold the Provider or Payee role on tabs
-- [x] **AUTH-05**: Every request is authorized against the specific tab it touches; a user can never read or write a tab they do not participate in, and may hold Provider on some tabs and Payee on others
+- [x] **AUTH-05**: Every request is authorized against the specific tab it touches; a user can never read or write a tab they do not participate in, and may hold Provider on some tabs and Payee on others.
+  **Amended in Phase 3:** a global administrator may additionally read and manage the *settings* of any tab — its name, kind, schedule, items, and people — so that a tab whose Provider has left the household can be repaired without editing the database by hand. Administrators may **not** move money on a tab they do not participate in, and every administrative access to a non-member tab is logged. For everyone else the rule is unchanged, including the 404-not-403 response that keeps tab ids unenumerable.
 
 ### Interface (UI)
 
@@ -166,20 +167,20 @@ Requirement-to-phase mapping. Every phase after Phase 1 adds to an application a
 | LEDGER-06 | Phase 1 | Complete |
 | LEDGER-07 | Phase 2 | Complete |
 | TAB-01 | Phase 1 | Complete |
-| TAB-02 | Phase 4 | Pending |
+| TAB-02 | Phase 4 | Complete (delivered in Phase 3) |
 | TAB-03 | Phase 2 | Complete |
 | TAB-04 | Phase 1 | Complete |
 | TAB-05 | Phase 1 | Complete |
 | TAB-06 | Phase 2 | Complete |
-| SCHED-01 | Phase 3 | Pending |
-| SCHED-02 | Phase 3 | Pending |
-| SCHED-03 | Phase 3 | Pending |
-| SCHED-04 | Phase 3 | Pending |
-| SCHED-05 | Phase 3 | Pending |
-| CHG-01 | Phase 3 | Pending |
-| CHG-02 | Phase 3 | Pending |
+| SCHED-01 | Phase 3 | Complete |
+| SCHED-02 | Phase 3 | Complete |
+| SCHED-03 | Phase 3 | Complete |
+| SCHED-04 | Phase 3 | Complete |
+| SCHED-05 | Phase 3 | Complete |
+| CHG-01 | Phase 3 | Complete |
+| CHG-02 | Phase 3 | Complete |
 | CHG-03 | Phase 1 | Complete |
-| CHG-04 | Phase 3 | Pending |
+| CHG-04 | Phase 3 | Complete |
 | PAY-01 | Phase 2 | Complete |
 | PAY-02 | Phase 2 | Complete |
 | PAY-03 | Phase 2 | Complete |

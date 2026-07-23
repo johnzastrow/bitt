@@ -27,6 +27,15 @@ func (s *Server) getDashboard(w http.ResponseWriter, r *http.Request) {
 
 	cards := make([]views.TabCard, 0, len(tabs))
 	for _, t := range tabs {
+		// Reading a tab is what bills it (SCHED-03). The dashboard is a read of
+		// every tab the user has, so opening it brings them all current -- which
+		// is why a balance shown here is never stale.
+		acc, err := s.accrueTab(r, t)
+		if err != nil {
+			s.serverError(w, r, err)
+			return
+		}
+
 		balance, err := s.ledger.Balance(r.Context(), t.ID)
 		if err != nil {
 			s.serverError(w, r, err)
@@ -44,13 +53,18 @@ func (s *Server) getDashboard(w http.ResponseWriter, r *http.Request) {
 			s.serverError(w, r, err)
 			return
 		}
-		cards = append(cards, views.TabCard{
+		card := views.TabCard{
 			Tab:            t,
 			Balance:        balance,
 			Role:           role,
 			SettleAmount:   settleAmount(balance),
 			IdempotencyKey: key,
-		})
+		}
+		if acc.Scheduled {
+			card.NextDue = acc.Next.Due
+			card.JustPosted = len(acc.Posted)
+		}
+		cards = append(cards, card)
 	}
 
 	s.render(w, r, http.StatusOK, views.Dashboard(s.page(w, r, "Your tabs"), cards))
@@ -94,19 +108,152 @@ func (s *Server) postTab(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A schedule is optional. Without one the tab is billed by hand, which
+	// stays a legitimate way to run one (CHG-03).
+	sched, err := parseSchedule(r, s.location(r.Context()))
+	if err != nil {
+		redirectWith(w, r, "/tabs/new", "err", err.Error())
+		return
+	}
+
+	// Services or Payoff (TAB-01, TAB-02). Services is the default, since a
+	// tab created without a stated kind is far more often a recurring one.
+	kind, err := parseTabKind(r.PostFormValue("kind"))
+	if err != nil {
+		redirectWith(w, r, "/tabs/new", "err", err.Error())
+		return
+	}
+
 	tab, err := s.store.CreateTab(r.Context(), store.Tab{
 		Name:        name,
-		Kind:        store.TabServices,
+		Kind:        kind,
 		Description: description,
 		CreatedBy:   user.ID,
+		Schedule:    sched,
 	}, items)
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
 
-	s.log.Info("tab created", "tab_id", tab.ID, "user_id", user.ID, "items", len(items))
+	s.log.Info("tab created", "tab_id", tab.ID, "user_id", user.ID,
+		"kind", string(kind), "items", len(items), "schedule", string(sched.Kind))
 	redirectWith(w, r, tabPath(tab.ID), "ok", "Tab created.")
+}
+
+// parseTabKind reads the Services/Payoff choice, defaulting to Services.
+func parseTabKind(raw string) (store.TabKind, error) {
+	kind := store.TabKind(strings.TrimSpace(raw))
+	if kind == "" {
+		return store.TabServices, nil
+	}
+	if !kind.Valid() {
+		return "", errors.New("That is not a kind of tab BitTabby offers.")
+	}
+	return kind, nil
+}
+
+// postTabDetails renames a tab and changes what it covers or what kind it is.
+//
+// None of these touches an entry, so no balance can move here. The change is
+// logged with its before and after: a tab's name and kind are how people refer
+// to it and how it is measured, and a silent change to either is the kind of
+// thing that needs explaining months later.
+func (s *Server) postTabDetails(w http.ResponseWriter, r *http.Request) {
+	user := userFrom(r.Context())
+
+	id, ok := pathID(r, "id")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	access, ok := s.requireTabManager(w, r, id, user, "Only the provider can change this tab's details.")
+	if !ok {
+		return
+	}
+	before := access.Tab
+
+	name := strings.TrimSpace(r.PostFormValue("name"))
+	switch {
+	case name == "":
+		redirectWith(w, r, tabPath(id), "err", "A tab needs a name.")
+		return
+	case len(name) > 120:
+		redirectWith(w, r, tabPath(id), "err", "That name is too long.")
+		return
+	}
+
+	description := strings.TrimSpace(r.PostFormValue("description"))
+	if len(description) > 500 {
+		redirectWith(w, r, tabPath(id), "err", "That description is too long.")
+		return
+	}
+
+	kind, err := parseTabKind(r.PostFormValue("kind"))
+	if err != nil {
+		redirectWith(w, r, tabPath(id), "err", err.Error())
+		return
+	}
+
+	if err := s.store.UpdateTabDetails(r.Context(), id, name, description, kind); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		s.serverError(w, r, err)
+		return
+	}
+
+	s.log.Info("tab details changed",
+		"tab_id", id, "user_id", user.ID, "as_admin", access.Admin,
+		"name_from", before.Name, "name_to", name,
+		"kind_from", string(before.Kind), "kind_to", string(kind))
+
+	if before.Kind != kind {
+		redirectWith(w, r, tabPath(id), "ok",
+			"Saved. This is now a "+kind.Label()+" tab; nothing already posted has changed.")
+		return
+	}
+	redirectWith(w, r, tabPath(id), "ok", "Tab details saved.")
+}
+
+// postTabArchive retires a tab from the active dashboard, or brings it back.
+//
+// Archiving is not deletion. Every entry, the balance, and the whole history
+// stay exactly as they are; what stops is scheduled accrual, so an archived tab
+// does not quietly keep billing.
+func (s *Server) postTabArchive(w http.ResponseWriter, r *http.Request) {
+	user := userFrom(r.Context())
+
+	id, ok := pathID(r, "id")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	access, ok := s.requireTabManager(w, r, id, user, "Only the provider can archive this tab.")
+	if !ok {
+		return
+	}
+
+	archive := access.Tab.ArchivedAt == nil
+	if err := s.store.SetTabArchived(r.Context(), id, archive); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		s.serverError(w, r, err)
+		return
+	}
+
+	s.log.Info("tab archive state changed",
+		"tab_id", id, "user_id", user.ID, "as_admin", access.Admin, "archived", archive)
+
+	if archive {
+		redirectWith(w, r, tabPath(id), "ok",
+			"Archived. It stops billing and leaves the active list; the history is untouched.")
+		return
+	}
+	redirectWith(w, r, tabPath(id), "ok", "Reactivated. Any periods that came due while it was archived will post on the next read.")
 }
 
 // getTab renders one tab: its people, items, derived balance, and history.
@@ -119,15 +266,19 @@ func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tab, err := s.authorizeTab(r, id, user.ID)
+	access, err := s.authorizeTab(r, id, user)
 	if err != nil {
 		s.denyTab(w, r, err)
 		return
 	}
+	tab, role := access.Tab, access.Role
 
-	role, err := s.store.ParticipantRole(r.Context(), tab.ID, user.ID)
+	// Post whatever has come due before anything is read off the tab, so the
+	// balance, the history, and the statements below all describe the same
+	// moment (SCHED-03).
+	acc, err := s.accrueTab(r, tab)
 	if err != nil {
-		s.denyTab(w, r, err)
+		s.serverError(w, r, err)
 		return
 	}
 
@@ -180,7 +331,7 @@ func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var attachable []store.User
-	if role == store.RoleProvider {
+	if access.CanManage() {
 		if attachable, err = s.attachableUsers(r, tab.ID); err != nil {
 			s.serverError(w, r, err)
 			return
@@ -188,6 +339,12 @@ func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 	}
 
 	key, err := ledger.NewIdempotencyKey()
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+
+	statements, err := s.statements(r, tab, entries)
 	if err != nil {
 		s.serverError(w, r, err)
 		return
@@ -204,7 +361,40 @@ func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 		Role:           role,
 		IdempotencyKey: key,
 		SettleAmount:   settleAmount(balance),
+		Statements:     statements,
+		Scheduled:      acc.Scheduled,
+		NextDue:        acc.Next.Due,
+		JustPosted:     len(acc.Posted),
+		Today:          s.today(r.Context()),
+		CanManage:      access.CanManage(),
+		CanTransact:    access.CanTransact(),
+		AsAdmin:        access.Admin,
 	}))
+}
+
+// statements builds the per-period view from entries already loaded (CHG-04).
+//
+// Nothing is read back that the page does not already have except the item
+// snapshots, which come in one query rather than one per period.
+func (s *Server) statements(r *http.Request, tab store.Tab, entries []store.Entry) ([]ledger.Statement, error) {
+	periods, err := s.store.ListPostedPeriods(r.Context(), tab.ID)
+	if err != nil {
+		return nil, err
+	}
+	if len(periods) == 0 {
+		return nil, nil
+	}
+
+	items, err := s.store.ListEntryItemsForTab(r.Context(), tab.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	built, ok := ledger.Statements(periods, entries, items, s.today(r.Context()))
+	if !ok {
+		return nil, errors.New("statement allocation overflow")
+	}
+	return built, nil
 }
 
 // postCharge posts a one-off charge or adjustment (CHG-03).
@@ -226,11 +416,12 @@ func (s *Server) postCharge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tab, err := s.authorizeTab(r, id, user.ID)
+	acc, err := s.authorizeTab(r, id, user)
 	if err != nil {
 		s.denyTab(w, r, err)
 		return
 	}
+	tab := acc.Tab
 
 	// Only the Provider bills. The role check is per-tab, not global.
 	role, err := s.store.ParticipantRole(r.Context(), tab.ID, user.ID)
@@ -292,12 +483,72 @@ func (s *Server) postCharge(w http.ResponseWriter, r *http.Request) {
 // Authorization and helpers
 // ---------------------------------------------------------------------------
 
-// authorizeTab loads a tab only if the user participates in it (AUTH-05).
-func (s *Server) authorizeTab(r *http.Request, tabID, userID int64) (store.Tab, error) {
-	if _, err := s.store.ParticipantRole(r.Context(), tabID, userID); err != nil {
-		return store.Tab{}, err
+// tabAccess describes what the signed-in user may do with one tab.
+//
+// Two ways in. Participation is the ordinary one and is what AUTH-05 describes.
+// The global administrator role is a deliberate second one, so that a tab whose
+// Provider has left the household can still be renamed, archived, or repaired
+// without someone editing the database by hand.
+//
+// The two are kept distinct rather than collapsed into a single boolean,
+// because they do not grant the same things: an administrator who is not on a
+// tab may manage what the tab *is*, and may not move money on it. Recording a
+// payment is a statement about something that happened between two people, and
+// an administrator is not one of them.
+type tabAccess struct {
+	Tab store.Tab
+	// Role is the user's role on the tab, empty when they do not participate.
+	Role store.Role
+	// Participant reports membership. Only participants transact.
+	Participant bool
+	// Admin reports that access came from the administrator role rather than
+	// from membership.
+	Admin bool
+}
+
+// IsProvider reports whether the user bills on this tab as a participant.
+func (a tabAccess) IsProvider() bool { return a.Participant && a.Role == store.RoleProvider }
+
+// CanManage covers a tab's own settings: its name, kind, schedule, items, and
+// people. The Provider always may; an administrator may on any tab.
+func (a tabAccess) CanManage() bool { return a.IsProvider() || a.Admin }
+
+// CanTransact covers moving money: charges, payments, and undo. Membership
+// only -- an administrator looking after the instance is not a party to what
+// two other people owe each other.
+func (a tabAccess) CanTransact() bool { return a.Participant }
+
+// authorizeTab loads a tab the user is entitled to see.
+//
+// A non-participant who is not an administrator gets ErrNotFound, so foreign
+// tab ids still cannot be enumerated. An administrator reaching a tab they do
+// not belong to is admitted and logged: the log line is what makes the
+// exception to AUTH-05 auditable rather than invisible.
+func (s *Server) authorizeTab(r *http.Request, tabID int64, user *store.User) (tabAccess, error) {
+	role, roleErr := s.store.ParticipantRole(r.Context(), tabID, user.ID)
+	switch {
+	case roleErr == nil:
+	case errors.Is(roleErr, store.ErrNotFound) && user.IsAdmin:
+	default:
+		return tabAccess{}, roleErr
 	}
-	return s.store.GetTab(r.Context(), tabID)
+
+	tab, err := s.store.GetTab(r.Context(), tabID)
+	if err != nil {
+		return tabAccess{}, err
+	}
+
+	acc := tabAccess{
+		Tab:         tab,
+		Role:        role,
+		Participant: roleErr == nil,
+		Admin:       roleErr != nil,
+	}
+	if acc.Admin {
+		s.log.Warn("administrator reached a tab they do not participate in",
+			"tab_id", tabID, "user_id", user.ID, "method", r.Method, "path", r.URL.Path)
+	}
+	return acc, nil
 }
 
 // denyTab answers 404 for both "no such tab" and "not yours", so the response

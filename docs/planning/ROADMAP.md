@@ -45,7 +45,7 @@ Requirement text lives in [REQUIREMENTS.md](../REQUIREMENTS.md); reasoning lives
 
 ---
 
-## Phase 3 — Recurrence  -- NEXT
+## Phase 3 — Recurrence  -- COMPLETE
 
 **Goal:** tabs charge themselves on a schedule, and both parties can see what changed.
 
@@ -61,9 +61,29 @@ Requirement text lives in [REQUIREMENTS.md](../REQUIREMENTS.md); reasoning lives
 
 **Risk:** date arithmetic. This phase deserves a table-driven test suite covering DST transitions, month-end anchors, and leap years before the UI work begins.
 
+**How it landed.** The arithmetic went into `internal/schedule` as pure civil-date
+functions with no database and no clock, and the test suite was written before
+any UI. That ordering paid for itself immediately: it caught that `time.Date`
+resolves a non-existent local midnight *backwards* to 23:00 the previous day, so
+on a zone that shifts at midnight a period's charge would have carried the wrong
+date. Billing timing became a per-tab Provider choice rather than a convention --
+in advance or in arrears -- since a retainer and metered work genuinely differ.
+
+Three things arrived here that were not in the phase's list, all in response to
+using it: a settle can now be for any amount rather than only the whole balance;
+a tab's name, description, and kind are editable after creation, and a tab can
+be archived; and TAB-02 came forward from Phase 4, because a Payoff tab was
+already schema-legal and only the UI was withholding it. Phase 4 still owns
+PAYOFF-01 to 03 -- progress against the original total, on-track status, and
+auto-settling at zero.
+
+**AUTH-05 was amended** to let a global administrator manage the settings of any
+tab, so a tab whose Provider has left can be repaired. Administrators still
+cannot move money on a tab they do not belong to, and the access is logged.
+
 ---
 
-## Phase 4 — Payoff tabs and late fees
+## Phase 4 — Payoff tabs and late fees  -- NEXT
 
 **Goal:** loans that track against a schedule, and overdue periods that cost something.
 

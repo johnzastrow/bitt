@@ -329,7 +329,10 @@ tfoot td { font-weight: 650; border-bottom: none; }
   gap: var(--s2);
 }
 
-.cardfoot .settle { width: 100%; }
+/* The full-balance settle is the primary path and keeps the width; the
+   different-amount control sits beside it as a quieter second option. */
+.cardfoot .settle { flex: 1 1 auto; }
+.cardfoot button.ghost.settle { flex: 0 1 auto; border-color: var(--border); }
 
 /* The confirmation step. It replaces the card in place rather than navigating,
    so the answer to "did that work" arrives where the question was asked. */
@@ -402,3 +405,110 @@ tr.reversal td { color: var(--fg-muted); }
 @media (prefers-reduced-motion: reduce) {
   .confirming, .tabcard.settled .cardhead { animation: none; }
 }
+
+/* ---------- Phase 3: recurrence ---------- */
+
+/* A tab's own schedule, stated once under the balance so both parties read the
+   same sentence about when the next charge lands (SCHED-05). */
+.schedline { margin-top: var(--s3); }
+
+/* Reading a tab is what bills it, so a balance can move on load. This says so,
+   because a charge appearing without anyone posting one is otherwise
+   startling (SCHED-03). */
+.posted {
+  margin-top: var(--s2);
+  padding: var(--s2) var(--s3);
+  border-radius: var(--radius);
+  border: 1px solid var(--sun);
+  background: var(--card-bg);
+  color: var(--fg);
+}
+
+/* ---------- Period statements (CHG-04) ---------- */
+
+.statements { list-style: none; margin: 0 0 var(--s3); padding: 0; }
+
+.statement {
+  padding: var(--s3) 0 var(--s3) var(--s3);
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+}
+
+.statement:last-child { border-bottom: none; }
+
+/* The same edge language the tab cards use, so a period reads the way a tab
+   does without learning a second vocabulary. */
+.statement.owed     { border-left-color: var(--rose); }
+.statement.overdue  { border-left-color: var(--owed); }
+.statement.settled  { border-left-color: var(--mint); }
+.statement.reversal { border-left-color: var(--border); }
+
+.statement.overdue .muted { color: var(--owed); }
+
+/* An undone period recedes rather than disappearing, matching how a reversed
+   entry is treated in the history. */
+.statement.reversal { opacity: 0.6; }
+
+/* The breakdown is supporting detail under the period's own heading, so it
+   sits quieter than a table that stands on its own. */
+.breakdown { margin-top: var(--s2); font-size: var(--t-sm); }
+.breakdown td { border-bottom: none; padding: var(--s1) 0; color: var(--fg-muted); }
+
+/* ---------- Item editing (CHG-02) ---------- */
+
+/* Editing lives behind a disclosure so the common case, reading what a tab
+   covers, is a table rather than a screen of input boxes. */
+.editor { margin-top: var(--s3); }
+
+.editor > summary {
+  cursor: pointer;
+  font-size: var(--t-sm);
+  color: var(--accent);
+  padding: var(--s2) 0;
+}
+
+.itemedit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.itemedit .inlineform { flex: 1 1 auto; }
+
+/* A message about what was just typed, shown on the card itself. htmx declines
+   to swap a non-2xx response, so the amount comes back with the reason rather
+   than the card appearing to have done nothing. */
+.confirmerr {
+  margin: var(--s3) 0 0;
+  padding: var(--s2) var(--s3);
+  border-radius: var(--radius);
+  border: 1px solid var(--rose);
+  color: var(--owed);
+  font-size: var(--t-sm);
+}
+
+/* In the editable mode the amount is the thing being answered, so it is typed
+   at full size rather than at the label's size. */
+.confirmform .methodrow input { font-size: var(--t-lg); font-family: var(--font-num); }
+
+/* ---------- Tab kind, archival, and people (TAB-01, TAB-02, TAB-03) ---------- */
+
+/* The kind sits directly under the tab's name, because how a tab is measured
+   changes how every number below it should be read. */
+.kindline { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; margin: var(--s2) 0; }
+
+.pill-kind-services { color: var(--sky-deep); }
+.pill-kind-payoff   { color: var(--mint-deep); }
+
+/* Archiving is a quiet, reversible act, so its control does not look like a
+   primary action or like a destructive one. */
+.archiveform { margin-top: var(--s4); padding-top: var(--s3); border-top: 1px solid var(--border); }
+
+/* An archived tab recedes on the dashboard rather than disappearing: it still
+   holds a real balance and a real history. */
+.tabcard.archived { opacity: 0.6; }
+
+.people li .pushright { margin-left: auto; }

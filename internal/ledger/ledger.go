@@ -35,6 +35,10 @@ var (
 	ErrNotReversible = errors.New("ledger: a reversal cannot itself be reversed")
 	// ErrBadMethod is returned when a payment carries an unrecognized method.
 	ErrBadMethod = errors.New("ledger: unrecognized payment method")
+	// ErrOverflow is returned when an item breakdown sums past int64 cents.
+	// Reported rather than wrapped silently, since a wrapped total is a wrong
+	// amount posted to a ledger that cannot be edited afterward.
+	ErrOverflow = errors.New("ledger: item total overflows")
 )
 
 // Service posts entries and derives balances.

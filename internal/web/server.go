@@ -9,11 +9,14 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/a-h/templ"
 	"github.com/johnzastrow/bitt/internal/auth"
 	"github.com/johnzastrow/bitt/internal/config"
 	"github.com/johnzastrow/bitt/internal/ledger"
+	"github.com/johnzastrow/bitt/internal/schedule"
 	"github.com/johnzastrow/bitt/internal/store"
 	"github.com/johnzastrow/bitt/internal/web/views"
 )
@@ -25,6 +28,10 @@ type Server struct {
 	ledger   *ledger.Service
 	sessions *auth.Manager
 	log      *slog.Logger
+	// zones caches resolved timezones. time.LoadLocation parses the zoneinfo
+	// database on every call, and the instance timezone is read on every tab
+	// render (SCHED-02).
+	zones sync.Map
 }
 
 // New builds a server.
@@ -76,6 +83,17 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /tabs/{id}/payments", s.requireAuth(http.HandlerFunc(s.postPayment)))
 	mux.Handle("POST /tabs/{id}/entries/{seq}/undo", s.requireAuth(http.HandlerFunc(s.postUndo)))
 	mux.Handle("POST /tabs/{id}/participants", s.requireAuth(http.HandlerFunc(s.postParticipant)))
+	mux.Handle("POST /tabs/{id}/participants/{userID}/remove", s.requireAuth(http.HandlerFunc(s.postParticipantRemove)))
+
+	// Tab settings: name, description, kind, and archival (TAB-01, TAB-02)
+	mux.Handle("POST /tabs/{id}/details", s.requireAuth(http.HandlerFunc(s.postTabDetails)))
+	mux.Handle("POST /tabs/{id}/archive", s.requireAuth(http.HandlerFunc(s.postTabArchive)))
+
+	// Recurrence and what a period covers (SCHED-01, CHG-02)
+	mux.Handle("POST /tabs/{id}/schedule", s.requireAuth(http.HandlerFunc(s.postSchedule)))
+	mux.Handle("POST /tabs/{id}/items", s.requireAuth(http.HandlerFunc(s.postItem)))
+	mux.Handle("POST /tabs/{id}/items/{itemID}", s.requireAuth(http.HandlerFunc(s.postItemUpdate)))
+	mux.Handle("POST /tabs/{id}/items/{itemID}/remove", s.requireAuth(http.HandlerFunc(s.postItemRemove)))
 
 	// Administration (AUTH-04)
 	mux.Handle("GET /admin/users", s.requireAdmin(http.HandlerFunc(s.getAdminUsers)))
@@ -140,6 +158,69 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), userKey, &user)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// location resolves the instance timezone, which is the zone period boundaries
+// are computed in (SCHED-02).
+//
+// It falls back to UTC and logs rather than failing the render. A tab that
+// displays with a boundary an hour off is recoverable; a 500 on every page
+// because someone typoed a zone name is not.
+func (s *Server) location(ctx context.Context) *time.Location {
+	inst, err := s.store.GetInstance(ctx)
+	if err != nil {
+		s.log.Warn("could not read the instance timezone", "error", err)
+		return time.UTC
+	}
+	if inst.Timezone == "" {
+		return time.UTC
+	}
+	if cached, ok := s.zones.Load(inst.Timezone); ok {
+		return cached.(*time.Location)
+	}
+	loc, err := time.LoadLocation(inst.Timezone)
+	if err != nil {
+		s.log.Warn("instance timezone is not a known zone, using UTC",
+			"timezone", inst.Timezone, "error", err)
+		return time.UTC
+	}
+	s.zones.Store(inst.Timezone, loc)
+	return loc
+}
+
+// today is the current calendar date in the instance timezone, which is what
+// decides whether a period has come due or run late.
+func (s *Server) today(ctx context.Context) schedule.Date {
+	return schedule.DateOf(time.Now().In(s.location(ctx)))
+}
+
+// accrueTab posts every billing cycle the tab owes, as part of reading it
+// (SCHED-03). This is the whole scheduler: there is no background process, so
+// if this is not called on a read path, that tab simply never bills.
+func (s *Server) accrueTab(r *http.Request, tab store.Tab) (ledger.Accrual, error) {
+	if !tab.Schedule.Set() {
+		return ledger.Accrual{}, nil
+	}
+	// An archived tab stops billing. Without this, archiving would only hide a
+	// tab from the dashboard while it quietly kept charging.
+	if tab.ArchivedAt != nil {
+		return ledger.Accrual{}, nil
+	}
+	// The full history, superseded rows included: each cycle is billed for the
+	// items the tab carried when that cycle came due (CHG-02).
+	history, err := s.store.ListItemHistory(r.Context(), tab.ID)
+	if err != nil {
+		return ledger.Accrual{}, err
+	}
+	acc, err := s.ledger.Accrue(r.Context(), tab, history, s.location(r.Context()))
+	if err != nil {
+		return ledger.Accrual{}, err
+	}
+	if len(acc.Posted) > 0 {
+		s.log.Info("scheduled charges posted",
+			"tab_id", tab.ID, "periods", len(acc.Posted))
+	}
+	return acc, nil
 }
 
 // setupPending reports whether the first-run screen is still available.

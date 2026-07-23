@@ -10,7 +10,7 @@ Built for personal, self-hosted home use: family phone plans, shared insurance, 
 
 ## Status
 
-**Usable.** Phases 1 to 3 of 5 complete — 39 of 54 v1 requirements.
+**Usable.** Phases 1-4 of 6 complete — 49 of 54 v1 requirements.
 
 ```
 make build && ./bittabby     # http://localhost:8080
@@ -24,8 +24,11 @@ someone's behalf, undo anything as a reversing entry, pay ahead to build a
 credit, and read a per-period statement showing what each cycle covered and what
 has been paid against it. Tabs come in two kinds, Services and Payoff, and a
 tab's name, kind, people, and schedule stay editable after creation; a tab can
-be archived, which stops it billing without touching its history. Payoff
-progress tracking, late fees, and packaging are still to come.
+be archived, which stops it billing without touching its history. Payoff loans
+track remaining balance, progress, and on-track/behind status; charge late fees
+(fixed or percentage, with grace and a cap) and declining-balance interest, both
+accruing lazily on read; and a payment request appears in-app two weeks before it
+is due. Pushed notifications (email/ntfy) and packaging are still to come.
 
 - [docs/PROJECT.md](docs/PROJECT.md) — what this is, what it deliberately is not, and why
 - [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — 54 v1 requirements with stable IDs

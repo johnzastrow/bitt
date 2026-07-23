@@ -4,9 +4,13 @@
 
 BINARY      := bittabby
 PKG         := ./cmd/bittabby
-VERSION     ?= dev
 TEMPL       := $(shell go env GOPATH)/bin/templ
-LDFLAGS     := -s -w -X main.version=$(VERSION)
+# The version number itself lives in internal/version; the build only injects
+# provenance. A plain `go build` still produces a correctly versioned binary.
+VERSIONPKG  := github.com/johnzastrow/bitt/internal/version
+COMMIT      := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+BUILD_DATE  := $(shell date -u +%Y-%m-%d 2>/dev/null || echo unknown)
+LDFLAGS     := -s -w -X $(VERSIONPKG).Commit=$(COMMIT) -X $(VERSIONPKG).Date=$(BUILD_DATE)
 
 .DEFAULT_GOAL := help
 

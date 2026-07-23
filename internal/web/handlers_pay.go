@@ -343,7 +343,23 @@ func (s *Server) postUndo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _, err = s.ledger.Reverse(r.Context(), seq, user.ID, "", "")
+	// Undoing a fee is a waiver, and a waiver carries a reason (FEE-07). The
+	// reason rides in the reversal's memo, so it stays with the entry that
+	// records the waiver rather than living in a side note.
+	memo := ""
+	if original.Kind == store.KindFee {
+		reason := strings.TrimSpace(r.PostFormValue("reason"))
+		if len(reason) > 200 {
+			reason = reason[:200]
+		}
+		if reason != "" {
+			memo = "Waived: " + reason
+		} else {
+			memo = "Waived"
+		}
+	}
+
+	_, _, err = s.ledger.Reverse(r.Context(), seq, user.ID, memo, "")
 	switch {
 	case errors.Is(err, ledger.ErrAlreadyReversed):
 		redirectWith(w, r, tabPath(id), "err", "That entry was already undone.")
@@ -356,6 +372,11 @@ func (s *Server) postUndo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if original.Kind == store.KindFee {
+		s.log.Info("fee waived", "tab_id", tab.ID, "fee_seq", seq, "user_id", user.ID)
+		redirectWith(w, r, tabPath(id), "ok", "Late fee waived. The original stays in the history.")
+		return
+	}
 	s.log.Info("entry reversed", "tab_id", tab.ID, "reversed_seq", seq, "user_id", user.ID)
 	redirectWith(w, r, tabPath(id), "ok", "Undone. The original entry stays in the history.")
 }

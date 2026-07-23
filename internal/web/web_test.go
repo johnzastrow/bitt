@@ -17,6 +17,7 @@ import (
 	"github.com/johnzastrow/bitt/internal/ledger"
 	"github.com/johnzastrow/bitt/internal/store"
 	"github.com/johnzastrow/bitt/internal/store/sqlite"
+	"github.com/johnzastrow/bitt/internal/version"
 )
 
 // harness is a running server plus a cookie-carrying client, so tests exercise
@@ -512,8 +513,12 @@ func TestSecureCookieFlagFollowsConfig(t *testing.T) {
 func TestHealthz(t *testing.T) {
 	h := newHarness(t)
 	resp, body := h.get("/healthz")
-	if resp.StatusCode != http.StatusOK || body != "ok" {
+	// The body carries the version so a probe can confirm which build answered.
+	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(body, "ok ") {
 		t.Errorf("healthz = %d %q", resp.StatusCode, body)
+	}
+	if !strings.Contains(body, version.Short()) {
+		t.Errorf("healthz body %q does not carry the version", body)
 	}
 }
 

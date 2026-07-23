@@ -18,6 +18,7 @@ import (
 	"github.com/johnzastrow/bitt/internal/ledger"
 	"github.com/johnzastrow/bitt/internal/schedule"
 	"github.com/johnzastrow/bitt/internal/store"
+	"github.com/johnzastrow/bitt/internal/version"
 	"github.com/johnzastrow/bitt/internal/web/views"
 )
 
@@ -57,7 +58,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /static/", http.StripPrefix("/static/", staticHandler()))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok " + version.Short()))
 	})
 
 	// First-run setup (AUTH-03)
@@ -89,8 +90,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /tabs/{id}/details", s.requireAuth(http.HandlerFunc(s.postTabDetails)))
 	mux.Handle("POST /tabs/{id}/archive", s.requireAuth(http.HandlerFunc(s.postTabArchive)))
 
-	// Recurrence and what a period covers (SCHED-01, CHG-02)
+	// Recurrence, late fees, and what a period covers (SCHED-01, FEE-01, CHG-02)
 	mux.Handle("POST /tabs/{id}/schedule", s.requireAuth(http.HandlerFunc(s.postSchedule)))
+	mux.Handle("POST /tabs/{id}/fee", s.requireAuth(http.HandlerFunc(s.postFeePolicy)))
+	mux.Handle("POST /tabs/{id}/interest", s.requireAuth(http.HandlerFunc(s.postInterestRate)))
 	mux.Handle("POST /tabs/{id}/items", s.requireAuth(http.HandlerFunc(s.postItem)))
 	mux.Handle("POST /tabs/{id}/items/{itemID}", s.requireAuth(http.HandlerFunc(s.postItemUpdate)))
 	mux.Handle("POST /tabs/{id}/items/{itemID}/remove", s.requireAuth(http.HandlerFunc(s.postItemRemove)))

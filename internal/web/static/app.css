@@ -103,20 +103,35 @@ body {
 .topbar nav { display: flex; align-items: center; gap: var(--s3); }
 
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
   font-weight: 650;
   letter-spacing: -0.01em;
   color: var(--fg);
   text-decoration: none;
 }
 
+/* The logo art is nearly square; fix its box so the wordmark never shifts as
+   the page loads. */
+.brand .logo { display: block; width: 28px; height: 28px; }
+
 .who { color: var(--fg-muted); font-size: var(--t-sm); }
 
 .foot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s3);
   padding: var(--s4);
   text-align: center;
   color: var(--fg-muted);
   font-size: var(--t-sm);
 }
+
+/* The version sits quietly beside the tagline; the full build string is in its
+   title attribute for anyone who hovers. */
+.foot .version { font-variant-numeric: tabular-nums; opacity: 0.8; }
 
 .rowbetween {
   display: flex;
@@ -512,3 +527,83 @@ tr.reversal td { color: var(--fg-muted); }
 .tabcard.archived { opacity: 0.6; }
 
 .people li .pushright { margin-left: auto; }
+
+
+/* ---------- Phase 4: payoff progress and late fees ---------- */
+
+/* Loan repayment progress (PAYOFF-01). A calm track with a filled bar whose
+   width is a rounded percent class -- no inline style, so the CSP stays strict. */
+.progress {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--chalk-sunk);
+  overflow: hidden;
+  margin: var(--s2) 0;
+}
+.progressfill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--mint);
+  transition: width 200ms ease-out;
+}
+.progressfill.behind { background: var(--rose); }
+.progressfill.ahead  { background: var(--mint-deep); }
+.progressfill.settled { background: var(--mint-deep); }
+
+.progressfill.w-0 { width: 0%; }
+.progressfill.w-5 { width: 5%; }
+.progressfill.w-10 { width: 10%; }
+.progressfill.w-15 { width: 15%; }
+.progressfill.w-20 { width: 20%; }
+.progressfill.w-25 { width: 25%; }
+.progressfill.w-30 { width: 30%; }
+.progressfill.w-35 { width: 35%; }
+.progressfill.w-40 { width: 40%; }
+.progressfill.w-45 { width: 45%; }
+.progressfill.w-50 { width: 50%; }
+.progressfill.w-55 { width: 55%; }
+.progressfill.w-60 { width: 60%; }
+.progressfill.w-65 { width: 65%; }
+.progressfill.w-70 { width: 70%; }
+.progressfill.w-75 { width: 75%; }
+.progressfill.w-80 { width: 80%; }
+.progressfill.w-85 { width: 85%; }
+.progressfill.w-90 { width: 90%; }
+.progressfill.w-95 { width: 95%; }
+.progressfill.w-100 { width: 100%; }
+
+.payoffhead { align-items: flex-end; margin-bottom: var(--s2); }
+.payoffhead .amount.big { display: block; }
+
+/* Status reads in the palette's own semantics: behind is the owed colour,
+   ahead and settled the credit colour (PAYOFF-02). */
+.statusline.behind, .pill.status.behind { color: var(--owed); }
+.statusline.ahead, .pill.status.ahead,
+.statusline.settled, .pill.status.settled { color: var(--credit); }
+.statusline.ontrack, .pill.status.ontrack { color: var(--fg-muted); }
+.statusline { margin-top: var(--s1); font-weight: 600; }
+
+/* A settled loan recedes on the dashboard, like an archived tab: it is done,
+   but its history stays (PAYOFF-03). */
+.tabcard.settledtab { opacity: 0.6; }
+
+/* The upcoming payment or charge notice -- the in-app half of the reminder,
+   shown ahead of the due date. */
+.upcomingcard {
+  border-left: 3px solid var(--sky);
+}
+.upcomingcard h2 { margin-top: 0; }
+
+/* Fee configuration lays two related inputs side by side on wider screens. */
+.feerow { display: flex; gap: var(--s3); flex-wrap: wrap; }
+.feerow label { flex: 1 1 8rem; }
+
+/* A late fee reads in the owed colour, like a charge. */
+.pill-fee { color: var(--owed); }
+
+/* Waiving a fee takes a short reason inline with the control (FEE-07). */
+.waiveform { display: flex; gap: var(--s1); align-items: center; justify-content: flex-end; }
+.waiveform input { width: 8rem; min-height: auto; padding: var(--s1) var(--s2); font-size: var(--t-sm); }
+
+/* Interest reads in the owed colour, like a charge, but is labeled distinctly. */
+.pill-interest { color: var(--owed); }

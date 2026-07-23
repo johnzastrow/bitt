@@ -3,7 +3,9 @@ package views
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
+	"github.com/johnzastrow/bitt/internal/fee"
 	"github.com/johnzastrow/bitt/internal/ledger"
 	"github.com/johnzastrow/bitt/internal/money"
 	"github.com/johnzastrow/bitt/internal/schedule"
@@ -29,6 +31,13 @@ type TabCard struct {
 	// JustPosted counts the cycles this very render brought current, so a
 	// balance that moved on load says why (SCHED-03).
 	JustPosted int
+	// JustFined counts the late fees this render assessed (FEE-03).
+	JustFined int
+	// JustInterest counts the interest charges this render accrued.
+	JustInterest int
+	// Payoff carries loan progress for a Payoff tab, nil for a Services tab
+	// (PAYOFF-01).
+	Payoff *ledger.Payoff
 	// Custom opens the settle amount for editing, so a partial payment or a
 	// payment beyond the balance can be recorded from the dashboard (PAY-05).
 	Custom bool
@@ -42,6 +51,16 @@ func (c TabCard) CanSettle() bool { return c.SettleAmount > 0 }
 
 // Scheduled reports whether the tab bills itself.
 func (c TabCard) Scheduled() bool { return !c.NextDue.IsZero() }
+
+// IsPayoff reports whether this card is for a Payoff tab.
+func (c TabCard) IsPayoff() bool { return c.Payoff != nil }
+
+// Settled reports whether a Payoff tab is fully paid (PAYOFF-03).
+func (c TabCard) Settled() bool { return c.Payoff != nil && c.Payoff.Settled() }
+
+// Inactive reports whether the card should sit below the active tabs: archived,
+// or a settled Payoff loan.
+func (c TabCard) Inactive() bool { return c.Tab.ArchivedAt != nil || c.Settled() }
 
 // Dashboard lists the tabs the signed-in user participates in (UI-01).
 templ Dashboard(p Page, cards []TabCard) {
@@ -71,23 +90,41 @@ templ Dashboard(p Page, cards []TabCard) {
 // TabCardView renders one dashboard card. It is also returned on its own as the
 // htmx response to a settle, so the card updates in place (UI-03).
 templ TabCardView(p Page, c TabCard) {
-	<div class={ "card", "tabcard", balanceClass(c.Balance), archivedClass(c.Tab) }>
+	<div class={ "card", "tabcard", balanceClass(c.Balance), archivedClass(c.Tab), settledClass(c) }>
 		<a class="cardhead" href={ tabHref(c.Tab.ID) }>
 			<div class="rowbetween">
 				<h2>{ c.Tab.Name }</h2>
-				<span class={ "amount", balanceClass(c.Balance) }>{ c.Balance.Display() }</span>
-			</div>
-			<p class="muted small">
-				{ balanceLabel(c.Balance) } &middot; you are the { string(c.Role) }
-				if c.Tab.ArchivedAt != nil {
-					&middot; archived
+				if c.IsPayoff() {
+					<span class={ "amount", balanceClass(c.Balance) }>{ c.Payoff.Remaining.Display() }</span>
+				} else {
+					<span class={ "amount", balanceClass(c.Balance) }>{ c.Balance.Display() }</span>
 				}
-			</p>
-			if c.Scheduled() {
-				<p class="muted small">Next charge { c.NextDue.Display() }</p>
+			</div>
+			if c.IsPayoff() {
+				<p class="muted small">
+					{ payoffSummary(*c.Payoff) } &middot; you are the { string(c.Role) }
+					if c.Tab.ArchivedAt != nil {
+						&middot; archived
+					}
+				</p>
+				@ProgressBar(*c.Payoff)
+				<p class={ "small", "statusline", payoffStatusClass(c.Payoff.Status) }>{ c.Payoff.Status.Label() }</p>
+			} else {
+				<p class="muted small">
+					{ balanceLabel(c.Balance) } &middot; you are the { string(c.Role) }
+					if c.Tab.ArchivedAt != nil {
+						&middot; archived
+					}
+				</p>
+				if c.Scheduled() {
+					<p class="muted small">Next charge { c.NextDue.Display() }</p>
+				}
 			}
 			if c.JustPosted > 0 {
 				<p class="small posted">{ postedNote(c.JustPosted) }</p>
+			}
+			if c.JustFined > 0 {
+				<p class="small posted">{ finedNote(c.JustFined) }</p>
 			}
 		</a>
 		<div class="cardfoot">
@@ -227,6 +264,18 @@ templ NewTab(p Page) {
 						}
 					</select>
 				</label>
+				<label>
+					Loan amount (Payoff tabs only)
+					<input type="text" name="loan_amount" inputmode="decimal" placeholder="Leave blank for a Services tab"/>
+				</label>
+				<label>
+					Annual interest rate % (Payoff tabs only)
+					<input type="text" name="interest_apr" inputmode="decimal" placeholder="0 for an interest-free loan"/>
+				</label>
+				<p class="muted small">
+					On a Payoff tab, the loan amount posts as the opening balance and the line items below are what the
+					Payee is expected to pay each period. On a Services tab, the line items are what is charged each period.
+				</p>
 				<fieldset class="stack">
 					<legend>Line items</legend>
 					<p class="muted small">
@@ -241,6 +290,7 @@ templ NewTab(p Page) {
 					}
 				</fieldset>
 				@ScheduleFields(schedule.Schedule{})
+				@FeeFields(fee.Policy{})
 				<button class="primary" type="submit">Create tab</button>
 			</form>
 		</section>
@@ -289,6 +339,58 @@ templ ScheduleFields(current schedule.Schedule) {
 	</fieldset>
 }
 
+// ProgressBar renders a Payoff tab's repayment progress (PAYOFF-01). The width
+// is a whole-number percent, so no client-side computation is needed and the
+// bar means exactly what the number beside it says.
+// The width is a class rounded to the nearest 5% rather than an inline style,
+// because the content-security policy forbids inline styles. The stylesheet
+// carries the 21 width steps.
+templ ProgressBar(p ledger.Payoff) {
+	<div class="progress" role="progressbar" aria-valuenow={ strconv.Itoa(p.ProgressPercent) } aria-valuemin="0" aria-valuemax="100">
+		<div class={ "progressfill", payoffStatusClass(p.Status), progressWidthClass(p.ProgressPercent) }></div>
+	</div>
+}
+
+// FeeFields is the late-fee control, shared by the create form and the tab page
+// (FEE-01, FEE-02, FEE-06). "No late fee" is a real option and is listed first.
+templ FeeFields(current fee.Policy) {
+	<fieldset class="stack">
+		<legend>Late fee</legend>
+		<label>
+			When a payment is late
+			<select name="fee_kind">
+				<option value="" selected?={ !current.Set() }>Charge no late fee</option>
+				<option value="fixed" selected?={ current.Kind == fee.Fixed }>A fixed amount</option>
+				<option value="percent" selected?={ current.Kind == fee.Percent }>A percentage of the overdue amount</option>
+			</select>
+		</label>
+		<div class="feerow">
+			<label>
+				Fixed amount
+				<input type="text" name="fee_fixed" inputmode="decimal" placeholder="0.00" value={ fixedValue(current) }/>
+			</label>
+			<label>
+				Percentage
+				<input type="text" name="fee_percent" inputmode="decimal" placeholder="0" value={ percentValue(current) }/>
+			</label>
+		</div>
+		<div class="feerow">
+			<label>
+				Grace period (days)
+				<input type="number" name="fee_grace_days" min="0" max="365" value={ graceValue(current) }/>
+			</label>
+			<label>
+				Cap on total fees (optional)
+				<input type="text" name="fee_cap" inputmode="decimal" placeholder="No cap" value={ capValue(current) }/>
+			</label>
+		</div>
+		<p class="muted small">
+			A fee is assessed once per missed period, after its grace period passes. A percentage is taken on that
+			period's own charge, never on a balance that already includes fees, so fees never compound.
+		</p>
+	</fieldset>
+}
+
 // HistoryRow pairs an entry with what the viewer may do to it.
 type HistoryRow struct {
 	Entry   store.Entry
@@ -316,6 +418,15 @@ type TabDetailData struct {
 	NextDue   schedule.Date
 	// JustPosted counts the cycles this render brought current (SCHED-03).
 	JustPosted int
+	// JustFined counts the late fees this render assessed (FEE-03).
+	JustFined int
+	// JustInterest counts the interest charges this render accrued.
+	JustInterest int
+	// Payoff carries loan progress on a Payoff tab, nil on a Services tab.
+	Payoff *ledger.Payoff
+	// Upcoming is the next scheduled payment or charge, when it falls within
+	// the notice window.
+	Upcoming Upcoming
 	// Today is the current date in the instance timezone.
 	Today schedule.Date
 	// CanManage covers the tab's own settings: name, kind, schedule, items,
@@ -333,6 +444,35 @@ func (d TabDetailData) IsProvider() bool { return d.Role == store.RoleProvider }
 
 // Archived reports whether the tab has been retired from the active list.
 func (d TabDetailData) Archived() bool { return d.Tab.ArchivedAt != nil }
+
+// IsPayoff reports whether this is a Payoff tab.
+func (d TabDetailData) IsPayoff() bool { return d.Payoff != nil }
+
+// Upcoming is the next scheduled event on a tab, surfaced ahead of time so a
+// payment request appears before it is due. It is empty outside the window.
+type Upcoming struct {
+	Due       schedule.Date
+	Amount    money.Cents
+	DaysUntil int
+	// IsPayment distinguishes a Payoff tab's expected payment from a Services
+	// tab's upcoming charge.
+	IsPayment bool
+}
+
+// Show reports whether there is an upcoming event to announce.
+func (u Upcoming) Show() bool { return !u.Due.IsZero() }
+
+// When renders how soon the event falls, in words.
+func (u Upcoming) When() string {
+	switch {
+	case u.DaysUntil <= 0:
+		return "today"
+	case u.DaysUntil == 1:
+		return "tomorrow"
+	default:
+		return fmt.Sprintf("in %d days", u.DaysUntil)
+	}
+}
 
 // TabDetail shows a tab, its people, its derived balance, and its history.
 templ TabDetail(p Page, d TabDetailData) {
@@ -367,14 +507,66 @@ templ TabDetail(p Page, d TabDetailData) {
 			</div>
 			<p class="muted small schedline">
 				{ d.Tab.Schedule.Describe() }
-				if d.Scheduled {
+				if d.Scheduled && !d.IsPayoff() {
 					&middot; next charge { d.NextDue.Display() }
 				}
+				&middot; { d.Tab.Fee.Describe() }
 			</p>
 			if d.JustPosted > 0 {
 				<p class="small posted">{ postedNote(d.JustPosted) }</p>
 			}
+			if d.JustFined > 0 {
+				<p class="small posted">{ finedNote(d.JustFined) }</p>
+			}
+			if d.JustInterest > 0 {
+				<p class="small posted">{ interestNote(d.JustInterest) }</p>
+			}
 		</section>
+		if d.IsPayoff() {
+			<section class="card">
+				<h2>Loan progress</h2>
+				<div class="rowbetween payoffhead">
+					<div>
+						<span class="amount big owed">{ d.Payoff.Remaining.Display() }</span>
+						<span class="muted small">still owed of { d.Payoff.Principal.Display() }</span>
+					</div>
+					<span class={ "pill", "status", payoffStatusClass(d.Payoff.Status) }>{ d.Payoff.Status.Label() }</span>
+				</div>
+				@ProgressBar(*d.Payoff)
+				<p class="muted small">
+					{ d.Payoff.Paid.Display() } paid &middot; { strconv.Itoa(d.Payoff.ProgressPercent) }% of the loan
+					if d.Payoff.Interest > 0 {
+						&middot; { d.Payoff.Interest.Display() } interest so far
+					}
+					if d.Payoff.Behind > 0 {
+						&middot; <span class="owed">{ d.Payoff.Behind.Display() } behind schedule</span>
+					}
+					if d.Payoff.Fees > 0 {
+						&middot; { d.Payoff.Fees.Display() } in late fees
+					}
+				</p>
+				if d.Tab.Interest() {
+					<p class="muted small">{ fee.PercentString(d.Tab.InterestAPRBp) } annual interest, on the declining balance.</p>
+				}
+			</section>
+		}
+		if d.Upcoming.Show() {
+			<section class="card upcomingcard">
+				if d.Upcoming.IsPayment {
+					<h2>Payment coming up</h2>
+					<p>
+						A payment of <strong>{ d.Upcoming.Amount.Display() }</strong> is expected
+						<strong>{ d.Upcoming.When() }</strong>, on { d.Upcoming.Due.Display() }.
+					</p>
+				} else {
+					<h2>Charge coming up</h2>
+					<p>
+						A charge of <strong>{ d.Upcoming.Amount.Display() }</strong> is scheduled
+						<strong>{ d.Upcoming.When() }</strong>, on { d.Upcoming.Due.Display() }.
+					</p>
+				}
+			</section>
+		}
 		if d.CanTransact {
 			<section class="card">
 				<h2>Record a payment</h2>
@@ -468,12 +660,40 @@ templ TabDetail(p Page, d TabDetailData) {
 		if d.CanManage {
 			<section class="card">
 				<h2>Schedule</h2>
+				if d.IsPayoff() {
+					<p class="muted small">On a Payoff tab, the schedule is when payments are expected, not when charges post.</p>
+				}
 				<form method="post" action={ scheduleAction(d.Tab.ID) } class="stack">
 					<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
 					@ScheduleFields(d.Tab.Schedule)
 					<button class="primary" type="submit">Save schedule</button>
 				</form>
 			</section>
+			<section class="card">
+				<h2>Late fee</h2>
+				<form method="post" action={ feeAction(d.Tab.ID) } class="stack">
+					<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+					@FeeFields(d.Tab.Fee)
+					<button class="primary" type="submit">Save late fee</button>
+				</form>
+			</section>
+			if d.IsPayoff() {
+				<section class="card">
+					<h2>Interest</h2>
+					<form method="post" action={ interestAction(d.Tab.ID) } class="inlineform">
+						<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+						<label>
+							Annual rate %
+							<input type="text" name="interest_apr" inputmode="decimal" placeholder="0" value={ interestValue(d.Tab.InterestAPRBp) }/>
+						</label>
+						<button class="primary" type="submit">Save interest</button>
+					</form>
+					<p class="muted small">
+						Interest accrues each period on the loan's current balance, so it falls as the loan is paid down.
+						It is charged on the balance, never on late fees.
+					</p>
+				</section>
+			}
 		}
 		if len(d.Items) > 0 || d.CanManage {
 			<section class="card">
@@ -624,7 +844,7 @@ templ TabDetail(p Page, d TabDetailData) {
 							<tr class={ rowClass(row) }>
 								<td class="nowrap">{ row.Entry.EffectiveAt.Format("Jan 2") }</td>
 								<td>
-									<span class={ "pill", "pill-" + string(row.Entry.Kind) }>{ string(row.Entry.Kind) }</span>
+									<span class={ "pill", "pill-" + entryKindClass(row.Entry) }>{ entryKindLabel(row.Entry) }</span>
 									if row.Entry.Method.Label() != "" {
 										<span class="muted small">{ row.Entry.Method.Label() }</span>
 									}
@@ -635,7 +855,14 @@ templ TabDetail(p Page, d TabDetailData) {
 								<td class="muted">{ row.Actor }</td>
 								<td class={ "right", "amount", amountClass(row.Entry.Amount) }>{ row.Entry.Amount.Display() }</td>
 								<td class="right">
-									if row.CanUndo {
+									if row.CanUndo && row.Entry.Kind == store.KindFee {
+										// Waiving a fee records a reason (FEE-07).
+										<form method="post" action={ undoAction(d.Tab.ID, row.Entry.Seq) } class="waiveform">
+											<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+											<input type="text" name="reason" placeholder="Reason (optional)" aria-label="Waiver reason"/>
+											<button class="link" type="submit">Waive</button>
+										</form>
+									} else if row.CanUndo {
 										<form method="post" action={ undoAction(d.Tab.ID, row.Entry.Seq) } class="inline">
 											<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
 											<button class="link" type="submit">Undo</button>
@@ -713,6 +940,133 @@ func participantRemoveAction(tabID, userID int64) templ.SafeURL {
 
 func scheduleAction(id int64) templ.SafeURL {
 	return templ.SafeURL("/tabs/" + strconv.FormatInt(id, 10) + "/schedule")
+}
+
+func feeAction(id int64) templ.SafeURL {
+	return templ.SafeURL("/tabs/" + strconv.FormatInt(id, 10) + "/fee")
+}
+
+func interestAction(id int64) templ.SafeURL {
+	return templ.SafeURL("/tabs/" + strconv.FormatInt(id, 10) + "/interest")
+}
+
+// interestValue renders an APR in basis points as a percentage for the form,
+// without a trailing sign; blank when there is no interest.
+func interestValue(bp int64) string {
+	if bp <= 0 {
+		return ""
+	}
+	return strings.TrimSuffix(fee.PercentString(bp), "%")
+}
+
+func interestNote(n int) string {
+	if n == 1 {
+		return "1 interest charge was posted just now."
+	}
+	return fmt.Sprintf("%d interest charges were posted just now.", n)
+}
+
+// entryKindLabel and entryKindClass name an entry for the history: interest is
+// a charge, but reads and colours as "interest" so it is not confused with the
+// loan principal.
+func entryKindLabel(e store.Entry) string {
+	if e.Category == store.CategoryInterest {
+		return "interest"
+	}
+	return string(e.Kind)
+}
+
+func entryKindClass(e store.Entry) string {
+	if e.Category == store.CategoryInterest {
+		return "interest"
+	}
+	return string(e.Kind)
+}
+
+// finedNote explains late fees that posted on load, the fee counterpart to
+// postedNote (FEE-03).
+func finedNote(n int) string {
+	if n == 1 {
+		return "1 late fee was assessed just now."
+	}
+	return fmt.Sprintf("%d late fees were assessed just now.", n)
+}
+
+// payoffSummary is the one-line status under a Payoff card's remaining figure.
+func payoffSummary(p ledger.Payoff) string {
+	if p.Settled() {
+		return "Paid off"
+	}
+	return fmt.Sprintf("%d%% repaid", p.ProgressPercent)
+}
+
+func payoffStatusClass(s ledger.PayoffStatus) string {
+	switch s {
+	case ledger.StatusSettled:
+		return "settled"
+	case ledger.StatusAhead:
+		return "ahead"
+	case ledger.StatusOnTrack:
+		return "ontrack"
+	case ledger.StatusBehind:
+		return "behind"
+	default:
+		return ""
+	}
+}
+
+// settledClass dims a fully paid Payoff loan on the dashboard, the way an
+// archived tab is dimmed (PAYOFF-03).
+func settledClass(c TabCard) string {
+	if c.Settled() {
+		return "settledtab"
+	}
+	return ""
+}
+
+// progressWidthClass rounds a percent to the nearest 5 and names the width
+// class the stylesheet carries, avoiding a CSP-forbidden inline style.
+func progressWidthClass(pct int) string {
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	rounded := ((pct + 2) / 5) * 5
+	return "w-" + strconv.Itoa(rounded)
+}
+
+// fixedValue, percentValue, graceValue, and capValue prefill the fee form from
+// an existing policy, leaving a field blank where it does not apply.
+func fixedValue(p fee.Policy) string {
+	if p.Kind == fee.Fixed && p.Fixed > 0 {
+		return p.Fixed.String()
+	}
+	return ""
+}
+
+func percentValue(p fee.Policy) string {
+	if p.Kind != fee.Percent || p.PercentBP <= 0 {
+		return ""
+	}
+	// PercentString renders "5%" or "2.5%"; the form field wants it without the
+	// trailing sign.
+	return strings.TrimSuffix(fee.PercentString(p.PercentBP), "%")
+}
+
+func graceValue(p fee.Policy) string {
+	if !p.Set() {
+		return "0"
+	}
+	return strconv.Itoa(p.GraceDays)
+}
+
+func capValue(p fee.Policy) string {
+	if p.Set() && p.Cap > 0 {
+		return p.Cap.String()
+	}
+	return ""
 }
 
 func itemsAction(id int64) templ.SafeURL {

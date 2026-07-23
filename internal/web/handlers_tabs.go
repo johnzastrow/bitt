@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 	"github.com/johnzastrow/bitt/internal/auth"
 	"github.com/johnzastrow/bitt/internal/ledger"
 	"github.com/johnzastrow/bitt/internal/money"
+	"github.com/johnzastrow/bitt/internal/schedule"
 	"github.com/johnzastrow/bitt/internal/store"
 	"github.com/johnzastrow/bitt/internal/web/views"
 )
@@ -63,6 +65,17 @@ func (s *Server) getDashboard(w http.ResponseWriter, r *http.Request) {
 		if acc.Scheduled {
 			card.NextDue = acc.Next.Due
 			card.JustPosted = len(acc.Posted)
+			card.JustFined = len(acc.Fees)
+		}
+		// A Payoff card leads with loan progress rather than a bare balance
+		// (PAYOFF-01), and a fully paid one drops off the active list (PAYOFF-03).
+		if t.Kind == store.TabPayoff {
+			payoff, err := s.payoffFor(r, t)
+			if err != nil {
+				s.serverError(w, r, err)
+				return
+			}
+			card.Payoff = &payoff
 		}
 		cards = append(cards, card)
 	}
@@ -124,20 +137,68 @@ func (s *Server) postTab(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A Payoff tab may state its loan amount at creation. It is posted as the
+	// opening charge -- the principal the payments draw down (TAB-02). Optional:
+	// a Provider can also post it by hand later.
+	var principal money.Cents
+	if kind == store.TabPayoff {
+		if raw := strings.TrimSpace(r.PostFormValue("loan_amount")); raw != "" {
+			if principal, err = money.Parse(raw); err != nil || principal <= 0 {
+				redirectWith(w, r, "/tabs/new", "err", "The loan amount must be a dollar figure greater than zero.")
+				return
+			}
+		}
+	}
+
+	// A late-fee policy is optional and may be set at creation.
+	policy, err := parseFeePolicy(r)
+	if err != nil {
+		redirectWith(w, r, "/tabs/new", "err", err.Error())
+		return
+	}
+
+	// Interest applies to Payoff loans only. Ignore it on a Services tab.
+	var interestBP int64
+	if kind == store.TabPayoff {
+		if interestBP, err = parseInterestBP(r.PostFormValue("interest_apr")); err != nil {
+			redirectWith(w, r, "/tabs/new", "err", err.Error())
+			return
+		}
+	}
+
 	tab, err := s.store.CreateTab(r.Context(), store.Tab{
-		Name:        name,
-		Kind:        kind,
-		Description: description,
-		CreatedBy:   user.ID,
-		Schedule:    sched,
+		Name:          name,
+		Kind:          kind,
+		Description:   description,
+		CreatedBy:     user.ID,
+		Schedule:      sched,
+		Fee:           policy,
+		InterestAPRBp: interestBP,
 	}, items)
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
 
+	if principal > 0 {
+		if _, _, err := s.ledger.Charge(r.Context(), ledger.Post{
+			TabID:       tab.ID,
+			Amount:      principal,
+			Memo:        "Opening balance",
+			ActorUserID: user.ID,
+			Items:       ledger.ItemsFrom(items),
+		}); err != nil {
+			// The tab exists; the Provider can post the principal by hand. Report
+			// rather than fail the whole creation.
+			s.log.Error("opening charge failed", "tab_id", tab.ID, "error", err)
+			redirectWith(w, r, tabPath(tab.ID), "err", "Tab created, but the opening balance did not post. Post it as a charge.")
+			return
+		}
+	}
+
 	s.log.Info("tab created", "tab_id", tab.ID, "user_id", user.ID,
-		"kind", string(kind), "items", len(items), "schedule", string(sched.Kind))
+		"kind", string(kind), "items", len(items), "schedule", string(sched.Kind),
+		"fee", string(policy.Kind), "principal", int64(principal))
 	redirectWith(w, r, tabPath(tab.ID), "ok", "Tab created.")
 }
 
@@ -350,7 +411,7 @@ func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.render(w, r, http.StatusOK, views.TabDetail(s.page(w, r, tab.Name), views.TabDetailData{
+	data := views.TabDetailData{
 		Tab:            tab,
 		Items:          items,
 		ItemTotal:      itemTotal,
@@ -365,11 +426,63 @@ func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 		Scheduled:      acc.Scheduled,
 		NextDue:        acc.Next.Due,
 		JustPosted:     len(acc.Posted),
+		JustFined:      len(acc.Fees),
+		JustInterest:   len(acc.Interest),
 		Today:          s.today(r.Context()),
 		CanManage:      access.CanManage(),
 		CanTransact:    access.CanTransact(),
 		AsAdmin:        access.Admin,
-	}))
+		Upcoming:       s.upcoming(tab, acc, itemTotal),
+	}
+	if tab.Kind == store.TabPayoff {
+		payoff, err := s.payoffFor(r, tab)
+		if err != nil {
+			s.serverError(w, r, err)
+			return
+		}
+		data.Payoff = &payoff
+	}
+
+	s.render(w, r, http.StatusOK, views.TabDetail(s.page(w, r, tab.Name), data))
+}
+
+// noticeWindowDays is how far ahead an upcoming payment or charge is surfaced.
+// The user asked for the request to appear two weeks before it is due.
+const noticeWindowDays = 14
+
+// upcoming describes the tab's next scheduled event when it falls within the
+// notice window, so a payment request appears well before its due date.
+//
+// This is the in-app half of the reminder. The pushed email/ntfy version is a
+// later phase; this half is pure computation on the read path and needs no new
+// machinery, so it ships now.
+func (s *Server) upcoming(tab store.Tab, acc ledger.Accrual, itemTotal money.Cents) views.Upcoming {
+	if !acc.Scheduled || tab.ArchivedAt != nil || itemTotal <= 0 {
+		return views.Upcoming{}
+	}
+	due := acc.Next.Due
+	if due.IsZero() {
+		return views.Upcoming{}
+	}
+	today := s.today(context.Background())
+	days := daysBetween(today, due)
+	if days < 0 || days > noticeWindowDays {
+		return views.Upcoming{}
+	}
+	return views.Upcoming{
+		Due:       due,
+		Amount:    itemTotal,
+		DaysUntil: days,
+		// On a Payoff tab the schedule describes an expected payment; on a
+		// Services tab it is the charge that is about to post.
+		IsPayment: tab.Kind == store.TabPayoff,
+	}
+}
+
+// daysBetween counts whole days from a to b, computed as a calendar difference
+// in UTC so no daylight saving transition can shift it.
+func daysBetween(a, b schedule.Date) int {
+	return int(b.Time(nil).Sub(a.Time(nil)).Hours()) / 24
 }
 
 // statements builds the per-period view from entries already loaded (CHG-04).

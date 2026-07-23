@@ -268,24 +268,43 @@ dashboard's hidden amount field was forcing the whole balance.
 
 ---
 
-## Phase 4 is next: payoff tabs and late fees
+## Phase 4 landed. Payoff, fees, interest
 
-11 requirements: TAB-02; PAYOFF-01, 02, 03; FEE-01 through 07.
+**Payoff is Model A.** Principal charged once, payments draw it down, the schedule
+is expected *payment* dates (not charges). A Payoff tab posts NO period charges —
+`Accrue` branches on `tab.Kind == TabPayoff`. Progress and status come from
+`ledger.ComputePayoff`, which splits payments into interest-then-principal so
+progress reflects principal retired.
 
-**Fees must reuse the Phase 3 accrual path.** A fee is another thing that becomes
-true when someone looks at the tab, exactly like a period charge. If Phase 4
-starts growing its own posting mechanism, stop and reconcile the two --
-ROADMAP.md flags this as the phase's risk, and it is the same mistake a
-background scheduler would have been.
+**Fees and interest reuse the accrual pattern exactly.** Each has a claim table
+(`posted_fees`, `posted_interest`) with a `(tab, period)` PK and append-only
+triggers, and a `PostFeeEntry` / `PostInterestEntry` that writes the entry and the
+claim in one transaction — same exactly-once-under-concurrency guarantee as
+`PostPeriodEntry`. If you add another accrual type, copy this shape; do not invent
+a new one.
 
-`ledger.Statement.Overdue` already computes the condition FEE-01 triggers on:
-an unsettled cycle past its due date. Grace is an offset from `Period.DueOn`.
-The claim table generalizes: a fee needs its own key namespace on
-`(tab_id, period_key)` so a fee and its cycle's charge do not collide.
+**Fees are per-period-windowed, not cumulative.** Each installment is judged on
+payments in its own window `(prev deadline, this deadline]`, so a paid period is
+never dragged down by an earlier miss ("pay May, no May fee even while behind").
+This was a real correction mid-build — the cumulative model fined every month
+after the first miss. See `paidWindow` in `fees.go`.
 
-FEE-03 (percentage fees computed on the overdue period charge, never on a
-balance containing fees) is why `Statement.Charge` is the period's own charge
-rather than anything derived from the running balance.
+**Interest is a charge sub-typed by a `category` column, NOT a new entry kind.**
+The `entries.kind` CHECK from 0001 cannot gain a value without rebuilding the
+table, and the migration harness holds `foreign_keys` on inside its transaction
+(a no-op there), so the standard SQLite rebuild recipe is unavailable. So
+interest posts `kind='charge', category='interest'`. Principal is derived as
+non-interest charges. If you ever need a genuinely new kind, this constraint is
+why it is hard — budget for a harness change.
+
+**Interest accrues on the loan balance, excluding fees, and compounds on unpaid
+interest.** `loanBalanceThrough` is deliberately fees-excluded. Compounding is
+correct for a loan and is exactly what a fee must never do — the two are
+different on purpose.
+
+**Version lives in `internal/version`** (a constant `Number`, ldflags inject
+commit/date). Shown in the footer and healthz. Bump `Number` on every functional
+change per semver; add a CHANGELOG entry. The Makefile injects provenance only.
 
 ---
 

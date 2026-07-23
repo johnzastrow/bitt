@@ -4,8 +4,7 @@
 
 ## Where things stand
 
-**Phases 1, 2, and 3 complete and verified.** 39 of 54 v1 requirements delivered
-(TAB-02 pulled forward from Phase 4).
+**Phases 1-4 complete and verified.** 49 of 54 v1 requirements delivered.
 
 | Item | State |
 |------|-------|
@@ -15,7 +14,7 @@
 | Phase 1 | Complete — walking skeleton |
 | Phase 2 | Complete — the settle loop |
 | Phase 3 | Complete — recurrence |
-| Phase 4 | Not started — payoff tabs and late fees |
+| Phase 4 | Complete — payoff tabs, late fees, interest |
 
 ## What works today
 
@@ -51,7 +50,7 @@ entry.
 ## Verification performed
 
 - Full suite green, including under `-race`
-- Coverage: money 96%, ledger 92%, schedule 87%, sqlite 72%, web 70%, auth 44%
+- Coverage: fee 96%, money 96%, ledger ~90%, schedule 87%, sqlite ~73%, web ~71%, auth 44%
 - Migration `0003_schedules` applied to an existing Phase 2 database without
   incident, and the demo tab kept its balance
 - Live binary walked end to end over HTTP: a tab anchored ten weeks back posted
@@ -63,22 +62,25 @@ entry.
   cycle under real parallel load (SCHED-04)
 - Changing an item's amount left the posted cycle's entry and its snapshot
   untouched, and superseded the item row rather than overwriting it
-- `posted_periods` UPDATE and DELETE both abort against the running database
+- `posted_periods`, `posted_fees`, and `posted_interest` UPDATE/DELETE all abort
+- Migration 0005 applied cleanly to the existing demo database (through 0004)
+- Live: a $5,000 loan at 6% accrued $25 then $23.88 interest on the declining
+  balance; a waived fee added $25 back and did not re-assess; a fully paid loan
+  read settled and left the active dashboard; version shows v0.4.0 in footer and healthz
 - The administrator exception to AUTH-05 is covered from both sides: an admin can
   rename a tab they are not on, and **cannot** post a payment to it. That second
   test caught a real hole during development and now guards it.
 
 ## Next action
 
-**Phase 4 — payoff tabs and late fees.** 11 requirements: TAB-02; PAYOFF-01, 02,
-03; FEE-01 through 07.
+**Phase 5 — notifications** (email / ntfy). Not in the original list; added by
+request. External-cron-driven `/internal/tick`, idempotent via a sent-claim
+table, per-user preferences. Must stay entirely off the ledger path. Then
+**Phase 6 — ship** (MariaDB, Docker, PWA, backup/restore).
 
-The load-bearing constraint is recorded in ROADMAP.md: fee assessment must reuse
-Phase 3's lazy accrual path. If it starts growing its own posting mechanism,
-stop and reconcile the two. `ledger.Accrue` and `store.PostPeriodEntry` are the
-seams to extend — a fee is another thing that becomes true when someone looks.
-
-`Statement.Overdue` already computes exactly the condition FEE-01 triggers on.
+Phase 4 delivered PAYOFF-01/02/03 and FEE-01 through 07, plus, by request,
+declining-balance interest on loans, an in-app upcoming-payment notice, version
+display, and a header logo.
 
 ## Working agreement
 

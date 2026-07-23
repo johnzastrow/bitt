@@ -26,11 +26,9 @@ import (
 	"github.com/johnzastrow/bitt/internal/config"
 	"github.com/johnzastrow/bitt/internal/ledger"
 	"github.com/johnzastrow/bitt/internal/store/sqlite"
+	"github.com/johnzastrow/bitt/internal/version"
 	"github.com/johnzastrow/bitt/internal/web"
 )
-
-// version is set at build time with -ldflags "-X main.version=...".
-var version = "dev"
 
 func main() {
 	if err := run(); err != nil {
@@ -53,7 +51,7 @@ func run() error {
 	}
 
 	log.Info("starting bittabby",
-		"version", version,
+		"version", version.Full(),
 		"addr", cfg.Addr,
 		"db", cfg.DBPath,
 		"append_only_triggers", cfg.AppendOnlyTriggers,

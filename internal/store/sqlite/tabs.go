@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/johnzastrow/bitt/internal/fee"
 	"github.com/johnzastrow/bitt/internal/money"
 	"github.com/johnzastrow/bitt/internal/schedule"
 	"github.com/johnzastrow/bitt/internal/store"
@@ -13,25 +14,34 @@ import (
 
 const (
 	tabColumns = `id, name, kind, description, created_by, created_at, archived_at, ` +
-		`schedule_kind, schedule_anchor, schedule_billing`
+		`schedule_kind, schedule_anchor, schedule_billing, ` +
+		`fee_kind, fee_fixed_cents, fee_percent_bp, fee_grace_days, fee_cap_cents, interest_apr_bp`
 	// same list qualified for joins; kept literal rather than derived, since a
 	// helper that rewrites SQL strings is more machinery than two constants.
 	tabColumnsT = `t.id, t.name, t.kind, t.description, t.created_by, t.created_at, t.archived_at, ` +
-		`t.schedule_kind, t.schedule_anchor, t.schedule_billing`
+		`t.schedule_kind, t.schedule_anchor, t.schedule_billing, ` +
+		`t.fee_kind, t.fee_fixed_cents, t.fee_percent_bp, t.fee_grace_days, t.fee_cap_cents, t.interest_apr_bp`
 )
 
 func scanTab(row interface{ Scan(...any) error }) (store.Tab, error) {
 	var (
-		t         store.Tab
-		kind      string
-		created   string
-		archived  sql.NullString
-		schedKind string
-		anchor    string
-		billing   string
+		t          store.Tab
+		kind       string
+		created    string
+		archived   sql.NullString
+		schedKind  string
+		anchor     string
+		billing    string
+		feeKind    string
+		feeFixed   int64
+		feePercent int64
+		feeGrace   int
+		feeCap     int64
+		interestBP int64
 	)
 	if err := row.Scan(&t.ID, &t.Name, &kind, &t.Description, &t.CreatedBy, &created, &archived,
-		&schedKind, &anchor, &billing); err != nil {
+		&schedKind, &anchor, &billing,
+		&feeKind, &feeFixed, &feePercent, &feeGrace, &feeCap, &interestBP); err != nil {
 		return store.Tab{}, translate(err)
 	}
 	t.Kind = store.TabKind(kind)
@@ -46,7 +56,24 @@ func scanTab(row interface{ Scan(...any) error }) (store.Tab, error) {
 	if t.Schedule, err = scheduleFrom(schedKind, anchor, billing); err != nil {
 		return store.Tab{}, fmt.Errorf("sqlite: parse tab schedule: %w", err)
 	}
+	t.Fee = fee.Policy{
+		Kind:      fee.Kind(feeKind),
+		Fixed:     money.Cents(feeFixed),
+		PercentBP: feePercent,
+		GraceDays: feeGrace,
+		Cap:       money.Cents(feeCap),
+	}
+	t.InterestAPRBp = interestBP
 	return t, nil
+}
+
+// feePolicyCols flattens a fee policy into its stored columns. An unset policy
+// writes an empty kind and zeros rather than nulls (DEPLOY-02).
+func feePolicyCols(p fee.Policy) (kind string, fixed, percent int64, grace int, cap int64) {
+	if !p.Set() {
+		return "", 0, 0, 0, 0
+	}
+	return string(p.Kind), int64(p.Fixed), p.PercentBP, p.GraceDays, int64(p.Cap)
 }
 
 // scheduleFrom rebuilds a schedule from its three stored columns. All three are
@@ -99,12 +126,17 @@ func (d *DB) CreateTab(ctx context.Context, t store.Tab, items []store.TabItem) 
 	defer func() { _ = tx.Rollback() }()
 
 	schedKind, anchor, billing := scheduleText(t.Schedule)
+	feeKind, feeFixed, feePercent, feeGrace, feeCap := feePolicyCols(t.Fee)
 	res, err := tx.ExecContext(ctx,
 		`INSERT INTO tabs (name, kind, description, created_by, created_at, archived_at,
-                           schedule_kind, schedule_anchor, schedule_billing)
-         VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+                           schedule_kind, schedule_anchor, schedule_billing,
+                           fee_kind, fee_fixed_cents, fee_percent_bp, fee_grace_days, fee_cap_cents,
+                           interest_apr_bp)
+         VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.Name, string(t.Kind), t.Description, t.CreatedBy, toText(t.CreatedAt),
-		schedKind, anchor, billing)
+		schedKind, anchor, billing,
+		feeKind, feeFixed, feePercent, feeGrace, feeCap,
+		t.InterestAPRBp)
 	if err != nil {
 		return store.Tab{}, translate(err)
 	}
@@ -314,6 +346,56 @@ func (d *DB) SetSchedule(ctx context.Context, tabID int64, s schedule.Schedule) 
 	n, err := res.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("sqlite: set schedule: %w", err)
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+// SetFeePolicy replaces a tab's late-fee policy (FEE-01, FEE-02, FEE-06).
+//
+// It writes only the five fee columns. Nothing here touches posted_fees, so
+// changing or clearing the policy can never re-assess or unwind a fee already
+// charged -- a fee, once posted, is an immutable ledger entry like any other.
+func (d *DB) SetFeePolicy(ctx context.Context, tabID int64, p fee.Policy) error {
+	if err := p.Validate(); err != nil {
+		return fmt.Errorf("sqlite: %w", err)
+	}
+	kind, fixed, percent, grace, cap := feePolicyCols(p)
+
+	res, err := d.db.ExecContext(ctx,
+		`UPDATE tabs SET fee_kind = ?, fee_fixed_cents = ?, fee_percent_bp = ?,
+                        fee_grace_days = ?, fee_cap_cents = ? WHERE id = ?`,
+		kind, fixed, percent, grace, cap, tabID)
+	if err != nil {
+		return translate(err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqlite: set fee policy: %w", err)
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+// SetInterestRate replaces a Payoff loan's annual interest rate, in basis
+// points. Zero clears it. Nothing here touches posted_interest, so a rate
+// change reaches future periods only -- interest already charged stands.
+func (d *DB) SetInterestRate(ctx context.Context, tabID int64, annualBasisPoints int64) error {
+	if annualBasisPoints < 0 {
+		return fmt.Errorf("sqlite: interest rate cannot be negative")
+	}
+	res, err := d.db.ExecContext(ctx,
+		`UPDATE tabs SET interest_apr_bp = ? WHERE id = ?`, annualBasisPoints, tabID)
+	if err != nil {
+		return translate(err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqlite: set interest rate: %w", err)
 	}
 	if n == 0 {
 		return store.ErrNotFound

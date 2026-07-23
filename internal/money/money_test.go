@@ -183,3 +183,108 @@ func TestNeg(t *testing.T) {
 		t.Errorf("Neg = %d, want 1234", got)
 	}
 }
+
+func TestPercent(t *testing.T) {
+	cases := []struct {
+		name string
+		base Cents
+		bp   int64
+		want Cents
+	}{
+		{"five percent of $100", 10000, 500, 500},
+		{"ten percent of $250", 25000, 1000, 2500},
+		{"2.5 percent of $250", 25000, 250, 625},
+		{"zero rate", 25000, 0, 0},
+		{"zero base", 0, 500, 0},
+		{"one hundred percent", 4200, 10000, 4200},
+		// Rounding: half a cent rounds up, deterministically.
+		{"rounds half up", 1, 5000, 1},              // 0.5 cent -> 1
+		{"rounds just under half down", 199, 25, 0}, // 0.4975 cent -> 0
+		{"rounds just over half up", 201, 25, 1},    // 0.5025 cent -> 1
+		{"three percent of $33.33", 3333, 300, 100}, // 99.99 -> 100
+		{"seven percent of $14.29", 1429, 700, 100}, // 100.03 -> 100
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := Percent(tc.base, tc.bp)
+			if !ok {
+				t.Fatalf("Percent(%d, %d) reported overflow", tc.base, tc.bp)
+			}
+			if got != tc.want {
+				t.Errorf("Percent(%d, %d) = %d, want %d", tc.base, tc.bp, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPercentIsDeterministicAndHalfUp(t *testing.T) {
+	// The exact half-cent boundary must always round up, and must not depend on
+	// any floating-point representation.
+	for base := Cents(1); base <= 400; base++ {
+		got, ok := Percent(base, 5000) // 50% -> base/2
+		if !ok {
+			t.Fatalf("overflow at base %d", base)
+		}
+		// base/2 rounded half up.
+		want := Cents((int64(base) + 1) / 2)
+		if got != want {
+			t.Errorf("Percent(%d, 5000) = %d, want %d", base, got, want)
+		}
+	}
+}
+
+func TestPercentRejectsNegativeAndOverflow(t *testing.T) {
+	if _, ok := Percent(-100, 500); ok {
+		t.Error("Percent accepted a negative base")
+	}
+	if _, ok := Percent(100, -500); ok {
+		t.Error("Percent accepted a negative rate")
+	}
+	// A base and rate whose product overflows int64 must be reported, not wrapped.
+	if _, ok := Percent(Cents(1<<62), 1000); ok {
+		t.Error("Percent did not report overflow on a huge product")
+	}
+}
+
+func TestInterestOn(t *testing.T) {
+	cases := []struct {
+		name    string
+		balance Cents
+		aprBP   int64
+		ppy     int
+		want    Cents
+	}{
+		{"6% monthly on $5000", 500000, 600, 12, 2500}, // 0.5%/mo
+		{"6% monthly on $4775", 477500, 600, 12, 2388}, // 2387.5 -> 2388 half up
+		{"12% weekly on $1000", 100000, 1200, 52, 231}, // 100000*1200/520000 = 230.77 -> 231
+		{"0% is nothing", 500000, 0, 12, 0},
+		{"zero balance", 0, 600, 12, 0},
+		{"annual, one period", 100000, 500, 1, 5000}, // 5% of $1000
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := InterestOn(tc.balance, tc.aprBP, tc.ppy)
+			if !ok {
+				t.Fatalf("InterestOn reported overflow")
+			}
+			if got != tc.want {
+				t.Errorf("InterestOn(%d, %d, %d) = %d, want %d", tc.balance, tc.aprBP, tc.ppy, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestInterestOnRejectsBadInput(t *testing.T) {
+	if _, ok := InterestOn(-1, 600, 12); ok {
+		t.Error("accepted a negative balance")
+	}
+	if _, ok := InterestOn(100, -1, 12); ok {
+		t.Error("accepted a negative rate")
+	}
+	if _, ok := InterestOn(100, 600, 0); ok {
+		t.Error("accepted zero periods per year")
+	}
+	if _, ok := InterestOn(Cents(1<<62), 1200, 12); ok {
+		t.Error("did not report overflow")
+	}
+}

@@ -12,11 +12,18 @@ import (
 
 // Accrual reports what reading a tab caused to be posted.
 type Accrual struct {
-	// Posted holds the entries this call wrote, oldest cycle first. It is empty
-	// on the overwhelmingly common read where nothing has come due.
+	// Posted holds the period charges this call wrote, oldest cycle first. It
+	// is empty on the overwhelmingly common read where nothing has come due,
+	// and always empty for a Payoff tab, whose schedule bills no charges.
 	Posted []store.Entry
+	// Interest holds the interest charges this call accrued on a Payoff loan,
+	// oldest period first.
+	Interest []store.Entry
+	// Fees holds the late fees this call assessed, oldest date first (FEE-03).
+	Fees []store.Entry
 	// Next is the first cycle that has not yet come due, which is what a tab
-	// shows as its upcoming charge.
+	// shows as its upcoming charge or, on a Payoff tab, its next expected
+	// payment.
 	Next schedule.Period
 	// Scheduled reports whether the tab has a schedule at all.
 	Scheduled bool
@@ -57,32 +64,58 @@ func (s *Service) Accrue(ctx context.Context, tab store.Tab, history []store.Tab
 		return acc, err
 	}
 	acc.Next = tab.Schedule.Period(len(due))
-	if len(due) == 0 {
-		return acc, nil
-	}
 
-	claimed, err := s.store.ListPostedPeriods(ctx, tab.ID)
-	if err != nil {
-		return acc, err
-	}
-	seen := make(map[string]bool, len(claimed))
-	for _, p := range claimed {
-		seen[p.Key] = true
-	}
-
-	for _, p := range due {
-		if seen[p.Key()] {
-			continue
-		}
-		entry, replayed, err := s.postPeriod(ctx, tab, p, history, loc)
+	// Post scheduled charges -- Services tabs only. A Payoff tab's schedule
+	// describes what the Payee is expected to PAY each period, not what the
+	// Provider charges: the loan is a single principal charge, drawn down by
+	// payments (TAB-02). So a Payoff tab bills no period charges; its schedule
+	// feeds progress (PAYOFF-02) and late fees instead.
+	if tab.Kind != store.TabPayoff && len(due) > 0 {
+		claimed, err := s.store.ListPostedPeriods(ctx, tab.ID)
 		if err != nil {
 			return acc, err
 		}
-		// A replay means another reader claimed the cycle first. That is a
-		// success, not a conflict -- the charge exists either way.
-		if !replayed {
-			acc.Posted = append(acc.Posted, entry)
+		seen := make(map[string]bool, len(claimed))
+		for _, p := range claimed {
+			seen[p.Key] = true
 		}
+		for _, p := range due {
+			if seen[p.Key()] {
+				continue
+			}
+			entry, replayed, err := s.postPeriod(ctx, tab, p, history, loc)
+			if err != nil {
+				return acc, err
+			}
+			// A replay means another reader claimed the cycle first. That is a
+			// success, not a conflict -- the charge exists either way.
+			if !replayed {
+				acc.Posted = append(acc.Posted, entry)
+			}
+		}
+	}
+
+	// Accrue interest on a Payoff loan before fees, so the balance a statement
+	// shows is current. Interest is a property of a loan, so Services tabs never
+	// carry it however the field is set.
+	if tab.Kind == store.TabPayoff && tab.Interest() {
+		interest, err := s.accrueInterest(ctx, tab, loc)
+		if err != nil {
+			return acc, err
+		}
+		acc.Interest = interest
+	}
+
+	// Assess late fees for any due date whose grace has elapsed and whose
+	// expected amount was not met (FEE-03). This runs after charges post, so a
+	// Services period's own charge is already in the ledger when its payment is
+	// measured against it.
+	if tab.Fee.Set() {
+		fees, err := s.assessFees(ctx, tab, history, loc)
+		if err != nil {
+			return acc, err
+		}
+		acc.Fees = fees
 	}
 	return acc, nil
 }

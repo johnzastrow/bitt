@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	entryColumns = `seq, tab_id, kind, amount_cents, memo, effective_at, created_at, actor_user_id, idempotency_key, reverses_seq, method`
+	entryColumns = `seq, tab_id, kind, amount_cents, memo, effective_at, created_at, actor_user_id, idempotency_key, reverses_seq, method, category`
 	// same list qualified for joins.
-	entryColumnsE = `e.seq, e.tab_id, e.kind, e.amount_cents, e.memo, e.effective_at, e.created_at, e.actor_user_id, e.idempotency_key, e.reverses_seq, e.method`
+	entryColumnsE = `e.seq, e.tab_id, e.kind, e.amount_cents, e.memo, e.effective_at, e.created_at, e.actor_user_id, e.idempotency_key, e.reverses_seq, e.method, e.category`
 )
 
 func scanEntry(row interface{ Scan(...any) error }) (store.Entry, error) {
@@ -27,13 +27,15 @@ func scanEntry(row interface{ Scan(...any) error }) (store.Entry, error) {
 		created   string
 		reverses  sql.NullInt64
 		method    string
+		category  string
 	)
 	if err := row.Scan(&e.Seq, &e.TabID, &kind, &amount, &e.Memo,
-		&effective, &created, &e.ActorUserID, &e.IdempotencyKey, &reverses, &method); err != nil {
+		&effective, &created, &e.ActorUserID, &e.IdempotencyKey, &reverses, &method, &category); err != nil {
 		return store.Entry{}, translate(err)
 	}
 	e.Kind = store.EntryKind(kind)
 	e.Method = store.PaymentMethod(method)
+	e.Category = store.EntryCategory(category)
 	e.Amount = money.Cents(amount)
 
 	var err error
@@ -155,6 +157,201 @@ func (d *DB) PostPeriodEntry(ctx context.Context, p store.PostedPeriod, e store.
 	return builtEntry(e, seq, now), false, nil
 }
 
+// PostFeeEntry appends a late-fee entry and claims the overdue date it answers
+// to, in one transaction (FEE-03, FEE-04).
+//
+// This is PostPeriodEntry's sibling: the fee entry and the claim share a
+// transaction, and the claim carries the (tab_id, fee_key) primary key, so an
+// overdue date can be assessed at most once however many readers pass over it
+// at once. A date already assessed returns the entry that assessed it with
+// replayed=true.
+func (d *DB) PostFeeEntry(ctx context.Context, f store.PostedFee, e store.NewEntry) (store.Entry, bool, error) {
+	if f.Key == "" {
+		return store.Entry{}, false, errors.New("sqlite: fee requires a key")
+	}
+	if f.TabID != e.TabID {
+		return store.Entry{}, false, fmt.Errorf("sqlite: fee tab %d does not match entry tab %d", f.TabID, e.TabID)
+	}
+	if e.Kind != store.KindFee {
+		return store.Entry{}, false, fmt.Errorf("sqlite: PostFeeEntry requires a fee entry, got %q", e.Kind)
+	}
+	now, err := validateNewEntry(&e)
+	if err != nil {
+		return store.Entry{}, false, err
+	}
+
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return store.Entry{}, false, fmt.Errorf("sqlite: begin post fee: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	seq, err := insertEntry(ctx, tx, e, now)
+	if err == nil {
+		_, err = tx.ExecContext(ctx,
+			`INSERT INTO posted_fees
+                 (tab_id, fee_key, entry_seq, assessed_for, base_cents, posted_at)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+			f.TabID, f.Key, seq, f.AssessedFor.String(), int64(f.Base), toText(now))
+		err = translate(err)
+	}
+	if err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			_ = tx.Rollback()
+			if existing, lookupErr := d.entryForFee(ctx, f.TabID, f.Key); lookupErr == nil {
+				return existing, true, nil
+			}
+			if existing, lookupErr := d.entryByIdempotencyKey(ctx, e.IdempotencyKey); lookupErr == nil {
+				return existing, true, nil
+			}
+		}
+		return store.Entry{}, false, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return store.Entry{}, false, fmt.Errorf("sqlite: commit post fee: %w", err)
+	}
+	return builtEntry(e, seq, now), false, nil
+}
+
+func (d *DB) entryForFee(ctx context.Context, tabID int64, key string) (store.Entry, error) {
+	return scanEntry(d.db.QueryRowContext(ctx,
+		`SELECT `+entryColumnsE+`
+         FROM entries e
+         JOIN posted_fees f ON f.entry_seq = e.seq
+         WHERE f.tab_id = ? AND f.fee_key = ?`, tabID, key))
+}
+
+// ListPostedFees returns a tab's assessed fees, newest first (FEE-03).
+func (d *DB) ListPostedFees(ctx context.Context, tabID int64) ([]store.PostedFee, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT tab_id, fee_key, entry_seq, assessed_for, base_cents, posted_at
+         FROM posted_fees
+         WHERE tab_id = ?
+         ORDER BY assessed_for DESC, fee_key DESC`, tabID)
+	if err != nil {
+		return nil, translate(err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []store.PostedFee
+	for rows.Next() {
+		var (
+			f        store.PostedFee
+			assessed string
+			base     int64
+			posted   string
+		)
+		if err := rows.Scan(&f.TabID, &f.Key, &f.EntrySeq, &assessed, &base, &posted); err != nil {
+			return nil, translate(err)
+		}
+		f.Base = money.Cents(base)
+		if f.AssessedFor, err = schedule.ParseDate(assessed); err != nil {
+			return nil, fmt.Errorf("sqlite: parse fee assessed_for: %w", err)
+		}
+		if f.PostedAt, err = parseTime(posted); err != nil {
+			return nil, fmt.Errorf("sqlite: parse fee posted_at: %w", err)
+		}
+		out = append(out, f)
+	}
+	return out, translate(rows.Err())
+}
+
+// PostInterestEntry appends a periodic interest charge and claims the period it
+// accrued for, in one transaction. The declining-balance counterpart of
+// PostFeeEntry, with the same exactly-once and replay behaviour.
+func (d *DB) PostInterestEntry(ctx context.Context, in store.PostedInterest, e store.NewEntry) (store.Entry, bool, error) {
+	if in.Key == "" {
+		return store.Entry{}, false, errors.New("sqlite: interest requires a key")
+	}
+	if in.TabID != e.TabID {
+		return store.Entry{}, false, fmt.Errorf("sqlite: interest tab %d does not match entry tab %d", in.TabID, e.TabID)
+	}
+	if e.Category != store.CategoryInterest {
+		return store.Entry{}, false, fmt.Errorf("sqlite: PostInterestEntry requires an interest entry, got category %q", e.Category)
+	}
+	now, err := validateNewEntry(&e)
+	if err != nil {
+		return store.Entry{}, false, err
+	}
+
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return store.Entry{}, false, fmt.Errorf("sqlite: begin post interest: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	seq, err := insertEntry(ctx, tx, e, now)
+	if err == nil {
+		_, err = tx.ExecContext(ctx,
+			`INSERT INTO posted_interest
+                 (tab_id, period_key, entry_seq, accrued_for, base_cents, posted_at)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+			in.TabID, in.Key, seq, in.AccruedFor.String(), int64(in.Base), toText(now))
+		err = translate(err)
+	}
+	if err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			_ = tx.Rollback()
+			if existing, lookupErr := d.entryForInterest(ctx, in.TabID, in.Key); lookupErr == nil {
+				return existing, true, nil
+			}
+			if existing, lookupErr := d.entryByIdempotencyKey(ctx, e.IdempotencyKey); lookupErr == nil {
+				return existing, true, nil
+			}
+		}
+		return store.Entry{}, false, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return store.Entry{}, false, fmt.Errorf("sqlite: commit post interest: %w", err)
+	}
+	return builtEntry(e, seq, now), false, nil
+}
+
+func (d *DB) entryForInterest(ctx context.Context, tabID int64, key string) (store.Entry, error) {
+	return scanEntry(d.db.QueryRowContext(ctx,
+		`SELECT `+entryColumnsE+`
+         FROM entries e
+         JOIN posted_interest i ON i.entry_seq = e.seq
+         WHERE i.tab_id = ? AND i.period_key = ?`, tabID, key))
+}
+
+// ListPostedInterest returns a tab's accrued interest periods, newest first.
+func (d *DB) ListPostedInterest(ctx context.Context, tabID int64) ([]store.PostedInterest, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT tab_id, period_key, entry_seq, accrued_for, base_cents, posted_at
+         FROM posted_interest
+         WHERE tab_id = ?
+         ORDER BY accrued_for DESC, period_key DESC`, tabID)
+	if err != nil {
+		return nil, translate(err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []store.PostedInterest
+	for rows.Next() {
+		var (
+			in      store.PostedInterest
+			accrued string
+			base    int64
+			posted  string
+		)
+		if err := rows.Scan(&in.TabID, &in.Key, &in.EntrySeq, &accrued, &base, &posted); err != nil {
+			return nil, translate(err)
+		}
+		in.Base = money.Cents(base)
+		if in.AccruedFor, err = schedule.ParseDate(accrued); err != nil {
+			return nil, fmt.Errorf("sqlite: parse interest accrued_for: %w", err)
+		}
+		if in.PostedAt, err = parseTime(posted); err != nil {
+			return nil, fmt.Errorf("sqlite: parse interest posted_at: %w", err)
+		}
+		out = append(out, in)
+	}
+	return out, translate(rows.Err())
+}
+
 // validateNewEntry checks the invariants shared by every write path and fills
 // in the timestamps, returning the creation time.
 func validateNewEntry(e *store.NewEntry) (time.Time, error) {
@@ -180,11 +377,11 @@ func validateNewEntry(e *store.NewEntry) (time.Time, error) {
 func insertEntry(ctx context.Context, tx *sql.Tx, e store.NewEntry, now time.Time) (int64, error) {
 	res, err := tx.ExecContext(ctx,
 		`INSERT INTO entries
-             (tab_id, kind, amount_cents, memo, effective_at, created_at, actor_user_id, idempotency_key, reverses_seq, method)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (tab_id, kind, amount_cents, memo, effective_at, created_at, actor_user_id, idempotency_key, reverses_seq, method, category)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.TabID, string(e.Kind), int64(e.Amount), e.Memo,
 		toText(e.EffectiveAt), toText(now), e.ActorUserID, e.IdempotencyKey,
-		nullInt64(e.ReversesSeq), string(e.Method))
+		nullInt64(e.ReversesSeq), string(e.Method), string(e.Category))
 	if err != nil {
 		return 0, translate(err)
 	}
@@ -223,6 +420,7 @@ func builtEntry(e store.NewEntry, seq int64, now time.Time) store.Entry {
 		IdempotencyKey: e.IdempotencyKey,
 		ReversesSeq:    e.ReversesSeq,
 		Method:         e.Method,
+		Category:       e.Category,
 	}
 }
 

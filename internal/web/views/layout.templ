@@ -1,6 +1,9 @@
 package views
 
-import "github.com/johnzastrow/bitt/internal/store"
+import (
+	"github.com/johnzastrow/bitt/internal/store"
+	"github.com/johnzastrow/bitt/internal/version"
+)
 
 // Page carries the chrome-level data every rendered page needs.
 type Page struct {
@@ -29,7 +32,10 @@ templ Layout(p Page) {
 		>
 			if p.User != nil {
 				<header class="topbar">
-					<a class="brand" href="/">BitTabby</a>
+					<a class="brand" href="/">
+						<img class="logo" src="/static/logo.svg" alt="" width="28" height="28"/>
+						<span>BitTabby</span>
+					</a>
 					<nav>
 						if p.User.IsAdmin {
 							<a class="navlink" href="/admin/users">People</a>
@@ -53,6 +59,7 @@ templ Layout(p Page) {
 			</main>
 			<footer class="foot">
 				<span>Tabs, not invoices.</span>
+				<span class="version" title={ version.Full() }>{ version.Short() }</span>
 			</footer>
 		</body>
 	</html>

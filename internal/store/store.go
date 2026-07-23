@@ -12,6 +12,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/johnzastrow/bitt/internal/fee"
 	"github.com/johnzastrow/bitt/internal/money"
 	"github.com/johnzastrow/bitt/internal/schedule"
 )
@@ -30,6 +31,18 @@ var (
 	// ErrLastAdmin is returned when deactivating an account would leave the
 	// instance with no active administrator.
 	ErrLastAdmin = errors.New("store: cannot deactivate the last administrator")
+)
+
+// EntryCategory sub-types an entry within its kind. It is empty for ordinary
+// entries; interest is a charge carrying CategoryInterest, so it can be told
+// apart from loan principal without a new entry kind.
+type EntryCategory string
+
+const (
+	// CategoryNone is the ordinary, unqualified entry.
+	CategoryNone EntryCategory = ""
+	// CategoryInterest marks a charge as periodic loan interest (Payoff tabs).
+	CategoryInterest EntryCategory = "interest"
 )
 
 // EntryKind classifies a ledger entry.
@@ -201,6 +214,46 @@ type Tab struct {
 	// Schedule is the tab's recurrence (SCHED-01). A zero Kind means the tab is
 	// billed only by hand, which stays a legitimate way to run one (CHG-03).
 	Schedule schedule.Schedule
+	// Fee is the tab's late-fee policy (FEE-01, FEE-02, FEE-06). A zero policy
+	// means the tab charges no late fee.
+	Fee fee.Policy
+	// InterestAPRBp is the annual interest rate in basis points on a Payoff
+	// loan (100 bp = 1%). Zero means no interest, matching an interest-free IOU.
+	InterestAPRBp int64
+}
+
+// Interest reports whether the tab carries loan interest.
+func (t Tab) Interest() bool { return t.InterestAPRBp > 0 }
+
+// PostedFee records that one overdue date has been assessed a late fee, and
+// points at the entry that charged it. It is the claim that makes fee
+// assessment happen at most once per date (FEE-04).
+type PostedFee struct {
+	TabID    int64
+	Key      string
+	EntrySeq int64
+	// AssessedFor is the overdue date the fee answers to.
+	AssessedFor schedule.Date
+	// Base is the overdue amount the fee was computed on, kept so a percentage
+	// fee can be shown to have been taken on the charge and not on a balance
+	// (FEE-05).
+	Base     money.Cents
+	PostedAt time.Time
+}
+
+// PostedInterest records that one period has accrued interest, and points at
+// the interest entry. It is the claim that makes interest accrue at most once
+// per period, the declining-balance counterpart of PostedFee.
+type PostedInterest struct {
+	TabID    int64
+	Key      string
+	EntrySeq int64
+	// AccruedFor is the period date the interest answers to.
+	AccruedFor schedule.Date
+	// Base is the outstanding balance the interest was computed on, kept so a
+	// declining charge can be shown against the balance it was taken on.
+	Base     money.Cents
+	PostedAt time.Time
 }
 
 // PostedPeriod records that one billing cycle has been charged, and points at
@@ -255,6 +308,8 @@ type Entry struct {
 	IdempotencyKey string
 	ReversesSeq    *int64
 	Method         PaymentMethod
+	// Category sub-types the entry; CategoryInterest marks loan interest.
+	Category EntryCategory
 }
 
 // EntryItem is the item breakdown captured at the moment an entry was posted,
@@ -277,6 +332,7 @@ type NewEntry struct {
 	IdempotencyKey string
 	ReversesSeq    *int64
 	Method         PaymentMethod
+	Category       EntryCategory
 	Items          []EntryItem
 }
 
@@ -363,6 +419,16 @@ type TabStore interface {
 	// periods, so changing a schedule cannot retroactively re-bill.
 	SetSchedule(ctx context.Context, tabID int64, s schedule.Schedule) error
 
+	// SetFeePolicy replaces a tab's late-fee policy (FEE-01, FEE-02, FEE-06). A
+	// zero policy clears it. It never touches posted fees, so changing the
+	// policy cannot retroactively re-assess or unwind a fee already charged.
+	SetFeePolicy(ctx context.Context, tabID int64, p fee.Policy) error
+
+	// SetInterestRate replaces a Payoff loan's annual interest rate, in basis
+	// points. Zero clears it. It never touches posted interest, so changing the
+	// rate affects future periods only.
+	SetInterestRate(ctx context.Context, tabID int64, annualBasisPoints int64) error
+
 	ListItems(ctx context.Context, tabID int64) ([]TabItem, error)
 	// ListItemHistory returns every item the tab has ever carried, superseded
 	// and retired ones included. Catching up a tab that has been left alone
@@ -412,6 +478,25 @@ type EntryStore interface {
 	PostPeriodEntry(ctx context.Context, p PostedPeriod, e NewEntry) (posted Entry, replayed bool, err error)
 	// ListPostedPeriods returns a tab's charged cycles, newest first.
 	ListPostedPeriods(ctx context.Context, tabID int64) ([]PostedPeriod, error)
+
+	// PostFeeEntry appends a late-fee entry and claims the overdue date it
+	// answers to, in the same transaction (FEE-03, FEE-04).
+	//
+	// The claim is what enforces "at most one fee per date". Like
+	// PostPeriodEntry, the entry and the claim share a transaction, so losing
+	// the race on the claim rolls back the fee. A date already assessed returns
+	// the entry that assessed it with replayed=true.
+	PostFeeEntry(ctx context.Context, f PostedFee, e NewEntry) (posted Entry, replayed bool, err error)
+	// ListPostedFees returns a tab's assessed fees, newest first.
+	ListPostedFees(ctx context.Context, tabID int64) ([]PostedFee, error)
+
+	// PostInterestEntry appends a periodic interest charge and claims the
+	// period it accrued for, in one transaction. The declining-balance
+	// counterpart of PostFeeEntry: same exactly-once guarantee, same replay
+	// semantics.
+	PostInterestEntry(ctx context.Context, in PostedInterest, e NewEntry) (posted Entry, replayed bool, err error)
+	// ListPostedInterest returns a tab's accrued interest periods, newest first.
+	ListPostedInterest(ctx context.Context, tabID int64) ([]PostedInterest, error)
 
 	GetEntry(ctx context.Context, seq int64) (Entry, error)
 	ListEntries(ctx context.Context, tabID int64) ([]Entry, error)

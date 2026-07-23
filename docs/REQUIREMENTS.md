@@ -7,7 +7,9 @@
 
 Requirements are grouped by area. Each carries a stable REQ-ID used for roadmap traceability.
 
-**Status:** Phases 1, 2, and 3 complete and verified (39/54, TAB-02 pulled forward). Phase 4 next.
+**Status:** Phases 1-4 complete and verified (49/54). Phase 5 (notifications) next, then Phase 6 (ship).
+
+Phase 4 also added declining-balance interest on Payoff loans and in-app upcoming-payment notices, beyond the listed requirements, plus version display and a logo.
 
 This is a reduction of the bit-tabby-derived scope from 79 requirements to 54. The pre-revision document is in git history. See [PROJECT.md](PROJECT.md) for the reasoning behind each cut.
 
@@ -61,21 +63,21 @@ The accounting spine. Everything else calls into this; nothing else writes entri
 
 ### Payoff Tabs (PAYOFF)
 
-- [ ] **PAYOFF-01**: A Payoff tab shows its remaining balance and progress against the original total
-- [ ] **PAYOFF-02**: A Payoff tab shows whether the Payee is on track, ahead, or behind its expected payment schedule
-- [ ] **PAYOFF-03**: A Payoff tab reaching a zero balance is marked settled and moves out of the active dashboard
+- [x] **PAYOFF-01**: A Payoff tab shows its remaining balance and progress against the original total
+- [x] **PAYOFF-02**: A Payoff tab shows whether the Payee is on track, ahead, or behind its expected payment schedule
+- [x] **PAYOFF-03**: A Payoff tab reaching a zero balance is marked settled and moves out of the active dashboard
 
 ### Late Fees (FEE)
 
 Driven entirely by the schedule's due dates. Reuses the lazy posting path.
 
-- [ ] **FEE-01**: Provider can configure a late fee per tab as either a fixed amount or a percentage
-- [ ] **FEE-02**: Provider can configure a grace period per tab, expressed in days after the due date
-- [ ] **FEE-03**: Once the grace period elapses on a period that remains unpaid, a late fee posts automatically as a ledger entry
-- [ ] **FEE-04**: Late fees post through the same lazy path as charges, with a unique constraint on (tab, period, fee) making double-assessment impossible
-- [ ] **FEE-05**: A percentage fee is computed on the overdue period charge rather than the running balance, so fees never compound on previously assessed fees; rounding to whole cents is deterministic and documented
-- [ ] **FEE-06**: Provider can configure a cap on total accrued late fees per tab
-- [ ] **FEE-07**: Provider can waive a late fee; the waiver is recorded as a reversing entry with a reason
+- [x] **FEE-01**: Provider can configure a late fee per tab as either a fixed amount or a percentage
+- [x] **FEE-02**: Provider can configure a grace period per tab, expressed in days after the due date
+- [x] **FEE-03**: Once the grace period elapses on a period that remains unpaid, a late fee posts automatically as a ledger entry
+- [x] **FEE-04**: Late fees post through the same lazy path as charges, with a unique constraint on (tab, period, fee) making double-assessment impossible
+- [x] **FEE-05**: A percentage fee is computed on the overdue period charge rather than the running balance, so fees never compound on previously assessed fees; rounding to whole cents is deterministic and documented
+- [x] **FEE-06**: Provider can configure a cap on total accrued late fees per tab
+- [x] **FEE-07**: Provider can waive a late fee; the waiver is recorded as a reversing entry with a reason
 
 ### Accounts & Access (AUTH)
 
@@ -186,16 +188,16 @@ Requirement-to-phase mapping. Every phase after Phase 1 adds to an application a
 | PAY-03 | Phase 2 | Complete |
 | PAY-04 | Phase 2 | Complete |
 | PAY-05 | Phase 2 | Complete |
-| PAYOFF-01 | Phase 4 | Pending |
-| PAYOFF-02 | Phase 4 | Pending |
-| PAYOFF-03 | Phase 4 | Pending |
-| FEE-01 | Phase 4 | Pending |
-| FEE-02 | Phase 4 | Pending |
-| FEE-03 | Phase 4 | Pending |
-| FEE-04 | Phase 4 | Pending |
-| FEE-05 | Phase 4 | Pending |
-| FEE-06 | Phase 4 | Pending |
-| FEE-07 | Phase 4 | Pending |
+| PAYOFF-01 | Phase 4 | Complete |
+| PAYOFF-02 | Phase 4 | Complete |
+| PAYOFF-03 | Phase 4 | Complete |
+| FEE-01 | Phase 4 | Complete |
+| FEE-02 | Phase 4 | Complete |
+| FEE-03 | Phase 4 | Complete |
+| FEE-04 | Phase 4 | Complete |
+| FEE-05 | Phase 4 | Complete |
+| FEE-06 | Phase 4 | Complete |
+| FEE-07 | Phase 4 | Complete |
 | AUTH-01 | Phase 1 | Complete |
 | AUTH-02 | Phase 1 | Complete |
 | AUTH-03 | Phase 1 | Complete |

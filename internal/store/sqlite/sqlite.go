@@ -188,6 +188,8 @@ func (d *DB) applyTriggerPolicy(ctx context.Context) error {
 		"entries_no_update", "entries_no_delete",
 		"entry_items_no_update", "entry_items_no_delete",
 		"posted_periods_no_update", "posted_periods_no_delete",
+		"posted_fees_no_update", "posted_fees_no_delete",
+		"posted_interest_no_update", "posted_interest_no_delete",
 	}
 	if d.triggers {
 		return nil // migrations create them; nothing to restore

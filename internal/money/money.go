@@ -211,6 +211,60 @@ func Sum(values []Cents) (Cents, bool) {
 	return total, true
 }
 
+// Percent applies a rate given in basis points to an amount, rounding the
+// result to whole cents.
+//
+// Basis points keep the rate an integer -- 100 bp is 1%, 250 bp is 2.5% -- so a
+// percentage fee never routes through a float any more than a dollar amount
+// does (LEDGER-04). The rate is applied to the amount passed in, which for a
+// late fee is the overdue period charge and never a balance already containing
+// fees, so fees cannot compound (FEE-05).
+//
+// Rounding is half up on a non-negative base: exactly half a cent rounds to the
+// next cent. This is stated rather than left to chance because a late fee that
+// rounds differently on two machines is a late fee two people will argue about.
+// The boolean reports overflow rather than letting a wrapped product through.
+func Percent(base Cents, basisPoints int64) (Cents, bool) {
+	if base < 0 || basisPoints < 0 {
+		return 0, false
+	}
+	// base * basisPoints must not overflow before the divide. int64 tops out
+	// near 9.2e18; guard the multiplication explicitly.
+	if basisPoints != 0 && int64(base) > (1<<62)/basisPoints {
+		return 0, false
+	}
+	product := int64(base) * basisPoints
+	// Round half up: add half the divisor before the integer division.
+	rounded := (product + 5000) / 10000
+	return Cents(rounded), true
+}
+
+// InterestOn applies an annual rate, given in basis points, to a balance for
+// one period of a schedule that repeats periodsPerYear times a year.
+//
+// It is Percent's sibling for a periodic rate: the annual rate is divided by
+// the period count and applied to the balance, all in integer cents with the
+// same half-up rounding. A 6% (600 bp) annual rate on a $5,000 balance, monthly
+// (12 periods), is 600/12 = 0.5% of $5,000 = $25.00.
+//
+// Rounding once, on the final product, is deliberate: dividing the rate first
+// and rounding twice would drift. The boolean reports overflow.
+func InterestOn(balance Cents, annualBasisPoints int64, periodsPerYear int) (Cents, bool) {
+	if balance < 0 || annualBasisPoints < 0 || periodsPerYear <= 0 {
+		return 0, false
+	}
+	if annualBasisPoints == 0 {
+		return 0, true
+	}
+	if int64(balance) > (1<<62)/annualBasisPoints {
+		return 0, false
+	}
+	denom := int64(10000) * int64(periodsPerYear)
+	product := int64(balance) * annualBasisPoints
+	// Round half up.
+	return Cents((product + denom/2) / denom), true
+}
+
 // Neg returns the additive inverse, used when writing reversing entries.
 func (c Cents) Neg() Cents { return -c }
 

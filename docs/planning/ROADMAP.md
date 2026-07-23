@@ -83,7 +83,7 @@ cannot move money on a tab they do not belong to, and the access is logged.
 
 ---
 
-## Phase 4 — Payoff tabs and late fees  -- NEXT
+## Phase 4 — Payoff tabs and late fees  -- COMPLETE
 
 **Goal:** loans that track against a schedule, and overdue periods that cost something.
 
@@ -100,9 +100,51 @@ cannot move money on a tab they do not belong to, and the access is logged.
 
 **Risk:** fee assessment reuses the Phase 3 lazy path. If it grows its own posting mechanism instead, that is a signal to stop and reconcile the two.
 
+**How it landed.** Payoff follows the "Model A" decision: the principal is charged
+once, payments draw it down, and the schedule describes expected *payments* (hard
+dates), not charges -- so a Payoff tab posts no period charges (the Phase 3
+behaviour was corrected for it). Late fees assess per period on a shortfall
+against the expected installment, judged in each period's own window so a paid
+period is never dragged down by an earlier miss; they never compound and a cap
+bounds them; a waiver is a reversal carrying a reason. All of it accrues lazily
+through the same claim-table mechanism as scheduled charges (posted_fees,
+posted_interest), one claim per period, exactly-once under concurrent reads.
+
+Two things arrived beyond the requirement list, both by request. **Declining-
+balance interest** on Payoff loans, accrued per period on the outstanding balance
+(it compounds on unpaid interest -- which a loan is meant to do and a fee never
+is), posted as a charge sub-typed `interest` via a new column, because the
+entries.kind CHECK cannot gain a value without a table rebuild the migration
+harness cannot do safely. And an **in-app upcoming-payment notice** shown within
+two weeks of a due date -- the pure-computation half of the reminder; the pushed
+email/ntfy half is Phase 5. Version display (a `version` package, shown in the
+footer and healthz) and a header logo also landed here.
+
 ---
 
-## Phase 5 — Ship
+## Phase 5 — Notifications  -- NEXT
+
+**Goal:** payment requests and event notices reach people who do not have the app open.
+
+Not in the original requirement list; added when the user asked for reminders.
+Email and ntfy delivery of: a payment request two weeks before a due date, a
+reminder one week and one day before (all configurable), and notices on a
+payment made and a payment missed, to all parties on a tab.
+
+**Exit criteria (draft)**
+- Delivery is driven by an external cron hitting an authenticated `/internal/tick`
+  endpoint -- no timer inside the binary, keeping the Out-of-Scope rule (a
+  background scheduler is what stalled the predecessor)
+- Sends are idempotent via a sent-notifications claim table: a re-run of the same
+  hour sends nothing twice, a missed hour sends late rather than never
+- Per-user, per-event delivery preferences; secrets (SMTP, ntfy) via env or file
+
+**Risk:** this is the first outbound side effect in the app. It must stay off the
+balance path entirely -- a failed or double send can never affect a ledger.
+
+---
+
+## Phase 6 — Ship
 
 **Goal:** someone other than the author can deploy it.
 

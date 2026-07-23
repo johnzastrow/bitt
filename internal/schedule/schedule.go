@@ -79,6 +79,22 @@ func (k Kind) Valid() bool {
 // Kinds lists the selectable recurrences in display order.
 func Kinds() []Kind { return []Kind{Weekly, Biweekly, MonthlyDay, MonthlyLast} }
 
+// PeriodsPerYear is how many times the recurrence repeats in a year, used to
+// turn an annual interest rate into a per-period one. The monthly kinds are 12
+// and the weekly kinds are counted by weeks; none of this needs to be exact to
+// the day, since interest is applied per posted period, not per elapsed second.
+func (k Kind) PeriodsPerYear() int {
+	switch k {
+	case Weekly:
+		return 52
+	case Biweekly:
+		return 26
+	case MonthlyDay, MonthlyLast:
+		return 12
+	}
+	return 0
+}
+
 // ---------------------------------------------------------------------------
 // Billing -- when the charge lands
 // ---------------------------------------------------------------------------

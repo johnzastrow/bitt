@@ -607,3 +607,42 @@ tr.reversal td { color: var(--fg-muted); }
 
 /* Interest reads in the owed colour, like a charge, but is labeled distinctly. */
 .pill-interest { color: var(--owed); }
+
+/* ---------- Setup / Operational collapsible groups ---------- */
+
+/* A group gathers related sections under one collapsible header, so the setup
+   forms can stay folded away during day-to-day use. */
+.group { margin-bottom: var(--s4); }
+.group > .grouphead {
+  cursor: pointer;
+  list-style: none;
+  font-weight: 650;
+  font-size: var(--t-lg);
+  letter-spacing: -0.01em;
+  padding: var(--s3) var(--s4);
+  background: var(--chalk-sunk);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.group > .grouphead::-webkit-details-marker { display: none; }
+.group > .grouphead::before {
+  content: "\25B8"; /* right-pointing triangle */
+  color: var(--fg-muted);
+  transition: transform 120ms ease;
+}
+.group[open] > .grouphead::before { transform: rotate(90deg); }
+.group[open] > .grouphead { border-radius: var(--radius) var(--radius) 0 0; }
+
+/* The body indents slightly and drops the top border so it reads as one unit
+   with the header. */
+.groupbody {
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 var(--radius) var(--radius);
+  padding: var(--s4) var(--s4) var(--s1);
+  background: var(--bg);
+}
+.groupbody .card:last-child { margin-bottom: var(--s3); }

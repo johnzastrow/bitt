@@ -1,0 +1,60 @@
+package views
+
+import "github.com/johnzastrow/bitt/internal/store"
+
+// Page carries the chrome-level data every rendered page needs.
+type Page struct {
+	Title     string
+	User      *store.User
+	CSRFToken string
+	Flash     string
+	Error     string
+}
+
+templ Layout(p Page) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+			<meta name="color-scheme" content="light dark"/>
+			<title>{ pageTitle(p.Title) }</title>
+			<link rel="stylesheet" href="/static/app.css"/>
+			// htmx arrives in Phase 2 with one-tap settle. Phase 1 is plain form
+			// posts, so nothing is loaded that nothing calls.
+		</head>
+		<body>
+			if p.User != nil {
+				<header class="topbar">
+					<a class="brand" href="/">BitTabby</a>
+					<nav>
+						<span class="who">{ p.User.DisplayName }</span>
+						<form method="post" action="/logout" class="inline">
+							<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+							<button class="link" type="submit">Log out</button>
+						</form>
+					</nav>
+				</header>
+			}
+			<main class="wrap">
+				if p.Error != "" {
+					<div class="banner banner-error" role="alert">{ p.Error }</div>
+				}
+				if p.Flash != "" {
+					<div class="banner banner-ok" role="status">{ p.Flash }</div>
+				}
+				{ children... }
+			</main>
+			<footer class="foot">
+				<span>Tabs, not invoices.</span>
+			</footer>
+		</body>
+	</html>
+}
+
+func pageTitle(t string) string {
+	if t == "" {
+		return "BitTabby"
+	}
+	return t + " -- BitTabby"
+}

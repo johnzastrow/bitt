@@ -2,7 +2,7 @@
 
 **Governing rule:** a usable application exists after Phase 1. Every later phase adds to something a person can already open and use.
 
-Requirement text lives in [docs/REQUIREMENTS.md](../docs/REQUIREMENTS.md); reasoning lives in [docs/PROJECT.md](../docs/PROJECT.md). This file holds only what those two do not: each phase's goal, its exit criteria, and the risk it carries.
+Requirement text lives in [REQUIREMENTS.md](../REQUIREMENTS.md); reasoning lives in [PROJECT.md](../PROJECT.md). This file holds only what those two do not: each phase's goal, its exit criteria, and the risk it carries.
 
 ---
 
@@ -101,4 +101,4 @@ Requirement text lives in [docs/REQUIREMENTS.md](../docs/REQUIREMENTS.md); reaso
 
 ## Deliberately not in v1
 
-Offline writes and sync, invoice entities, notifications, PostgreSQL, OIDC, theme switching, reporting and exports, search, messaging, receipt attachments, external integrations. See docs/PROJECT.md for the reasoning on each.
+Offline writes and sync, invoice entities, notifications, PostgreSQL, OIDC, theme switching, reporting and exports, search, messaging, receipt attachments, external integrations. See ../PROJECT.md for the reasoning on each.

@@ -14,8 +14,8 @@ Pre-implementation. Scope is defined; no application code yet.
 
 - [docs/PROJECT.md](docs/PROJECT.md) — what this is, what it deliberately is not, and why
 - [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — 54 v1 requirements with stable IDs
-- [.planning/ROADMAP.md](.planning/ROADMAP.md) — five phases with exit criteria
-- [.planning/STATE.md](.planning/STATE.md) — where things currently stand
+- [docs/planning/ROADMAP.md](docs/planning/ROADMAP.md) — five phases with exit criteria
+- [docs/planning/STATE.md](docs/planning/STATE.md) — where things currently stand
 
 ## Core value
 

@@ -1,0 +1,238 @@
+package views
+
+import (
+	"fmt"
+	"strconv"
+
+	"github.com/johnzastrow/bitt/internal/money"
+	"github.com/johnzastrow/bitt/internal/store"
+)
+
+// TabCard is a dashboard row: a tab plus its derived balance.
+type TabCard struct {
+	Tab     store.Tab
+	Balance money.Cents
+}
+
+// Dashboard lists the tabs the signed-in user participates in (UI-01 lands in
+// Phase 2; this is the Phase 1 form showing balance and status at a glance).
+templ Dashboard(p Page, cards []TabCard) {
+	@Layout(p) {
+		<div class="rowbetween">
+			<h1>Your tabs</h1>
+			<a class="primary button" href="/tabs/new">New tab</a>
+		</div>
+		if len(cards) == 0 {
+			<section class="card empty">
+				<p>No tabs yet.</p>
+				<p class="muted">A tab tracks what one person owes another for something shared -- a phone plan, insurance, a loan.</p>
+				<a class="primary button" href="/tabs/new">Create your first tab</a>
+			</section>
+		} else {
+			<ul class="cards">
+				for _, c := range cards {
+					<li>
+						<a class="card taba" href={ tabHref(c.Tab.ID) }>
+							<div class="rowbetween">
+								<h2>{ c.Tab.Name }</h2>
+								<span class={ "amount", balanceClass(c.Balance) }>{ c.Balance.Display() }</span>
+							</div>
+							<p class="muted">{ balanceLabel(c.Balance) }</p>
+						</a>
+					</li>
+				}
+			</ul>
+		}
+	}
+}
+
+// NewTab is the tab creation form (TAB-01, TAB-04).
+templ NewTab(p Page) {
+	@Layout(p) {
+		<section class="card narrow">
+			<h1>New tab</h1>
+			<form method="post" action="/tabs" class="stack">
+				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+				<label>
+					Name
+					<input type="text" name="name" required autofocus placeholder="Family phone plan"/>
+				</label>
+				<label>
+					What this covers
+					<input type="text" name="description" placeholder="Optional"/>
+				</label>
+				<fieldset class="stack">
+					<legend>Line items</legend>
+					<p class="muted small">
+						Items break down what a charge covers so both people can see which line moved when a cost changes.
+						They do not carry balances of their own.
+					</p>
+					for i := 0; i < 3; i++ {
+						<div class="itemrow">
+							<input type="text" name="item_name" placeholder={ itemPlaceholder(i) }/>
+							<input type="text" name="item_amount" inputmode="decimal" placeholder="0.00"/>
+						</div>
+					}
+				</fieldset>
+				<button class="primary" type="submit">Create tab</button>
+			</form>
+		</section>
+	}
+}
+
+// TabDetail shows a tab, its items, its derived balance, and its entry history.
+templ TabDetail(p Page, tab store.Tab, items []store.TabItem, itemTotal money.Cents, balance money.Cents, entries []store.Entry, actors map[int64]string) {
+	@Layout(p) {
+		<section class="card">
+			<div class="rowbetween">
+				<div>
+					<h1>{ tab.Name }</h1>
+					if tab.Description != "" {
+						<p class="muted">{ tab.Description }</p>
+					}
+				</div>
+				<div class="balanceblock">
+					<span class={ "amount", "big", balanceClass(balance) }>{ balance.Display() }</span>
+					<span class="muted small">{ balanceLabel(balance) }</span>
+				</div>
+			</div>
+		</section>
+		if len(items) > 0 {
+			<section class="card">
+				<h2>What this covers</h2>
+				<table class="items">
+					<tbody>
+						for _, it := range items {
+							<tr>
+								<td>{ it.Name }</td>
+								<td class="right">{ it.Amount.Display() }</td>
+							</tr>
+						}
+					</tbody>
+					<tfoot>
+						<tr>
+							<td>Per period</td>
+							<td class="right">{ itemTotal.Display() }</td>
+						</tr>
+					</tfoot>
+				</table>
+			</section>
+		}
+		<section class="card">
+			<h2>Post a charge</h2>
+			<form method="post" action={ chargeAction(tab.ID) } class="inlineform">
+				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+				<input type="text" name="amount" inputmode="decimal" required placeholder="0.00" value={ defaultCharge(itemTotal) } aria-label="Amount"/>
+				<input type="text" name="memo" placeholder="What for?" aria-label="Memo"/>
+				<button class="primary" type="submit">Post charge</button>
+			</form>
+			<p class="muted small">
+				Recurring tabs charge themselves on a schedule from Phase 3. Until then a charge is posted by hand.
+			</p>
+		</section>
+		<section class="card">
+			<h2>History</h2>
+			if len(entries) == 0 {
+				<p class="muted">Nothing posted yet.</p>
+			} else {
+				<table class="entries">
+					<thead>
+						<tr>
+							<th>When</th>
+							<th>What</th>
+							<th>Who</th>
+							<th class="right">Amount</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, e := range entries {
+							<tr>
+								<td class="nowrap">{ e.EffectiveAt.Format("2006-01-02") }</td>
+								<td>
+									<span class={ "pill", "pill-" + string(e.Kind) }>{ string(e.Kind) }</span>
+									if e.Memo != "" {
+										<span class="memo">{ e.Memo }</span>
+									}
+								</td>
+								<td class="muted">{ actorName(actors, e.ActorUserID) }</td>
+								<td class={ "right", "amount", amountClass(e.Amount) }>{ e.Amount.Display() }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+				<p class="muted small">
+					Entries are never edited or deleted. A correction is posted as a reversing entry that points at the original.
+				</p>
+			}
+		</section>
+	}
+}
+
+// ---------------------------------------------------------------------------
+// View helpers
+// ---------------------------------------------------------------------------
+
+func tabHref(id int64) templ.SafeURL {
+	return templ.SafeURL("/tabs/" + strconv.FormatInt(id, 10))
+}
+
+func chargeAction(id int64) templ.SafeURL {
+	return templ.SafeURL("/tabs/" + strconv.FormatInt(id, 10) + "/charges")
+}
+
+// balanceClass colors by direction. Negative means the Payee owes (TAB-06).
+func balanceClass(c money.Cents) string {
+	switch {
+	case c < 0:
+		return "owed"
+	case c > 0:
+		return "credit"
+	default:
+		return "settled"
+	}
+}
+
+func amountClass(c money.Cents) string {
+	if c < 0 {
+		return "owed"
+	}
+	return "credit"
+}
+
+func balanceLabel(c money.Cents) string {
+	switch {
+	case c < 0:
+		return fmt.Sprintf("%s owed", c.Neg().Display())
+	case c > 0:
+		return fmt.Sprintf("%s in credit", c.Display())
+	default:
+		return "Settled up"
+	}
+}
+
+func itemPlaceholder(i int) string {
+	switch i {
+	case 0:
+		return "Line 1 (e.g. Phone line)"
+	case 1:
+		return "Line 2"
+	default:
+		return "Line 3"
+	}
+}
+
+// defaultCharge prefills the charge box with the item total, so posting the
+// normal amount takes no typing (UI-03's prefill principle, applied early).
+func defaultCharge(total money.Cents) string {
+	if total == 0 {
+		return ""
+	}
+	return total.String()
+}
+
+func actorName(actors map[int64]string, id int64) string {
+	if n, ok := actors[id]; ok {
+		return n
+	}
+	return "--"
+}

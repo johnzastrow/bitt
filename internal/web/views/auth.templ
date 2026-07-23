@@ -1,0 +1,58 @@
+package views
+
+// Setup is the one-time first-run screen (AUTH-03). It is reachable only while
+// no admin exists; once used, the route returns a redirect forever after.
+templ Setup(p Page, timezone string) {
+	@Layout(p) {
+		<section class="card narrow">
+			<h1>Welcome to BitTabby</h1>
+			<p class="lede">
+				This deployment has no accounts yet. Create the administrator account to get started.
+				This screen appears once and then locks permanently.
+			</p>
+			<form method="post" action="/setup" class="stack">
+				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+				<label>
+					Your name
+					<input type="text" name="display_name" required autocomplete="name" autofocus/>
+				</label>
+				<label>
+					Email
+					<input type="email" name="email" required autocomplete="username"/>
+				</label>
+				<label>
+					Password
+					<input type="password" name="password" required minlength="12" autocomplete="new-password"/>
+					<small>At least 12 characters. Length matters more than symbols.</small>
+				</label>
+				<label>
+					Timezone
+					<input type="text" name="timezone" value={ timezone } required/>
+					<small>Used for every period boundary on this instance.</small>
+				</label>
+				<button class="primary" type="submit">Create administrator</button>
+			</form>
+		</section>
+	}
+}
+
+// Login is the sign-in screen (AUTH-02).
+templ Login(p Page) {
+	@Layout(p) {
+		<section class="card narrow">
+			<h1>Sign in</h1>
+			<form method="post" action="/login" class="stack">
+				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+				<label>
+					Email
+					<input type="email" name="email" required autocomplete="username" autofocus/>
+				</label>
+				<label>
+					Password
+					<input type="password" name="password" required autocomplete="current-password"/>
+				</label>
+				<button class="primary" type="submit">Sign in</button>
+			</form>
+		</section>
+	}
+}

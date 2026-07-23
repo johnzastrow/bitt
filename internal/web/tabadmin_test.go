@@ -58,11 +58,13 @@ func TestTabKindIsChosenAtCreationAndShown(t *testing.T) {
 		t.Errorf("the Services description is not shown: %s", truncate(body))
 	}
 
-	// Payoff is selectable, and the tab says so at the top.
+	// Payoff is selectable, and the tab says so at the top. A Payoff loan needs
+	// a loan amount, which posts as the opening principal.
 	_, body = h.post("/tabs", url.Values{
-		"csrf_token": {h.csrfToken("/tabs/new")},
-		"name":       {"Truck loan"},
-		"kind":       {string(store.TabPayoff)},
+		"csrf_token":  {h.csrfToken("/tabs/new")},
+		"name":        {"Truck loan"},
+		"kind":        {string(store.TabPayoff)},
+		"loan_amount": {"5000.00"},
 	})
 	if !strings.Contains(body, "Payoff") {
 		t.Errorf("a Payoff tab does not read as one: %s", truncate(body))

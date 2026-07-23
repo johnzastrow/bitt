@@ -137,16 +137,20 @@ func (s *Server) postTab(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A Payoff tab may state its loan amount at creation. It is posted as the
-	// opening charge -- the principal the payments draw down (TAB-02). Optional:
-	// a Provider can also post it by hand later.
+	// A Payoff loan states its amount at creation, posted as the opening charge
+	// -- the principal the payments draw down (TAB-02). It is required, because a
+	// loan with no principal cannot track progress and reads as already paid off
+	// the moment any payment lands, which is a confusing failure to leave open.
 	var principal money.Cents
 	if kind == store.TabPayoff {
-		if raw := strings.TrimSpace(r.PostFormValue("loan_amount")); raw != "" {
-			if principal, err = money.Parse(raw); err != nil || principal <= 0 {
-				redirectWith(w, r, "/tabs/new", "err", "The loan amount must be a dollar figure greater than zero.")
-				return
-			}
+		raw := strings.TrimSpace(r.PostFormValue("loan_amount"))
+		if raw == "" {
+			redirectWith(w, r, "/tabs/new", "err", "A Payoff loan needs a loan amount -- the balance the payments draw down.")
+			return
+		}
+		if principal, err = money.Parse(raw); err != nil || principal <= 0 {
+			redirectWith(w, r, "/tabs/new", "err", "The loan amount must be a dollar figure greater than zero.")
+			return
 		}
 	}
 

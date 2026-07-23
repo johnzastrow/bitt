@@ -521,3 +521,50 @@ func TestHealthz(t *testing.T) {
 func storeUser(email, name, hash string) store.User {
 	return store.User{Email: email, DisplayName: name, PasswordHash: hash}
 }
+
+// clientFor is a second, independent browser session against the same server,
+// so tests can hold two people signed in at once.
+type clientFor struct {
+	t      *testing.T
+	server *httptest.Server
+	client *http.Client
+}
+
+func newClientFor(t *testing.T, h *harness) *clientFor {
+	t.Helper()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookie jar: %v", err)
+	}
+	return &clientFor{t: t, server: h.server, client: &http.Client{Jar: jar}}
+}
+
+func (c *clientFor) get(path string) (*http.Response, string) {
+	c.t.Helper()
+	resp, err := c.client.Get(c.server.URL + path)
+	if err != nil {
+		c.t.Fatalf("GET %s: %v", path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	return resp, string(body)
+}
+
+func (c *clientFor) login(email, password string) {
+	c.t.Helper()
+	_, body := c.get("/login")
+	m := regexp.MustCompile(`name="csrf_token" value="([^"]+)"`).FindStringSubmatch(body)
+	if len(m) < 2 {
+		// Already signed in, or the login page did not render a token.
+		return
+	}
+	resp, err := c.client.PostForm(c.server.URL+"/login", url.Values{
+		"csrf_token": {m[1]},
+		"email":      {email},
+		"password":   {password},
+	})
+	if err != nil {
+		c.t.Fatalf("login %s: %v", email, err)
+	}
+	_ = resp.Body.Close()
+}

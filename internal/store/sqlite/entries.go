@@ -11,7 +11,7 @@ import (
 	"github.com/johnzastrow/bitt/internal/store"
 )
 
-const entryColumns = `seq, tab_id, kind, amount_cents, memo, effective_at, created_at, actor_user_id, idempotency_key, reverses_seq`
+const entryColumns = `seq, tab_id, kind, amount_cents, memo, effective_at, created_at, actor_user_id, idempotency_key, reverses_seq, method`
 
 func scanEntry(row interface{ Scan(...any) error }) (store.Entry, error) {
 	var (
@@ -21,12 +21,14 @@ func scanEntry(row interface{ Scan(...any) error }) (store.Entry, error) {
 		effective string
 		created   string
 		reverses  sql.NullInt64
+		method    string
 	)
 	if err := row.Scan(&e.Seq, &e.TabID, &kind, &amount, &e.Memo,
-		&effective, &created, &e.ActorUserID, &e.IdempotencyKey, &reverses); err != nil {
+		&effective, &created, &e.ActorUserID, &e.IdempotencyKey, &reverses, &method); err != nil {
 		return store.Entry{}, translate(err)
 	}
 	e.Kind = store.EntryKind(kind)
+	e.Method = store.PaymentMethod(method)
 	e.Amount = money.Cents(amount)
 
 	var err error
@@ -59,6 +61,9 @@ func (d *DB) PostEntry(ctx context.Context, e store.NewEntry) (store.Entry, bool
 	if !e.Kind.Valid() {
 		return store.Entry{}, false, fmt.Errorf("sqlite: invalid entry kind %q", e.Kind)
 	}
+	if !e.Method.Valid() {
+		return store.Entry{}, false, fmt.Errorf("sqlite: invalid payment method %q", e.Method)
+	}
 	if e.IdempotencyKey == "" {
 		return store.Entry{}, false, errors.New("sqlite: entry requires an idempotency key")
 	}
@@ -75,10 +80,11 @@ func (d *DB) PostEntry(ctx context.Context, e store.NewEntry) (store.Entry, bool
 
 	res, err := tx.ExecContext(ctx,
 		`INSERT INTO entries
-             (tab_id, kind, amount_cents, memo, effective_at, created_at, actor_user_id, idempotency_key, reverses_seq)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (tab_id, kind, amount_cents, memo, effective_at, created_at, actor_user_id, idempotency_key, reverses_seq, method)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.TabID, string(e.Kind), int64(e.Amount), e.Memo,
-		toText(e.EffectiveAt), toText(now), e.ActorUserID, e.IdempotencyKey, nullInt64(e.ReversesSeq))
+		toText(e.EffectiveAt), toText(now), e.ActorUserID, e.IdempotencyKey,
+		nullInt64(e.ReversesSeq), string(e.Method))
 	if err != nil {
 		translated := translate(err)
 		if errors.Is(translated, store.ErrConflict) {
@@ -125,6 +131,7 @@ func (d *DB) PostEntry(ctx context.Context, e store.NewEntry) (store.Entry, bool
 		ActorUserID:    e.ActorUserID,
 		IdempotencyKey: e.IdempotencyKey,
 		ReversesSeq:    e.ReversesSeq,
+		Method:         e.Method,
 	}, false, nil
 }
 

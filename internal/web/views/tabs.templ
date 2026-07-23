@@ -8,14 +8,25 @@ import (
 	"github.com/johnzastrow/bitt/internal/store"
 )
 
-// TabCard is a dashboard row: a tab plus its derived balance.
+// TabCard is a dashboard row: a tab, its derived balance, and what the viewer
+// is allowed to do with it.
 type TabCard struct {
 	Tab     store.Tab
 	Balance money.Cents
+	// Role is the viewer's role on this tab.
+	Role store.Role
+	// SettleAmount is what a one-tap settle would pay: the outstanding balance,
+	// or zero when nothing is owed (UI-03 prefill).
+	SettleAmount money.Cents
+	// IdempotencyKey is minted per render, so a double-tapped settle posts once
+	// (LEDGER-07).
+	IdempotencyKey string
 }
 
-// Dashboard lists the tabs the signed-in user participates in (UI-01 lands in
-// Phase 2; this is the Phase 1 form showing balance and status at a glance).
+// CanSettle reports whether the settle control should appear.
+func (c TabCard) CanSettle() bool { return c.SettleAmount > 0 }
+
+// Dashboard lists the tabs the signed-in user participates in (UI-01).
 templ Dashboard(p Page, cards []TabCard) {
 	@Layout(p) {
 		<div class="rowbetween">
@@ -31,19 +42,81 @@ templ Dashboard(p Page, cards []TabCard) {
 		} else {
 			<ul class="cards">
 				for _, c := range cards {
-					<li>
-						<a class="card taba" href={ tabHref(c.Tab.ID) }>
-							<div class="rowbetween">
-								<h2>{ c.Tab.Name }</h2>
-								<span class={ "amount", balanceClass(c.Balance) }>{ c.Balance.Display() }</span>
-							</div>
-							<p class="muted">{ balanceLabel(c.Balance) }</p>
-						</a>
+					<li id={ cardID(c.Tab.ID) }>
+						@TabCardView(p, c)
 					</li>
 				}
 			</ul>
 		}
 	}
+}
+
+// TabCardView renders one dashboard card. It is also returned on its own as the
+// htmx response to a settle, so the card updates in place (UI-03).
+templ TabCardView(p Page, c TabCard) {
+	<div class={ "card", "tabcard", balanceClass(c.Balance) }>
+		<a class="cardhead" href={ tabHref(c.Tab.ID) }>
+			<div class="rowbetween">
+				<h2>{ c.Tab.Name }</h2>
+				<span class={ "amount", balanceClass(c.Balance) }>{ c.Balance.Display() }</span>
+			</div>
+			<p class="muted small">{ balanceLabel(c.Balance) } &middot; you are the { string(c.Role) }</p>
+		</a>
+		if c.CanSettle() {
+			<div class="cardfoot">
+				<button
+					class="primary settle"
+					hx-get={ settleConfirmPath(c.Tab.ID) }
+					hx-target={ "#" + cardID(c.Tab.ID) }
+					hx-swap="innerHTML"
+				>
+					{ fmt.Sprintf("Settle %s", c.SettleAmount.Display()) }
+				</button>
+			</div>
+		}
+	</div>
+}
+
+// SettleConfirm is the second half of "one tap plus one confirmation" (UI-03).
+// Every field is prefilled; confirming needs no typing.
+templ SettleConfirm(p Page, c TabCard) {
+	<div class={ "card", "tabcard", "confirming" }>
+		<div class="rowbetween">
+			<h2>{ c.Tab.Name }</h2>
+			<span class={ "amount", balanceClass(c.Balance) }>{ c.Balance.Display() }</span>
+		</div>
+		<form
+			class="confirmform"
+			hx-post={ settlePath(c.Tab.ID) }
+			hx-target={ "#" + cardID(c.Tab.ID) }
+			hx-swap="innerHTML"
+		>
+			<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+			<input type="hidden" name="idempotency_key" value={ c.IdempotencyKey }/>
+			<input type="hidden" name="amount" value={ c.SettleAmount.String() }/>
+			<p class="confirmq">
+				Record a payment of <strong>{ c.SettleAmount.Display() }</strong>?
+			</p>
+			<label class="methodrow">
+				How was it paid?
+				<select name="method">
+					for _, m := range store.PaymentMethods() {
+						<option value={ string(m) }>{ m.Label() }</option>
+					}
+				</select>
+			</label>
+			<div class="confirmbtns">
+				<button
+					type="button"
+					class="ghost"
+					hx-get={ cardPath(c.Tab.ID) }
+					hx-target={ "#" + cardID(c.Tab.ID) }
+					hx-swap="innerHTML"
+				>Cancel</button>
+				<button class="primary" type="submit">Confirm payment</button>
+			</div>
+		</form>
+	</div>
 }
 
 // NewTab is the tab creation form (TAB-01, TAB-04).
@@ -80,29 +153,102 @@ templ NewTab(p Page) {
 	}
 }
 
-// TabDetail shows a tab, its items, its derived balance, and its entry history.
-templ TabDetail(p Page, tab store.Tab, items []store.TabItem, itemTotal money.Cents, balance money.Cents, entries []store.Entry, actors map[int64]string) {
+// HistoryRow pairs an entry with what the viewer may do to it.
+type HistoryRow struct {
+	Entry   store.Entry
+	Actor   string
+	CanUndo bool
+}
+
+// TabDetailData is everything the tab page renders.
+type TabDetailData struct {
+	Tab            store.Tab
+	Items          []store.TabItem
+	ItemTotal      money.Cents
+	Balance        money.Cents
+	Rows           []HistoryRow
+	Participants   []store.Participant
+	Attachable     []store.User
+	Role           store.Role
+	IdempotencyKey string
+	SettleAmount   money.Cents
+}
+
+// IsProvider reports whether the viewer bills on this tab.
+func (d TabDetailData) IsProvider() bool { return d.Role == store.RoleProvider }
+
+// TabDetail shows a tab, its people, its derived balance, and its history.
+templ TabDetail(p Page, d TabDetailData) {
 	@Layout(p) {
-		<section class="card">
+		<section class={ "card", "tabhero", balanceClass(d.Balance) }>
 			<div class="rowbetween">
 				<div>
-					<h1>{ tab.Name }</h1>
-					if tab.Description != "" {
-						<p class="muted">{ tab.Description }</p>
+					<h1>{ d.Tab.Name }</h1>
+					if d.Tab.Description != "" {
+						<p class="muted">{ d.Tab.Description }</p>
 					}
 				</div>
 				<div class="balanceblock">
-					<span class={ "amount", "big", balanceClass(balance) }>{ balance.Display() }</span>
-					<span class="muted small">{ balanceLabel(balance) }</span>
+					<span class={ "amount", "big", balanceClass(d.Balance) }>{ d.Balance.Display() }</span>
+					<span class="muted small">{ balanceLabel(d.Balance) }</span>
 				</div>
 			</div>
 		</section>
-		if len(items) > 0 {
+		<section class="card">
+			<h2>Record a payment</h2>
+			if d.SettleAmount > 0 {
+				<p class="muted small">
+					if d.IsProvider() {
+						Recording on the payee's behalf. The entry is attributed to you.
+					} else {
+						Money moves outside BitTabby -- this records that it happened.
+					}
+				</p>
+			} else {
+				<p class="muted small">Nothing is owed right now. A payment recorded anyway becomes a credit against future charges.</p>
+			}
+			<form method="post" action={ paymentAction(d.Tab.ID) } class="inlineform">
+				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+				<input type="hidden" name="idempotency_key" value={ d.IdempotencyKey }/>
+				<input
+					type="text"
+					name="amount"
+					inputmode="decimal"
+					required
+					placeholder="0.00"
+					value={ prefill(d.SettleAmount) }
+					aria-label="Payment amount"
+				/>
+				<select name="method" aria-label="Payment method">
+					for _, m := range store.PaymentMethods() {
+						<option value={ string(m) }>{ m.Label() }</option>
+					}
+				</select>
+				<input type="text" name="memo" placeholder="Note (optional)" aria-label="Note"/>
+				<button class="primary" type="submit">Record payment</button>
+			</form>
+		</section>
+		if d.IsProvider() {
+			<section class="card">
+				<h2>Post a charge</h2>
+				<form method="post" action={ chargeAction(d.Tab.ID) } class="inlineform">
+					<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+					<input type="hidden" name="idempotency_key" value={ chargeKey(d.IdempotencyKey) }/>
+					<input type="text" name="amount" inputmode="decimal" required placeholder="0.00" value={ prefill(d.ItemTotal) } aria-label="Charge amount"/>
+					<input type="text" name="memo" placeholder="What for?" aria-label="Memo"/>
+					<button class="primary" type="submit">Post charge</button>
+				</form>
+				<p class="muted small">
+					Recurring tabs charge themselves on a schedule from Phase 3. Until then a charge is posted by hand.
+				</p>
+			</section>
+		}
+		if len(d.Items) > 0 {
 			<section class="card">
 				<h2>What this covers</h2>
 				<table class="items">
 					<tbody>
-						for _, it := range items {
+						for _, it := range d.Items {
 							<tr>
 								<td>{ it.Name }</td>
 								<td class="right">{ it.Amount.Display() }</td>
@@ -112,27 +258,46 @@ templ TabDetail(p Page, tab store.Tab, items []store.TabItem, itemTotal money.Ce
 					<tfoot>
 						<tr>
 							<td>Per period</td>
-							<td class="right">{ itemTotal.Display() }</td>
+							<td class="right">{ d.ItemTotal.Display() }</td>
 						</tr>
 					</tfoot>
 				</table>
 			</section>
 		}
 		<section class="card">
-			<h2>Post a charge</h2>
-			<form method="post" action={ chargeAction(tab.ID) } class="inlineform">
-				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
-				<input type="text" name="amount" inputmode="decimal" required placeholder="0.00" value={ defaultCharge(itemTotal) } aria-label="Amount"/>
-				<input type="text" name="memo" placeholder="What for?" aria-label="Memo"/>
-				<button class="primary" type="submit">Post charge</button>
-			</form>
-			<p class="muted small">
-				Recurring tabs charge themselves on a schedule from Phase 3. Until then a charge is posted by hand.
-			</p>
+			<h2>People</h2>
+			<ul class="people">
+				for _, who := range d.Participants {
+					<li>
+						<span>{ who.DisplayName }</span>
+						<span class={ "pill", "pill-" + string(who.Role) }>{ string(who.Role) }</span>
+					</li>
+				}
+			</ul>
+			if d.IsProvider() {
+				if len(d.Attachable) > 0 {
+					<form method="post" action={ participantAction(d.Tab.ID) } class="inlineform">
+						<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+						<select name="user_id" aria-label="Person to attach">
+							for _, u := range d.Attachable {
+								<option value={ strconv.FormatInt(u.ID, 10) }>{ u.DisplayName }</option>
+							}
+						</select>
+						<button type="submit">Attach as payee</button>
+					</form>
+				} else {
+					<p class="muted small">
+						Everyone with an account is already on this tab.
+						if p.User != nil && p.User.IsAdmin {
+							<a href="/admin/users">Add another person</a>.
+						}
+					</p>
+				}
+			}
 		</section>
 		<section class="card">
 			<h2>History</h2>
-			if len(entries) == 0 {
+			if len(d.Rows) == 0 {
 				<p class="muted">Nothing posted yet.</p>
 			} else {
 				<table class="entries">
@@ -142,26 +307,38 @@ templ TabDetail(p Page, tab store.Tab, items []store.TabItem, itemTotal money.Ce
 							<th>What</th>
 							<th>Who</th>
 							<th class="right">Amount</th>
+							<th></th>
 						</tr>
 					</thead>
 					<tbody>
-						for _, e := range entries {
-							<tr>
-								<td class="nowrap">{ e.EffectiveAt.Format("2006-01-02") }</td>
+						for _, row := range d.Rows {
+							<tr class={ rowClass(row) }>
+								<td class="nowrap">{ row.Entry.EffectiveAt.Format("Jan 2") }</td>
 								<td>
-									<span class={ "pill", "pill-" + string(e.Kind) }>{ string(e.Kind) }</span>
-									if e.Memo != "" {
-										<span class="memo">{ e.Memo }</span>
+									<span class={ "pill", "pill-" + string(row.Entry.Kind) }>{ string(row.Entry.Kind) }</span>
+									if row.Entry.Method.Label() != "" {
+										<span class="muted small">{ row.Entry.Method.Label() }</span>
+									}
+									if row.Entry.Memo != "" {
+										<span class="memo">{ row.Entry.Memo }</span>
 									}
 								</td>
-								<td class="muted">{ actorName(actors, e.ActorUserID) }</td>
-								<td class={ "right", "amount", amountClass(e.Amount) }>{ e.Amount.Display() }</td>
+								<td class="muted">{ row.Actor }</td>
+								<td class={ "right", "amount", amountClass(row.Entry.Amount) }>{ row.Entry.Amount.Display() }</td>
+								<td class="right">
+									if row.CanUndo {
+										<form method="post" action={ undoAction(d.Tab.ID, row.Entry.Seq) } class="inline">
+											<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+											<button class="link" type="submit">Undo</button>
+										</form>
+									}
+								</td>
 							</tr>
 						}
 					</tbody>
 				</table>
 				<p class="muted small">
-					Entries are never edited or deleted. A correction is posted as a reversing entry that points at the original.
+					Entries are never edited or deleted. Undo posts a reversing entry that points at the original, and both stay visible.
 				</p>
 			}
 		</section>
@@ -172,12 +349,39 @@ templ TabDetail(p Page, tab store.Tab, items []store.TabItem, itemTotal money.Ce
 // View helpers
 // ---------------------------------------------------------------------------
 
+func cardID(id int64) string { return "tab-" + strconv.FormatInt(id, 10) }
+
 func tabHref(id int64) templ.SafeURL {
 	return templ.SafeURL("/tabs/" + strconv.FormatInt(id, 10))
 }
 
+func cardPath(id int64) string {
+	return "/tabs/" + strconv.FormatInt(id, 10) + "/card"
+}
+
+func settleConfirmPath(id int64) string {
+	return "/tabs/" + strconv.FormatInt(id, 10) + "/settle"
+}
+
+func settlePath(id int64) string {
+	return "/tabs/" + strconv.FormatInt(id, 10) + "/settle"
+}
+
 func chargeAction(id int64) templ.SafeURL {
 	return templ.SafeURL("/tabs/" + strconv.FormatInt(id, 10) + "/charges")
+}
+
+func paymentAction(id int64) templ.SafeURL {
+	return templ.SafeURL("/tabs/" + strconv.FormatInt(id, 10) + "/payments")
+}
+
+func participantAction(id int64) templ.SafeURL {
+	return templ.SafeURL("/tabs/" + strconv.FormatInt(id, 10) + "/participants")
+}
+
+func undoAction(tabID, seq int64) templ.SafeURL {
+	return templ.SafeURL("/tabs/" + strconv.FormatInt(tabID, 10) +
+		"/entries/" + strconv.FormatInt(seq, 10) + "/undo")
 }
 
 // balanceClass colors by direction. Negative means the Payee owes (TAB-06).
@@ -210,6 +414,16 @@ func balanceLabel(c money.Cents) string {
 	}
 }
 
+func rowClass(row HistoryRow) string {
+	if row.Entry.Kind == store.KindReversal {
+		return "reversal"
+	}
+	if !row.CanUndo && row.Entry.Kind != store.KindReversal {
+		return "reversed"
+	}
+	return ""
+}
+
 func itemPlaceholder(i int) string {
 	switch i {
 	case 0:
@@ -221,18 +435,15 @@ func itemPlaceholder(i int) string {
 	}
 }
 
-// defaultCharge prefills the charge box with the item total, so posting the
-// normal amount takes no typing (UI-03's prefill principle, applied early).
-func defaultCharge(total money.Cents) string {
-	if total == 0 {
+// prefill renders an amount for a form field, leaving it blank at zero so the
+// user is not asked to clear a "0.00" before typing.
+func prefill(amount money.Cents) string {
+	if amount <= 0 {
 		return ""
 	}
-	return total.String()
+	return amount.String()
 }
 
-func actorName(actors map[int64]string, id int64) string {
-	if n, ok := actors[id]; ok {
-		return n
-	}
-	return "--"
-}
+// chargeKey derives a distinct key for the charge form on a page that also
+// carries a payment form, so the two cannot collide on one idempotency key.
+func chargeKey(base string) string { return base + "-charge" }

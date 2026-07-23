@@ -535,3 +535,151 @@ func TestDatabaseFilesAreOwnerOnly(t *testing.T) {
 		}
 	}
 }
+
+// AUTH-04: the last active administrator cannot be deactivated, checked inside
+// the write transaction rather than by the caller.
+func TestSetUserActiveGuardsLastAdmin(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	admin, err := db.CompleteSetup(ctx, store.User{
+		Email: "admin@example.com", DisplayName: "Admin", PasswordHash: "$argon2id$x",
+	}, "UTC")
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	if err := db.SetUserActive(ctx, admin.ID, false); !errors.Is(err, store.ErrLastAdmin) {
+		t.Fatalf("deactivating the sole admin = %v, want ErrLastAdmin", err)
+	}
+
+	// With a second admin, the first may be deactivated.
+	second, err := db.CreateUser(ctx, store.User{
+		Email: "second@example.com", DisplayName: "Second",
+		PasswordHash: "$argon2id$x", IsAdmin: true,
+	})
+	if err != nil {
+		t.Fatalf("second admin: %v", err)
+	}
+	if err := db.SetUserActive(ctx, admin.ID, false); err != nil {
+		t.Fatalf("deactivating with a spare admin: %v", err)
+	}
+	// Now the second is the last one, and is protected in turn.
+	if err := db.SetUserActive(ctx, second.ID, false); !errors.Is(err, store.ErrLastAdmin) {
+		t.Errorf("deactivating the remaining admin = %v, want ErrLastAdmin", err)
+	}
+
+	// A non-admin is never protected.
+	plain, _ := db.CreateUser(ctx, store.User{
+		Email: "plain@example.com", DisplayName: "Plain", PasswordHash: "$argon2id$x",
+	})
+	if err := db.SetUserActive(ctx, plain.ID, false); err != nil {
+		t.Errorf("deactivating a non-admin: %v", err)
+	}
+}
+
+// Concurrent deactivations must not race past the guard and strip every admin.
+func TestLastAdminGuardUnderConcurrency(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	var admins []store.User
+	for i := 0; i < 4; i++ {
+		u, err := db.CreateUser(ctx, store.User{
+			Email:        "admin" + string(rune('a'+i)) + "@example.com",
+			DisplayName:  "Admin",
+			PasswordHash: "$argon2id$x",
+			IsAdmin:      true,
+		})
+		if err != nil {
+			t.Fatalf("create admin %d: %v", i, err)
+		}
+		admins = append(admins, u)
+	}
+
+	var wg sync.WaitGroup
+	for _, a := range admins {
+		wg.Add(1)
+		go func(id int64) {
+			defer wg.Done()
+			_ = db.SetUserActive(ctx, id, false)
+		}(a.ID)
+	}
+	wg.Wait()
+
+	users, err := db.ListUsers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remaining := 0
+	for _, u := range users {
+		if u.IsAdmin && u.Active() {
+			remaining++
+		}
+	}
+	if remaining < 1 {
+		t.Fatal("concurrent deactivations removed every administrator")
+	}
+}
+
+// A tab must keep at least one provider, or it could never be billed again.
+func TestRemoveParticipantKeepsAProvider(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	owner := mustUser(t, db, "owner@example.com")
+	payee := mustUser(t, db, "payee@example.com")
+	tab := mustTab(t, db, owner.ID)
+
+	if err := db.AddParticipant(ctx, store.Participant{
+		TabID: tab.ID, UserID: payee.ID, Role: store.RolePayee,
+	}); err != nil {
+		t.Fatalf("add payee: %v", err)
+	}
+
+	// The payee may be removed.
+	if err := db.RemoveParticipant(ctx, tab.ID, payee.ID); err != nil {
+		t.Fatalf("remove payee: %v", err)
+	}
+	// The sole provider may not.
+	if err := db.RemoveParticipant(ctx, tab.ID, owner.ID); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("removing the only provider = %v, want ErrConflict", err)
+	}
+
+	people, _ := db.ListParticipants(ctx, tab.ID)
+	if len(people) != 1 || people[0].Role != store.RoleProvider {
+		t.Errorf("participants = %+v, want the provider retained", people)
+	}
+}
+
+// PAY-02: the method is stored with the entry and survives a read back.
+func TestPaymentMethodPersists(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	user := mustUser(t, db, "a@example.com")
+	tab := mustTab(t, db, user.ID)
+
+	for i, m := range []store.PaymentMethod{store.MethodCash, store.MethodTransfer, store.MethodOther} {
+		posted, _, err := db.PostEntry(ctx, store.NewEntry{
+			TabID: tab.ID, Kind: store.KindPayment, Amount: 100,
+			ActorUserID: user.ID, IdempotencyKey: "m" + string(rune('a'+i)), Method: m,
+		})
+		if err != nil {
+			t.Fatalf("post %s: %v", m, err)
+		}
+		got, err := db.GetEntry(ctx, posted.Seq)
+		if err != nil {
+			t.Fatalf("read back: %v", err)
+		}
+		if got.Method != m {
+			t.Errorf("method = %q, want %q", got.Method, m)
+		}
+	}
+
+	// An unrecognized method is refused rather than stored.
+	if _, _, err := db.PostEntry(ctx, store.NewEntry{
+		TabID: tab.ID, Kind: store.KindPayment, Amount: 100,
+		ActorUserID: user.ID, IdempotencyKey: "bad", Method: store.PaymentMethod("bitcoin"),
+	}); err == nil {
+		t.Error("an unrecognized payment method was accepted")
+	}
+}

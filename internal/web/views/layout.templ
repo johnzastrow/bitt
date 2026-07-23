@@ -20,14 +20,20 @@ templ Layout(p Page) {
 			<meta name="color-scheme" content="light dark"/>
 			<title>{ pageTitle(p.Title) }</title>
 			<link rel="stylesheet" href="/static/app.css"/>
-			// htmx arrives in Phase 2 with one-tap settle. Phase 1 is plain form
-			// posts, so nothing is loaded that nothing calls.
+			<script src="/static/htmx.min.js" defer></script>
 		</head>
-		<body>
+		<body
+			if p.CSRFToken != "" {
+				hx-headers={ csrfHeader(p.CSRFToken) }
+			}
+		>
 			if p.User != nil {
 				<header class="topbar">
 					<a class="brand" href="/">BitTabby</a>
 					<nav>
+						if p.User.IsAdmin {
+							<a class="navlink" href="/admin/users">People</a>
+						}
 						<span class="who">{ p.User.DisplayName }</span>
 						<form method="post" action="/logout" class="inline">
 							<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
@@ -57,4 +63,11 @@ func pageTitle(t string) string {
 		return "BitTabby"
 	}
 	return t + " -- BitTabby"
+}
+
+// csrfHeader puts the token on every htmx request, so a request issued by
+// script carries the same proof a form post does. templ escapes the attribute,
+// and the token is base64url, so no injection is possible through it.
+func csrfHeader(token string) string {
+	return `{"X-CSRF-Token": "` + token + `"}`
 }

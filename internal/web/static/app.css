@@ -294,3 +294,111 @@ tfoot td { font-weight: 650; border-bottom: none; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+
+/* ---------- Phase 2: the settle loop ---------- */
+
+/* A card carries a colored edge so balance direction reads before the number
+   does -- the at-a-glance requirement (UI-01). */
+.tabcard {
+  border-left: 4px solid var(--border);
+  padding: 0;
+  overflow: hidden;
+}
+
+.tabcard.owed    { border-left-color: var(--rose); }
+.tabcard.credit  { border-left-color: var(--mint); }
+.tabcard.settled { border-left-color: var(--border); }
+
+.tabhero { border-left: 4px solid var(--border); }
+.tabhero.owed   { border-left-color: var(--rose); }
+.tabhero.credit { border-left-color: var(--mint); }
+
+.cardhead {
+  display: block;
+  padding: var(--s4);
+  color: inherit;
+  text-decoration: none;
+  transition: background 120ms ease;
+}
+
+.cardhead:hover, .cardhead:focus-visible { background: var(--chalk-sunk); }
+
+.cardfoot {
+  padding: 0 var(--s4) var(--s4);
+  display: flex;
+  gap: var(--s2);
+}
+
+.cardfoot .settle { width: 100%; }
+
+/* The confirmation step. It replaces the card in place rather than navigating,
+   so the answer to "did that work" arrives where the question was asked. */
+.confirming {
+  padding: var(--s4);
+  border-left-color: var(--sky);
+  animation: liftin 140ms ease-out;
+}
+
+@keyframes liftin {
+  from { opacity: 0.4; transform: translateY(-2px); }
+  to   { opacity: 1;   transform: none; }
+}
+
+.confirmform { display: flex; flex-direction: column; gap: var(--s3); margin-top: var(--s3); }
+.confirmq { margin: 0; }
+.confirmbtns { display: flex; gap: var(--s2); }
+.confirmbtns button { flex: 1; }
+
+.methodrow { display: flex; flex-direction: column; gap: var(--s1); font-size: var(--t-sm); color: var(--fg-muted); }
+
+button.ghost { background: transparent; }
+
+select {
+  font: inherit;
+  font-size: max(1rem, var(--t-base));
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: var(--s3);
+  min-height: 44px;
+}
+
+.inlineform select { flex: 0 1 auto; }
+
+/* Freshly swapped content gets a brief settled-state wash, so a successful
+   payment is visible without reading the number (UI-03). */
+.tabcard.settled .cardhead { animation: settled 900ms ease-out; }
+
+@keyframes settled {
+  0%   { background: color-mix(in srgb, var(--mint) 35%, transparent); }
+  100% { background: transparent; }
+}
+
+/* ---------- People and history ---------- */
+
+.people { list-style: none; margin: 0 0 var(--s3); padding: 0; }
+.people li { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) 0; border-bottom: 1px solid var(--border); }
+.people li:last-child { border-bottom: none; }
+
+.pill-provider { color: var(--sky-deep); }
+.pill-payee    { color: var(--fg-muted); }
+.pill-reversal { color: var(--fg-muted); }
+
+/* A reversed entry stays visible but recedes: the history is the record, and
+   erasing it would defeat the point of an append-only ledger. */
+tr.reversed td { opacity: 0.55; text-decoration: line-through; }
+tr.reversed td:last-child { text-decoration: none; }
+tr.reversal td { color: var(--fg-muted); }
+
+.checkrow { flex-direction: row !important; align-items: center; gap: var(--s2) !important; }
+.checkrow input { width: auto; min-height: auto; }
+
+.navlink { color: var(--fg-muted); text-decoration: none; font-size: var(--t-sm); }
+.navlink:hover { color: var(--fg); text-decoration: underline; }
+
+/* htmx swaps content into the page; keep the transition quiet for anyone who
+   has asked the system to reduce motion. */
+@media (prefers-reduced-motion: reduce) {
+  .confirming, .tabcard.settled .cardhead { animation: none; }
+}

@@ -287,3 +287,68 @@ var _ interface {
 	store.UserStore
 	store.SessionStore
 } = (*DB)(nil)
+
+// SetUserActive deactivates or reactivates an account (AUTH-04).
+//
+// The last-admin guard runs inside the same transaction as the write. Doing it
+// as a check-then-act in the handler would let two concurrent requests each
+// observe a second active admin and both proceed, leaving the instance with no
+// administrator and no way back in.
+func (d *DB) SetUserActive(ctx context.Context, id int64, active bool) error {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sqlite: begin set active: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if !active {
+		// Count the other active admins. If this account is an admin and no
+		// other active admin remains, refuse.
+		var isAdmin, otherAdmins int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT is_admin FROM users WHERE id = ?`, id).Scan(&isAdmin); err != nil {
+			return translate(err)
+		}
+		if isAdmin != 0 {
+			if err := tx.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM users
+                 WHERE is_admin = 1 AND deactivated_at IS NULL AND id <> ?`, id).
+				Scan(&otherAdmins); err != nil {
+				return translate(err)
+			}
+			if otherAdmins == 0 {
+				return store.ErrLastAdmin
+			}
+		}
+	}
+
+	var when sql.NullString
+	if !active {
+		when = sql.NullString{String: nowText(), Valid: true}
+	}
+	res, err := tx.ExecContext(ctx,
+		`UPDATE users SET deactivated_at = ? WHERE id = ?`, when, id)
+	if err != nil {
+		return translate(err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqlite: set active rows: %w", err)
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+
+	// A deactivated account's sessions must stop working immediately rather
+	// than lingering until they expire.
+	if !active {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, id); err != nil {
+			return translate(err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlite: commit set active: %w", err)
+	}
+	return nil
+}

@@ -1,0 +1,115 @@
+package views
+
+import (
+	"strconv"
+
+	"github.com/johnzastrow/bitt/internal/store"
+)
+
+// AdminUser pairs an account with what the viewer may do to it.
+type AdminUser struct {
+	User store.User
+	// Self is true for the signed-in admin's own row.
+	Self bool
+	// LastAdmin is true when deactivating this account would leave the
+	// instance with no administrator, so the control is not offered.
+	LastAdmin bool
+}
+
+// AdminUsers is the account management screen (AUTH-04). Deliberately minimal:
+// add a person, deactivate a person. Household instances provision people
+// rarely and do not need role matrices.
+templ AdminUsers(p Page, users []AdminUser) {
+	@Layout(p) {
+		<h1>People</h1>
+		<section class="card">
+			<h2>Add someone</h2>
+			<form method="post" action="/admin/users" class="stack">
+				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+				<label>
+					Name
+					<input type="text" name="display_name" required placeholder="Sam"/>
+				</label>
+				<label>
+					Email
+					<input type="email" name="email" required autocomplete="off"/>
+				</label>
+				<label>
+					Temporary password
+					<input type="text" name="password" required minlength="12" autocomplete="off"/>
+					<small>At least 12 characters. Share it with them directly; they can sign in with it right away.</small>
+				</label>
+				<label class="checkrow">
+					<input type="checkbox" name="is_admin" value="1"/>
+					Make them an administrator
+				</label>
+				<button class="primary" type="submit">Add person</button>
+			</form>
+		</section>
+		<section class="card">
+			<h2>Accounts</h2>
+			<table class="entries">
+				<thead>
+					<tr>
+						<th>Name</th>
+						<th>Email</th>
+						<th>Role</th>
+						<th class="right"></th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, row := range users {
+						<tr class={ userRowClass(row) }>
+							<td>
+								{ row.User.DisplayName }
+								if row.Self {
+									<span class="muted small">(you)</span>
+								}
+							</td>
+							<td class="muted">{ row.User.Email }</td>
+							<td>
+								if row.User.IsAdmin {
+									<span class="pill pill-provider">admin</span>
+								}
+								if !row.User.Active() {
+									<span class="pill">deactivated</span>
+								}
+							</td>
+							<td class="right">
+								<form method="post" action={ userActiveAction(row.User.ID) } class="inline">
+									<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+									if row.User.Active() {
+										<input type="hidden" name="active" value="false"/>
+										if row.LastAdmin {
+											<span class="muted small">last admin</span>
+										} else {
+											<button class="link" type="submit">Deactivate</button>
+										}
+									} else {
+										<input type="hidden" name="active" value="true"/>
+										<button class="link" type="submit">Reactivate</button>
+									}
+								</form>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+			<p class="muted small">
+				Accounts are deactivated rather than deleted, because they are referenced by
+				ledger entries that must stay readable. Deactivating ends their sessions immediately.
+			</p>
+		</section>
+	}
+}
+
+func userActiveAction(id int64) templ.SafeURL {
+	return templ.SafeURL("/admin/users/" + strconv.FormatInt(id, 10) + "/active")
+}
+
+func userRowClass(row AdminUser) string {
+	if !row.User.Active() {
+		return "reversed"
+	}
+	return ""
+}

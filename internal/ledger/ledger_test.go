@@ -244,3 +244,93 @@ func TestSumItems(t *testing.T) {
 		t.Errorf("SumItems = %s, want 82.99", got)
 	}
 }
+
+// PAY-02: a payment must carry a recognized method.
+func TestPaymentRequiresValidMethod(t *testing.T) {
+	led, _, user, tab := newFixture(t)
+	ctx := context.Background()
+
+	if _, _, err := led.Payment(ctx, Post{
+		TabID: tab.ID, Amount: 1000, ActorUserID: user.ID,
+		IdempotencyKey: "bad", Method: store.PaymentMethod("gold bars"),
+	}); !errors.Is(err, ErrBadMethod) {
+		t.Errorf("bogus method error = %v, want ErrBadMethod", err)
+	}
+
+	for _, m := range store.PaymentMethods() {
+		if _, _, err := led.Payment(ctx, Post{
+			TabID: tab.ID, Amount: 100, ActorUserID: user.ID,
+			IdempotencyKey: "ok-" + string(m), Method: m,
+		}); err != nil {
+			t.Errorf("method %q rejected: %v", m, err)
+		}
+	}
+}
+
+// A reversal carries no payment method: undoing a cash payment is not itself
+// a cash movement.
+func TestReversalCarriesNoMethod(t *testing.T) {
+	led, _, user, tab := newFixture(t)
+	ctx := context.Background()
+
+	payment, _, err := led.Payment(ctx, Post{
+		TabID: tab.ID, Amount: 5000, ActorUserID: user.ID,
+		IdempotencyKey: "p1", Method: store.MethodCash,
+	})
+	if err != nil {
+		t.Fatalf("payment: %v", err)
+	}
+
+	reversal, _, err := led.Reverse(ctx, payment.Seq, user.ID, "", "r1")
+	if err != nil {
+		t.Fatalf("reverse: %v", err)
+	}
+	if reversal.Method != store.MethodNone {
+		t.Errorf("reversal method = %q, want empty", reversal.Method)
+	}
+	if b, _ := led.Balance(ctx, tab.ID); b != 0 {
+		t.Errorf("balance = %s after reversing the payment, want 0.00", b)
+	}
+}
+
+// ReversedSeqs and CanUndo drive whether the undo control is offered.
+func TestUndoEligibility(t *testing.T) {
+	led, _, user, tab := newFixture(t)
+	ctx := context.Background()
+
+	first, _, _ := led.Charge(ctx, Post{
+		TabID: tab.ID, Amount: 1000, ActorUserID: user.ID, IdempotencyKey: "c1",
+	})
+	second, _, _ := led.Charge(ctx, Post{
+		TabID: tab.ID, Amount: 2000, ActorUserID: user.ID, IdempotencyKey: "c2",
+	})
+	if _, _, err := led.Reverse(ctx, first.Seq, user.ID, "", "r1"); err != nil {
+		t.Fatalf("reverse: %v", err)
+	}
+
+	entries, err := led.History(ctx, tab.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reversed := ReversedSeqs(entries)
+
+	if !reversed[first.Seq] {
+		t.Error("the reversed entry was not detected as reversed")
+	}
+	for _, e := range entries {
+		switch {
+		case e.Seq == first.Seq:
+			if CanUndo(e, reversed) {
+				t.Error("an already-reversed entry is still offered for undo")
+			}
+		case e.Seq == second.Seq:
+			if !CanUndo(e, reversed) {
+				t.Error("an untouched entry is not offered for undo")
+			}
+		case e.Kind == store.KindReversal:
+			if CanUndo(e, reversed) {
+				t.Error("a reversal is offered for undo")
+			}
+		}
+	}
+}

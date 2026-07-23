@@ -242,3 +242,44 @@ func (d *DB) ParticipantRole(ctx context.Context, tabID, userID int64) (store.Ro
 }
 
 var _ store.TabStore = (*DB)(nil)
+
+// RemoveParticipant detaches a user from a tab.
+//
+// It refuses to remove the last Provider: a tab with no Provider could never be
+// billed again and would be unreachable by any provider-role check.
+func (d *DB) RemoveParticipant(ctx context.Context, tabID, userID int64) error {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sqlite: begin remove participant: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var role string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT role FROM tab_participants WHERE tab_id = ? AND user_id = ?`,
+		tabID, userID).Scan(&role); err != nil {
+		return translate(err)
+	}
+
+	if store.Role(role) == store.RoleProvider {
+		var others int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM tab_participants
+             WHERE tab_id = ? AND role = ? AND user_id <> ?`,
+			tabID, string(store.RoleProvider), userID).Scan(&others); err != nil {
+			return translate(err)
+		}
+		if others == 0 {
+			return fmt.Errorf("%w: a tab must keep at least one provider", store.ErrConflict)
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM tab_participants WHERE tab_id = ? AND user_id = ?`, tabID, userID); err != nil {
+		return translate(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlite: commit remove participant: %w", err)
+	}
+	return nil
+}

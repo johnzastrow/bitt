@@ -32,7 +32,25 @@ func (s *Server) getDashboard(w http.ResponseWriter, r *http.Request) {
 			s.serverError(w, r, err)
 			return
 		}
-		cards = append(cards, views.TabCard{Tab: t, Balance: balance})
+		role, err := s.store.ParticipantRole(r.Context(), t.ID, user.ID)
+		if err != nil {
+			s.serverError(w, r, err)
+			return
+		}
+		// A key per rendered card, so a double-tapped settle posts once
+		// (LEDGER-07).
+		key, err := ledger.NewIdempotencyKey()
+		if err != nil {
+			s.serverError(w, r, err)
+			return
+		}
+		cards = append(cards, views.TabCard{
+			Tab:            t,
+			Balance:        balance,
+			Role:           role,
+			SettleAmount:   settleAmount(balance),
+			IdempotencyKey: key,
+		})
 	}
 
 	s.render(w, r, http.StatusOK, views.Dashboard(s.page(w, r, "Your tabs"), cards))
@@ -91,7 +109,7 @@ func (s *Server) postTab(w http.ResponseWriter, r *http.Request) {
 	redirectWith(w, r, tabPath(tab.ID), "ok", "Tab created.")
 }
 
-// getTab renders one tab: items, derived balance, and history.
+// getTab renders one tab: its people, items, derived balance, and history.
 func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 	user := userFrom(r.Context())
 
@@ -102,6 +120,12 @@ func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tab, err := s.authorizeTab(r, id, user.ID)
+	if err != nil {
+		s.denyTab(w, r, err)
+		return
+	}
+
+	role, err := s.store.ParticipantRole(r.Context(), tab.ID, user.ID)
 	if err != nil {
 		s.denyTab(w, r, err)
 		return
@@ -128,15 +152,59 @@ func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-
 	actors, err := s.actorNames(r, entries)
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
 
-	s.render(w, r, http.StatusOK,
-		views.TabDetail(s.page(w, r, tab.Name), tab, items, itemTotal, balance, entries, actors))
+	// Which entries already carry a reversal, so the undo control is not shown
+	// where it would be refused. Computed from the entries already loaded.
+	reversed := ledger.ReversedSeqs(entries)
+
+	rows := make([]views.HistoryRow, 0, len(entries))
+	for _, e := range entries {
+		canUndo := ledger.CanUndo(e, reversed) &&
+			(role == store.RoleProvider || e.ActorUserID == user.ID)
+		rows = append(rows, views.HistoryRow{
+			Entry:   e,
+			Actor:   actorName(actors, e.ActorUserID),
+			CanUndo: canUndo,
+		})
+	}
+
+	participants, err := s.store.ListParticipants(r.Context(), tab.ID)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+
+	var attachable []store.User
+	if role == store.RoleProvider {
+		if attachable, err = s.attachableUsers(r, tab.ID); err != nil {
+			s.serverError(w, r, err)
+			return
+		}
+	}
+
+	key, err := ledger.NewIdempotencyKey()
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+
+	s.render(w, r, http.StatusOK, views.TabDetail(s.page(w, r, tab.Name), views.TabDetailData{
+		Tab:            tab,
+		Items:          items,
+		ItemTotal:      itemTotal,
+		Balance:        balance,
+		Rows:           rows,
+		Participants:   participants,
+		Attachable:     attachable,
+		Role:           role,
+		IdempotencyKey: key,
+		SettleAmount:   settleAmount(balance),
+	}))
 }
 
 // postCharge posts a one-off charge or adjustment (CHG-03).
@@ -306,6 +374,13 @@ func parseItems(names, amounts []string) ([]store.TabItem, error) {
 		items = append(items, store.TabItem{Name: name, Amount: amount, Position: len(items)})
 	}
 	return items, nil
+}
+
+func actorName(actors map[int64]string, id int64) string {
+	if n, ok := actors[id]; ok {
+		return n
+	}
+	return "--"
 }
 
 func itemAmounts(items []store.TabItem) []money.Cents {

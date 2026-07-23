@@ -26,6 +26,9 @@ var (
 	// ErrAppendOnly is returned when something attempts to modify or remove a
 	// posted ledger entry (LEDGER-01).
 	ErrAppendOnly = errors.New("store: entries are append-only")
+	// ErrLastAdmin is returned when deactivating an account would leave the
+	// instance with no active administrator.
+	ErrLastAdmin = errors.New("store: cannot deactivate the last administrator")
 )
 
 // EntryKind classifies a ledger entry.
@@ -77,6 +80,49 @@ const (
 	// RolePayee pays on the tab.
 	RolePayee Role = "payee"
 )
+
+// PaymentMethod records how money actually moved, since it moves outside
+// BitTabby (PAY-02).
+type PaymentMethod string
+
+const (
+	// MethodNone applies to entries that are not payments.
+	MethodNone PaymentMethod = ""
+	// MethodCash is cash handed over in person.
+	MethodCash PaymentMethod = "cash"
+	// MethodTransfer covers bank transfer, Venmo, Zelle, and the like.
+	MethodTransfer PaymentMethod = "transfer"
+	// MethodOther is anything else, described in the memo.
+	MethodOther PaymentMethod = "other"
+)
+
+// Valid reports whether m is a recognized payment method.
+func (m PaymentMethod) Valid() bool {
+	switch m {
+	case MethodNone, MethodCash, MethodTransfer, MethodOther:
+		return true
+	}
+	return false
+}
+
+// Label renders the method for display.
+func (m PaymentMethod) Label() string {
+	switch m {
+	case MethodCash:
+		return "Cash"
+	case MethodTransfer:
+		return "Transfer"
+	case MethodOther:
+		return "Other"
+	default:
+		return ""
+	}
+}
+
+// PaymentMethods lists the selectable methods in display order.
+func PaymentMethods() []PaymentMethod {
+	return []PaymentMethod{MethodCash, MethodTransfer, MethodOther}
+}
 
 // Instance holds deployment-wide state. Exactly one row exists.
 type Instance struct {
@@ -160,6 +206,7 @@ type Entry struct {
 	ActorUserID    int64
 	IdempotencyKey string
 	ReversesSeq    *int64
+	Method         PaymentMethod
 }
 
 // EntryItem is the item breakdown captured at the moment an entry was posted,
@@ -181,6 +228,7 @@ type NewEntry struct {
 	ActorUserID    int64
 	IdempotencyKey string
 	ReversesSeq    *int64
+	Method         PaymentMethod
 	Items          []EntryItem
 }
 
@@ -217,6 +265,14 @@ type UserStore interface {
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	ListUsers(ctx context.Context) ([]User, error)
 	CountUsers(ctx context.Context) (int, error)
+
+	// SetUserActive deactivates or reactivates an account (AUTH-04).
+	//
+	// Deactivating the last active admin must fail with ErrLastAdmin, checked
+	// inside the same transaction as the write. A check-then-act in the handler
+	// would let two concurrent requests each see a second admin and both
+	// proceed, locking everyone out of the instance.
+	SetUserActive(ctx context.Context, id int64, active bool) error
 }
 
 // SessionStore covers login state.
@@ -243,6 +299,7 @@ type TabStore interface {
 	AddItem(ctx context.Context, item TabItem) (TabItem, error)
 
 	AddParticipant(ctx context.Context, p Participant) error
+	RemoveParticipant(ctx context.Context, tabID, userID int64) error
 	ListParticipants(ctx context.Context, tabID int64) ([]Participant, error)
 	// ParticipantRole returns the user's role on the tab, or ErrNotFound if the
 	// user does not participate. This is the authorization primitive.

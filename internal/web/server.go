@@ -69,6 +69,19 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /tabs/{id}", s.requireAuth(http.HandlerFunc(s.getTab)))
 	mux.Handle("POST /tabs/{id}/charges", s.requireAuth(http.HandlerFunc(s.postCharge)))
 
+	// The settle loop (PAY-01, UI-03)
+	mux.Handle("GET /tabs/{id}/card", s.requireAuth(http.HandlerFunc(s.getCard)))
+	mux.Handle("GET /tabs/{id}/settle", s.requireAuth(http.HandlerFunc(s.getSettleConfirm)))
+	mux.Handle("POST /tabs/{id}/settle", s.requireAuth(http.HandlerFunc(s.postSettle)))
+	mux.Handle("POST /tabs/{id}/payments", s.requireAuth(http.HandlerFunc(s.postPayment)))
+	mux.Handle("POST /tabs/{id}/entries/{seq}/undo", s.requireAuth(http.HandlerFunc(s.postUndo)))
+	mux.Handle("POST /tabs/{id}/participants", s.requireAuth(http.HandlerFunc(s.postParticipant)))
+
+	// Administration (AUTH-04)
+	mux.Handle("GET /admin/users", s.requireAdmin(http.HandlerFunc(s.getAdminUsers)))
+	mux.Handle("POST /admin/users", s.requireAdmin(http.HandlerFunc(s.postAdminUser)))
+	mux.Handle("POST /admin/users/{id}/active", s.requireAdmin(http.HandlerFunc(s.postAdminUserActive)))
+
 	return s.securityHeaders(s.recoverPanic(mux))
 }
 

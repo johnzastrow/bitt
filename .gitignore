@@ -1,0 +1,36 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Data — never commit the financial store
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Build output
+/bittabby
+/dist/
+/bin/
+*.exe
+
+# Go
+*.test
+*.out
+coverage.*
+
+# Generated assets
+/internal/web/static/dist/
+node_modules/
+
+# Editor and OS
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

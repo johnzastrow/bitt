@@ -1,10 +1,13 @@
 # BitTabby — Requirements
 
 **Milestone:** v1
-**Defined:** 2026-07-19
+**Defined:** 2026-07-23
 **Core value:** The running balance is always correct.
+**Target:** Personal, self-hosted home use. One household per deployment.
 
-Requirements are grouped by category. Each carries a stable REQ-ID used for roadmap traceability.
+Requirements are grouped by area. Each carries a stable REQ-ID used for roadmap traceability. Nothing here is built yet.
+
+This is a reduction of the bit-tabby-derived scope from 79 requirements to 50. The pre-revision document is in git history. See [PROJECT.md](PROJECT.md) for the reasoning behind each cut.
 
 ---
 
@@ -14,133 +17,109 @@ Requirements are grouped by category. Each carries a stable REQ-ID used for road
 
 The accounting spine. Everything else calls into this; nothing else writes entries directly.
 
-- [x] **LEDGER-01**: All financial entries are append-only — the system never updates or deletes a posted entry
-- [x] **LEDGER-02**: Append-only is enforced by the strongest mechanism the active backend supports. On SQLite (v1) that is the Ledger Core write boundary — no code outside it issues UPDATE/DELETE against entries — backed by abort triggers that are enabled by default and disableable via config for development and manual repair. SQLite has no role or privilege system, so a trigger is a guardrail against application bugs, not a barrier against an operator with file access. MariaDB and PostgreSQL landed in v1 via Phase 01.1: on PostgreSQL, UPDATE and DELETE on the entries table are additionally revoked from the application role, which the application cannot re-grant itself; on MariaDB, enforcement is a `SIGNAL SQLSTATE` trigger (D-114).
-- [x] **LEDGER-03**: A correction is recorded as a reversing entry that references the original, never as an edit
-- [x] **LEDGER-04**: Bucket balances are derived by summing ledger entries; no mutable balance column exists as a source of truth
-- [x] **LEDGER-05**: All monetary amounts are stored and computed as integer minor units; no floating-point arithmetic appears anywhere in the money path, including serialization and display formatting
-- [x] **LEDGER-06**: Every amount carries its currency, and the type system or schema prevents arithmetic between differing currencies
-- [x] **LEDGER-07**: Every entry records both an effective timestamp (when it applies) and a created timestamp (when it was recorded)
-- [x] **LEDGER-08**: Every entry carries a client-supplied idempotency key with a database-level unique constraint, so a replayed write can never double-post
-- [x] **LEDGER-09**: Every entry receives a server-assigned monotonic sequence number that defines authoritative ordering independent of client clocks
-- [x] **LEDGER-10**: A user can reconstruct the balance of any bucket as of any past point in time from the entry log alone
-- [x] **LEDGER-11**: An event log records who performed each action, what changed, and when, across all major entities
+- [ ] **LEDGER-01**: Posted entries are append-only — the system never updates or deletes one. Enforced by a single write boundary in code, backed by a database abort trigger enabled by default and disableable via configuration for development and manual repair
+- [ ] **LEDGER-02**: A correction is recorded as a reversing entry referencing the original, never as an edit
+- [ ] **LEDGER-03**: Tab balances are derived by summing ledger entries; no mutable balance column exists as a source of truth
+- [ ] **LEDGER-04**: All monetary amounts are stored and computed as integer USD cents; no floating-point arithmetic appears anywhere in the money path, including serialization and display formatting
+- [ ] **LEDGER-05**: Every entry records an effective timestamp (when it applies), a created timestamp (when it was recorded), and the user who created it
+- [ ] **LEDGER-06**: Every entry receives a server-assigned monotonic sequence number defining authoritative ordering independent of client clocks
+- [ ] **LEDGER-07**: Every entry carries a client-supplied idempotency key with a database-level unique constraint, so a repeated or replayed write can never double-post
 
-### Buckets & Items (BUCKET)
+### Tabs & Items (TAB)
 
-- [ ] **BUCKET-01**: Provider can create a Services bucket (recurring, accrues on a period, no defined end)
-- [ ] **BUCKET-02**: Provider can create a Declining Balance bucket (payments against a fixed total)
-- [ ] **BUCKET-03**: Provider can add one or more Items to a bucket as a descriptive breakdown
-- [ ] **BUCKET-04**: Items carry no independent balance; all accounting occurs at the bucket level
-- [ ] **BUCKET-05**: Provider can attach an existing user to a bucket as Payee; the bucket then appears on that Payee's dashboard
-- [ ] **BUCKET-06**: Each bucket declares its own currency, fixed at creation
-- [ ] **BUCKET-07**: Each bucket declares its own timezone, used for all period-boundary calculations
-- [ ] **BUCKET-08**: A bucket balance may be negative (owed) or positive (credit)
-- [ ] **BUCKET-09**: Payee can view the full entry history for any bucket they participate in
+- [ ] **TAB-01**: Provider can create a Services tab — recurring charges on a schedule, with no defined end
+- [ ] **TAB-02**: Provider can create a Payoff tab — a fixed total drawn down by payments, with an expected payment schedule
+- [ ] **TAB-03**: Provider can attach an existing user to a tab as Payee; the tab then appears on that user's dashboard
+- [ ] **TAB-04**: A tab carries one or more line items, each with its own amount; the items sum to the tab's periodic charge
+- [ ] **TAB-05**: Items carry no balance of their own — payments settle against the tab as a whole, with no allocation rules
+- [ ] **TAB-06**: A tab balance may be negative (owed) or positive (credit), and both parties can view the tab's full entry history
 
-### Recurring Accrual (ACCRUAL)
+### Schedules & Periods (SCHED)
 
-- [ ] **ACCRUAL-01**: Provider can configure a recurring amount and period for a Services bucket
-- [ ] **ACCRUAL-02**: A scheduler posts a ledger entry for each elapsed accrual period automatically
-- [ ] **ACCRUAL-03**: Posted periods are tracked in a dedicated table with a unique constraint on (bucket, period), making double-posting impossible even under concurrent or repeated runs
-- [ ] **ACCRUAL-04**: After downtime, the scheduler catches up by posting every missed period exactly once
-- [ ] **ACCRUAL-05**: The scheduler sweeps hourly rather than daily, so period boundaries remain correct across timezones and DST transitions
-- [ ] **ACCRUAL-06**: Period boundaries are computed correctly for month-end anchors (a Jan 31 anchor does not drift in February)
-- [ ] **ACCRUAL-07**: Provider can change a bucket's recurring rate with a recorded reason; the change takes effect the following period and never alters posted entries
-- [ ] **ACCRUAL-08**: Rate history is versioned, so catch-up posting for a past period uses the rate in force during that period
-- [ ] **ACCRUAL-09**: Provider can post an adjustment entry to correct the current period
+- [ ] **SCHED-01**: A tab's schedule is an anchor date plus one of: weekly, every two weeks, monthly on a given day, or monthly on the last day
+- [ ] **SCHED-02**: Period boundaries are computed in the instance-wide configured timezone and do not drift at month end — a day-31 anchor lands correctly in February and returns to the 31st afterward
+- [ ] **SCHED-03**: Due periods are posted lazily, computed and written inside the transaction that reads the tab, so no background scheduler process exists and catch-up after downtime is inherent rather than engineered
+- [ ] **SCHED-04**: A unique constraint on (tab, period) makes posting a period twice impossible, including under concurrent reads
+- [ ] **SCHED-05**: Every period carries a due date derived from the schedule, with no invoice record required to supply one
 
-### Credits (CREDIT)
+### Charges & Statements (CHG)
 
-- [ ] **CREDIT-01**: Payee can record a payment at any time, including in advance of any amount owed
-- [ ] **CREDIT-02**: A credit balance automatically offsets future accruals until exhausted
-- [ ] **CREDIT-03**: A bucket in credit displays a "paid through" date derived from the credit and the current rate
+- [ ] **CHG-01**: Each posted period snapshots its item breakdown, so both parties can see exactly which line changed and when a cost shifted
+- [ ] **CHG-02**: Provider can change an item's amount or add an item; the change takes effect the following period and never alters posted entries
+- [ ] **CHG-03**: Provider can post a one-off charge or a correcting adjustment to any tab
+- [ ] **CHG-04**: A period statement renders the charge, its item breakdown, its due date, and the payments applied to it — computed from ledger entries and stored nowhere separately
 
-### Invoicing & Settlement (INV)
+### Payments & Settlement (PAY)
 
-- [ ] **INV-01**: Services buckets auto-generate an invoice each accrual period with a due date
-- [ ] **INV-02**: Provider can adjust a generated invoice before it is issued
-- [ ] **INV-03**: Payee can mark an invoice paid in a single tap from the dashboard, with amount and date prefilled
-- [ ] **INV-04**: The settle action captures the payment method (cash, transfer, other) since payments occur outside the app
-- [ ] **INV-05**: A recorded payment can be undone, implemented as a reversing entry rather than a deletion
-- [ ] **INV-06**: Provider can record a payment on a Payee's behalf, attributed to the Provider in the event log
-- [ ] **INV-07**: Declining Balance buckets support a Settle Up action that clears the outstanding balance
-- [ ] **INV-08**: Services buckets present a running balance and payment log rather than a Settle Up action
+- [ ] **PAY-01**: Payee can record a payment in a single tap from the dashboard, with amount and date prefilled
+- [ ] **PAY-02**: A payment records its method (cash, transfer, other), since money moves outside the app
+- [ ] **PAY-03**: Provider can record a payment on a Payee's behalf, attributed to the Provider on the entry
+- [ ] **PAY-04**: A recorded payment can be undone, implemented as a reversing entry rather than a deletion
+- [ ] **PAY-05**: A payment made in advance of anything owed becomes a credit that automatically offsets future charges until exhausted
+
+### Payoff Tabs (PAYOFF)
+
+- [ ] **PAYOFF-01**: A Payoff tab shows its remaining balance and progress against the original total
+- [ ] **PAYOFF-02**: A Payoff tab shows whether the Payee is on track, ahead, or behind its expected payment schedule
+- [ ] **PAYOFF-03**: A Payoff tab reaching a zero balance is marked settled and moves out of the active dashboard
 
 ### Late Fees (FEE)
 
-- [ ] **FEE-01**: Provider can configure a late fee per bucket as a fixed amount or a percentage
-- [ ] **FEE-02**: Provider can configure a grace period per bucket
-- [ ] **FEE-03**: Overdue invoices accrue late fees automatically as ledger entries after the grace period elapses
-- [ ] **FEE-04**: Percentage-based fees allocate remainders deterministically so no minor unit is created or lost by rounding
-- [ ] **FEE-05**: Provider can configure a cap on total accrued late fees per bucket
-- [ ] **FEE-06**: Provider can waive a late fee; the waiver is recorded as a reversing entry with a reason
+Driven entirely by the schedule's due dates. Reuses the lazy posting path.
+
+- [ ] **FEE-01**: Provider can configure a late fee per tab as either a fixed amount or a percentage
+- [ ] **FEE-02**: Provider can configure a grace period per tab, expressed in days after the due date
+- [ ] **FEE-03**: Once the grace period elapses on a period that remains unpaid, a late fee posts automatically as a ledger entry
+- [ ] **FEE-04**: Late fees post through the same lazy path as charges, with a unique constraint on (tab, period, fee) making double-assessment impossible
+- [ ] **FEE-05**: A percentage fee is computed on the overdue period charge rather than the running balance, so fees never compound on previously assessed fees; rounding to whole cents is deterministic and documented
+- [ ] **FEE-06**: Provider can configure a cap on total accrued late fees per tab
+- [ ] **FEE-07**: Provider can waive a late fee; the waiver is recorded as a reversing entry with a reason
 
 ### Accounts & Access (AUTH)
 
-- [x] **AUTH-01**: User can create an account with email and password, hashed with Argon2id
-- [x] **AUTH-02**: User can log in and remain logged in across sessions via secure, HttpOnly, SameSite cookies
-- [x] **AUTH-03**: User can log out from any page
-- [x] **AUTH-04**: Instance can optionally be configured to authenticate via an external OIDC provider
-- [x] **AUTH-05**: A fresh deployment presents a one-time setup screen to create the first admin account, which locks permanently once completed
-- [x] **AUTH-06**: Admin can manage user accounts and global settings
-- [x] **AUTH-07**: Every request is authorized against the specific bucket it touches; a user can never read or write a bucket they do not participate in
-- [x] **AUTH-08**: A user can hold the Provider role on some buckets and the Payee role on others
-
-### Offline & Sync (SYNC)
-
-- [ ] **SYNC-01**: The app installs as a PWA to the home screen and opens to a cached shell
-- [ ] **SYNC-02**: User can view current balances and tab history while offline
-- [ ] **SYNC-03**: User can record a payment while offline; it queues locally in an outbox
-- [ ] **SYNC-04**: Queued entries sync automatically on reconnect via an explicit application-managed queue, not the service worker's background sync
-- [ ] **SYNC-05**: A replayed or duplicated sync request never produces a duplicate ledger entry
-- [ ] **SYNC-06**: Entry ordering is determined by server-assigned sequence, so a client with a wrong clock cannot corrupt the ledger
-- [ ] **SYNC-07**: The interface always indicates whether displayed data is current or stale, and shows pending unsynced entries distinctly
-- [ ] **SYNC-08**: A client offline for an extended period syncs correctly on return without data loss
-
-### Notifications (NOTIF)
-
-Minimal slice only — the safety net for one-sided payment recording.
-
-- [ ] **NOTIF-01**: When a payment is recorded on a bucket, the other party receives an ntfy notification
-- [ ] **NOTIF-02**: Each user can configure their own ntfy topic, or disable notifications entirely
-- [ ] **NOTIF-03**: Notification topics are cryptographically random rather than guessable
-- [ ] **NOTIF-04**: A notification never triggers a state change by itself; any action it links to requires explicit confirmation in an authenticated session
+- [ ] **AUTH-01**: User can create an account with email and password, hashed with Argon2id
+- [ ] **AUTH-02**: User can log in and remain logged in across sessions via secure, HttpOnly, SameSite cookies, and can log out from any page
+- [ ] **AUTH-03**: A fresh deployment presents a one-time setup screen creating the first admin account, which locks permanently once completed
+- [ ] **AUTH-04**: Admin can add and remove user accounts, and may also hold the Provider or Payee role on tabs
+- [ ] **AUTH-05**: Every request is authorized against the specific tab it touches; a user can never read or write a tab they do not participate in, and may hold Provider on some tabs and Payee on others
 
 ### Interface (UI)
 
-- [ ] **UI-01**: The dashboard presents active tabs as cards showing current balance and status at a glance
+- [ ] **UI-01**: The dashboard presents each active tab as a card showing current balance and status at a glance
 - [ ] **UI-02**: The interface is mobile-first and fully usable on desktop
-- [ ] **UI-03**: Settling from the dashboard takes one tap plus one confirmation, with all fields prefilled
-- [ ] **UI-04**: Theme is switchable, with Chalk & Pastel as the default
-- [ ] **UI-05**: Theme colors are defined as design tokens rather than hardcoded values
-- [ ] **UI-06**: Settling produces immediate visual feedback via a transition to the settled state color
+- [ ] **UI-03**: Settling from the dashboard takes one tap plus one confirmation, with every field prefilled and immediate visual feedback on success
+- [ ] **UI-04**: Colors, spacing, and type are defined as design tokens using the Chalk & Pastel palette rather than hardcoded values
+- [ ] **UI-05**: The app installs to a phone home screen as a PWA and opens to a cached shell; all data operations require a connection
 
 ### Deployment & Data (DEPLOY)
 
-- [x] **DEPLOY-01**: The application runs on SQLite as its v1 data backend
-- [x] **DEPLOY-02**: All dialect-specific SQL is isolated in a data access layer, with no dependency on SQLite-only behavior or on `UPDATE ... RETURNING`
-- [x] **DEPLOY-03**: Schema migrations run automatically and safely on startup
-- [ ] **DEPLOY-04**: The application ships as a Docker image published via GitHub
-- [ ] **DEPLOY-05**: The image runs as a non-root user
+- [ ] **DEPLOY-01**: The application runs on SQLite as its initial data backend, with schema migrations running automatically and safely on startup
+- [ ] **DEPLOY-02**: All SQL is isolated behind a repository interface with no dependence on SQLite-only behavior, so a second backend can be added without touching call sites
+- [ ] **DEPLOY-03**: MariaDB is supported as a second backend, selectable by configuration
+- [ ] **DEPLOY-04**: The application ships as a single static binary with templates, assets, and migrations embedded
+- [ ] **DEPLOY-05**: A Docker image is published via GitHub and runs as a non-root user
 - [ ] **DEPLOY-06**: Secrets are supplied by environment or file rather than baked into the image or committed to the repository
-- [ ] **DEPLOY-07**: Documented backup and restore procedure for the financial data store
+- [ ] **DEPLOY-07**: Backup and restore for the financial data store is documented
 
 ---
 
-## v2 Requirements (deferred)
+## Deferred (v2 and beyond)
 
 Expected eventually; deliberately not in v1.
 
-- ~~**MariaDB backend support**~~ — **delivered in v1 by Phase 01.1** (promoted out of v2 as BACKLOG PORT-01); MariaDB is now the probable production target
-- ~~**PostgreSQL backend support**~~ — **delivered in v1 by Phase 01.1**; first-class production option
-- **Full notification system** — email delivery, per-event preferences, configurable templates, due/overdue/upcoming reminders
-- **Invitations and terms acceptance** — Provider invites a Payee with terms; Payee accepts or rejects
-- **Reporting and exports** — pre-made reports, aggregations, forecasts, exporting to PDF/XLSX/Markdown/CSV
-- **Ad-hoc search** — search across invoices, payments, and messages with exportable results
-- **In-app private messaging** — direct messages between parties with notification alerts
-- **Receipt attachment** — attach a document to an entry (attachment only; no OCR, no line-item allocation)
-- **External integrations** — Invoice Ninja and payment portal connectors
+- **Offline data entry and sync** — local outbox, queued payments, sync on reconnect, replay idempotency, stale-data indicators. The v1 write path is built idempotent and API-shaped specifically so this stays additive
+- **Invoice as a stored entity** — issued/due/paid lifecycle with Provider adjustment before issue. v1 renders statements from ledger entries instead
+- **Notifications** — ntfy and email delivery, per-event preferences, due and overdue reminders
+- **PostgreSQL backend** — the repository interface does not preclude it
+- **OIDC / external identity providers** — for homelab users wanting Authentik or Keycloak
+- **Theme switching** — v1 defines tokens for one palette; alternates become cheap
+- **Point-in-time balance reconstruction UI** — the data supports it; the interface is deferred
+- **Full event log across all entities** — v1 records the acting user on each ledger entry, which covers the financial trail
+- **Reporting and exports** — pre-made reports, aggregations, forecasts, PDF/XLSX/Markdown/CSV
+- **Ad-hoc search** across entities
+- **In-app private messaging**
+- **Receipt attachment** — attachment only, no OCR and no line-item allocation
+- **External integrations** — Invoice Ninja, payment portal connectors
 
 ---
 
@@ -148,108 +127,98 @@ Expected eventually; deliberately not in v1.
 
 Explicitly excluded, with reasoning, to prevent silent re-adding.
 
-- **Payment processing** — BitTabby records payments made in other systems and never touches money. Adding processing changes the product's regulatory posture entirely.
-- **Multi-tenant SaaS hosting** — each deployment serves one trusted group. Research confirms the self-hosted + mobile-first intersection is the underserved niche; tenant isolation is a different product.
-- **Multi-currency conversion** — buckets are single-currency. FX is table stakes for travel-splitting apps but not for recurring domestic billing, and historical rate handling is a large surface. *(Research flagged this tension explicitly; the exclusion was retained deliberately.)*
-- **Per-item balances and payment allocation rules** — accounting is bucket-level by design, which removes an entire class of allocation logic. Matches the original requirements document.
-- **Itemized receipt splitting and OCR** — structurally incompatible with bucket-level accounting. *(Research flagged this; attachment-only support is deferred to v2 as the compatible subset.)*
-- **Two-party payment confirmation / reject flow** — Splitwise built this and removed it after users found it too slow, which is precisely the "too many clicks" failure this project is designed against. The event log, undo-as-reversal, and NOTIF-01 serve the same purpose without the friction.
-- **Automatic proration on rate change** — rate changes take effect next period by design; proration adds date-math complexity and edge cases for marginal benefit.
-- **Multi-party debt netting** — a bilateral Provider/Payee model, not a group-splitting model. Netting is structurally incompatible.
-- **Open public registration** — self-hosted instances provision users deliberately; open signup is an attack surface with no benefit here.
-- **Balance snapshot caching** — explicitly not built in v1. At expected scale, deriving balances per read is fast enough, and a cache reintroduces exactly the drift risk the append-only design eliminates. If ever needed, it must be an additive, provably-rebuildable projection — never a second source of truth.
+- **Payment processing** — BitTabby records payments made in other systems and never touches money. Adding processing changes the product's regulatory posture entirely
+- **Multi-tenant SaaS hosting** — each deployment serves one household. Tenant isolation is a different product
+- **Multi-currency and FX** — USD only. Every target use case is domestic and recurring
+- **Per-item balances and payment allocation rules** — items break down what a charge covers; they never accrue or settle independently. This removes an entire class of allocation logic
+- **Itemized receipt splitting and OCR** — structurally incompatible with tab-level accounting
+- **Balance snapshot caching** — the single most likely way "the balance is always correct" fails. At household scale, deriving balances per read is fast enough. If ever needed it must be an additive, provably-rebuildable projection, never a second source of truth
+- **Two-party payment confirmation and reject flow** — Splitwise built this and removed it after users found it too slow, which is precisely the friction this project is designed against. Undo-as-reversal serves the same purpose
+- **Automatic proration on cost change** — changes take effect the following period by design; proration adds date math and edge cases for marginal benefit
+- **Compounding late fees** — percentage fees are computed on the overdue period charge, never on a balance that already includes fees
+- **Multi-party debt netting** — a bilateral Provider/Payee model, not a group-splitting model
+- **Open public registration** — self-hosted instances provision users deliberately; open signup is attack surface with no benefit here
+- **Background scheduler process** — periods and fees post lazily inside read transactions. A timer process was the source of the catch-up, DST, and downtime complexity in the predecessor
 
 ---
 
 ## Traceability
 
-Requirement-to-phase mapping. Populated during roadmap creation.
+Requirement-to-phase mapping. Every phase after Phase 1 adds to an application a person can already open and use.
+
+| Phase | Theme | Requirements | Count |
+|-------|-------|--------------|-------|
+| 1 | Walking skeleton — it runs, you log in, a tab shows a correct balance | LEDGER-01, 03, 04, 05, 06; TAB-01, 04, 05; CHG-03; AUTH-01, 02, 03; UI-02; DEPLOY-01, 02, 04 | 16 |
+| 2 | The settle loop — this is the product | LEDGER-02, 07; TAB-03, 06; PAY-01, 02, 03, 04, 05; AUTH-04, 05; UI-01, 03, 04 | 14 |
+| 3 | Recurrence — schedules, lazy accrual, statements | SCHED-01, 02, 03, 04, 05; CHG-01, 02, 04 | 8 |
+| 4 | Payoff tabs and late fees | TAB-02; PAYOFF-01, 02, 03; FEE-01, 02, 03, 04, 05, 06, 07 | 11 |
+| 5 | Ship — MariaDB, Docker, PWA shell | UI-05; DEPLOY-03, 05, 06, 07 | 5 |
 
 | REQ-ID | Phase | Status |
 |--------|-------|--------|
-| LEDGER-01 | Phase 1 | Complete |
-| LEDGER-02 | Phase 1 | Complete |
-| LEDGER-03 | Phase 1 | Complete |
-| LEDGER-04 | Phase 1 | Complete |
-| LEDGER-05 | Phase 1 | Complete |
-| LEDGER-06 | Phase 1 | Complete |
-| LEDGER-07 | Phase 1 | Complete |
-| LEDGER-08 | Phase 1 | Complete |
-| LEDGER-09 | Phase 1 | Complete |
-| LEDGER-10 | Phase 1 | Complete |
-| LEDGER-11 | Phase 1 | Complete |
-| DEPLOY-01 | Phase 1 | Complete |
-| DEPLOY-02 | Phase 1 | Complete |
-| DEPLOY-03 | Phase 1 | Complete |
-| AUTH-01 | Phase 2 | Complete |
-| AUTH-02 | Phase 2 | Complete |
-| AUTH-03 | Phase 2 | Complete |
-| AUTH-04 | Phase 2 | Complete |
-| AUTH-05 | Phase 2 | Complete |
-| AUTH-06 | Phase 2 | Complete |
-| AUTH-07 | Phase 2 | Complete |
-| AUTH-08 | Phase 2 | Complete |
-| BUCKET-01 | Phase 3 | Pending |
-| BUCKET-02 | Phase 3 | Pending |
-| BUCKET-03 | Phase 3 | Pending |
-| BUCKET-04 | Phase 3 | Pending |
-| BUCKET-05 | Phase 3 | Pending |
-| BUCKET-06 | Phase 3 | Pending |
-| BUCKET-07 | Phase 3 | Pending |
-| BUCKET-08 | Phase 3 | Pending |
-| BUCKET-09 | Phase 3 | Pending |
-| CREDIT-01 | Phase 3 | Pending |
-| INV-03 | Phase 3 | Pending |
-| INV-04 | Phase 3 | Pending |
-| INV-05 | Phase 3 | Pending |
-| INV-06 | Phase 3 | Pending |
-| INV-07 | Phase 3 | Pending |
-| INV-08 | Phase 3 | Pending |
-| UI-01 | Phase 3 | Pending |
-| UI-02 | Phase 3 | Pending |
-| UI-03 | Phase 3 | Pending |
-| UI-04 | Phase 3 | Pending |
-| UI-05 | Phase 3 | Pending |
-| UI-06 | Phase 3 | Pending |
-| ACCRUAL-01 | Phase 4 | Pending |
-| ACCRUAL-02 | Phase 4 | Pending |
-| ACCRUAL-03 | Phase 4 | Pending |
-| ACCRUAL-04 | Phase 4 | Pending |
-| ACCRUAL-05 | Phase 4 | Pending |
-| ACCRUAL-06 | Phase 4 | Pending |
-| ACCRUAL-07 | Phase 4 | Pending |
-| ACCRUAL-08 | Phase 4 | Pending |
-| ACCRUAL-09 | Phase 4 | Pending |
-| CREDIT-02 | Phase 4 | Pending |
-| CREDIT-03 | Phase 4 | Pending |
-| INV-01 | Phase 5 | Pending |
-| INV-02 | Phase 5 | Pending |
-| FEE-01 | Phase 5 | Pending |
-| FEE-02 | Phase 5 | Pending |
-| FEE-03 | Phase 5 | Pending |
-| FEE-04 | Phase 5 | Pending |
-| FEE-05 | Phase 5 | Pending |
-| FEE-06 | Phase 5 | Pending |
-| SYNC-01 | Phase 6 | Pending |
-| SYNC-02 | Phase 6 | Pending |
-| SYNC-03 | Phase 6 | Pending |
-| SYNC-04 | Phase 6 | Pending |
-| SYNC-05 | Phase 6 | Pending |
-| SYNC-06 | Phase 6 | Pending |
-| SYNC-07 | Phase 6 | Pending |
-| SYNC-08 | Phase 6 | Pending |
-| NOTIF-01 | Phase 7 | Pending |
-| NOTIF-02 | Phase 7 | Pending |
-| NOTIF-03 | Phase 7 | Pending |
-| NOTIF-04 | Phase 7 | Pending |
-| DEPLOY-04 | Phase 7 | Pending |
-| DEPLOY-05 | Phase 7 | Pending |
-| DEPLOY-06 | Phase 7 | Pending |
-| DEPLOY-07 | Phase 7 | Pending |
+| LEDGER-01 | Phase 1 | Pending |
+| LEDGER-02 | Phase 2 | Pending |
+| LEDGER-03 | Phase 1 | Pending |
+| LEDGER-04 | Phase 1 | Pending |
+| LEDGER-05 | Phase 1 | Pending |
+| LEDGER-06 | Phase 1 | Pending |
+| LEDGER-07 | Phase 2 | Pending |
+| TAB-01 | Phase 1 | Pending |
+| TAB-02 | Phase 4 | Pending |
+| TAB-03 | Phase 2 | Pending |
+| TAB-04 | Phase 1 | Pending |
+| TAB-05 | Phase 1 | Pending |
+| TAB-06 | Phase 2 | Pending |
+| SCHED-01 | Phase 3 | Pending |
+| SCHED-02 | Phase 3 | Pending |
+| SCHED-03 | Phase 3 | Pending |
+| SCHED-04 | Phase 3 | Pending |
+| SCHED-05 | Phase 3 | Pending |
+| CHG-01 | Phase 3 | Pending |
+| CHG-02 | Phase 3 | Pending |
+| CHG-03 | Phase 1 | Pending |
+| CHG-04 | Phase 3 | Pending |
+| PAY-01 | Phase 2 | Pending |
+| PAY-02 | Phase 2 | Pending |
+| PAY-03 | Phase 2 | Pending |
+| PAY-04 | Phase 2 | Pending |
+| PAY-05 | Phase 2 | Pending |
+| PAYOFF-01 | Phase 4 | Pending |
+| PAYOFF-02 | Phase 4 | Pending |
+| PAYOFF-03 | Phase 4 | Pending |
+| FEE-01 | Phase 4 | Pending |
+| FEE-02 | Phase 4 | Pending |
+| FEE-03 | Phase 4 | Pending |
+| FEE-04 | Phase 4 | Pending |
+| FEE-05 | Phase 4 | Pending |
+| FEE-06 | Phase 4 | Pending |
+| FEE-07 | Phase 4 | Pending |
+| AUTH-01 | Phase 1 | Pending |
+| AUTH-02 | Phase 1 | Pending |
+| AUTH-03 | Phase 1 | Pending |
+| AUTH-04 | Phase 2 | Pending |
+| AUTH-05 | Phase 2 | Pending |
+| UI-01 | Phase 2 | Pending |
+| UI-02 | Phase 1 | Pending |
+| UI-03 | Phase 2 | Pending |
+| UI-04 | Phase 2 | Pending |
+| UI-05 | Phase 5 | Pending |
+| DEPLOY-01 | Phase 1 | Pending |
+| DEPLOY-02 | Phase 1 | Pending |
+| DEPLOY-03 | Phase 5 | Pending |
+| DEPLOY-04 | Phase 1 | Pending |
+| DEPLOY-05 | Phase 5 | Pending |
+| DEPLOY-06 | Phase 5 | Pending |
+| DEPLOY-07 | Phase 5 | Pending |
 
-**Coverage:** 79/79 v1 requirements mapped across 7 phases. No orphans, no duplicates.
+**Coverage:** 54/54 v1 requirements mapped across 5 phases. No orphans, no duplicates.
+
+### Sequencing notes
+
+- **Per-tab authorization (AUTH-05) lands in Phase 2, not Phase 1.** Phase 1 has a single admin account and no tab sharing, so there is nothing yet to authorize between users. It must land in the same phase that introduces a second participant (TAB-03), and cannot slip past it.
+- **Idempotency keys (LEDGER-07) land in Phase 2** with the first user-facing write path, and are non-negotiable there — they are what makes a double-tapped settle button safe, and what keeps offline capability additive later.
+- **Phase 4 depends on Phase 3's schedules.** Late fees are triggered by due dates (SCHED-05), and Payoff progress is measured against an expected schedule. Neither can be pulled forward.
 
 ---
-*Requirements defined: 2026-07-19*
-*Informed by: `.planning/research/SUMMARY.md`*
-*Traceability populated: 2026-07-19 during roadmap creation (see `.planning/ROADMAP.md`)*
+*Requirements defined: 2026-07-23*
+*Supersedes the bit-tabby-derived v1 scope of 79 requirements; pre-revision version in git history*

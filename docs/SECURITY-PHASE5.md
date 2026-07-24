@@ -24,36 +24,42 @@ test for the whole phase: **a failed or double send can never affect a ledger.**
 
 ---
 
-## 0. Decisions the user must make before any code
+## 0. Decisions — RESOLVED (2026-07-24)
 
-These three shape the code and are not the implementer's to choose.
+All three were made by the user before any code. These are now settled; the
+implementer follows them rather than re-opening them.
 
-### D1 — SSRF policy for ntfy (§3)
-- **Option A (recommended):** the ntfy **base URL is instance/admin config**
-  (`BITT_NTFY_URL`, env or `file:`); a user chooses only a **topic string**,
-  validated against a strict charset. Smallest attack surface; users still get
-  per-device push.
-- **Option B:** a **per-user full server URL**, constrained by an explicit host
-  allowlist plus runtime IP-range rejection. More flexible for users running
-  their own ntfy servers; materially more code to get right.
-- Either way: https-only, no redirect following, private/loopback/link-local IP
-  rejection, and connect-time re-resolution (§3).
+### D1 — SSRF policy for ntfy → **admin-pinned server, topic-only per user**
+The ntfy **base URL is instance config** (`BITT_NTFY_URL`, env or `file:`). A
+user chooses only a **topic string**, validated against `[A-Za-z0-9_-]` with a
+bounded length. This is the smallest attack surface; a per-user full server URL
+was rejected. The runtime guards in §3 still apply to the pinned URL: https-only,
+no redirect following, private/loopback/link-local IP rejection, connect-time
+re-resolution.
 
-### D2 — Delivery semantic (§4)
-- **at-most-once** (claim-then-send): never duplicates, but silently drops a
-  payment request on a transient SMTP failure — and the app then assesses a real
-  late fee for a notice the payee never saw.
-- **at-least-once** (send-then-claim, **recommended for requests/reminders**):
-  tolerates a rare harmless duplicate on a crash, never drops the notice that
-  matters.
-- May be chosen per notice type. Record the choice here and in ROADMAP/HANDOFF,
-  and correct the current "idempotent, same pattern as posted_periods" wording,
-  which overclaims (§4).
+### D2 — Delivery semantic → **at-least-once (send-then-claim) for reminders**
+Attempt delivery; on confirmed success, write the claim in its own short
+transaction (§6). A crash between send and claim re-sends one harmless duplicate;
+it never drops a payment request. Payment-made / missed notices are event-
+anchored. Correct the ROADMAP/HANDOFF "idempotent, same pattern as
+posted_periods" wording, which overclaims exactly-once (§4).
 
-### D3 — `/internal/tick` auth mechanism (§5)
-- Agreed direction is a **dedicated shared secret**. Confirm the specifics in
-  §5 are acceptable, or opt for the heavier mTLS / unix-socket alternative
-  (stronger, but more than a household self-hosted deployment usually wants).
+### D3 — `/internal/tick` auth → **shared secret in an Authorization header**
+A dedicated secret via `config.loader.str` (env or `file:`), presented as
+`Authorization: Bearer <secret>`, compared with
+`crypto/subtle.ConstantTimeCompare`, **failing closed when unset**, checked in
+middleware **before any scan**, and rate-limited (§5).
+
+**Container note (governing deployment assumption).** BitTabby runs in a
+container. Loopback binding of `/internal/*` is therefore **not** a reliable
+control — the cron is typically a sidecar or a separate container, not
+`localhost`. The shared secret is the **primary** control, not a backstop, and
+`§5`'s "bind to loopback where the deployment allows" drops to a rare-case
+extra. For the same reason the SSRF private-IP rejection (§3) matters more, not
+less: a container can reach cloud metadata (`169.254.169.254`) and sidecar
+services inside its network namespace. Secrets arrive as mounted files via
+`file:/run/secrets/<name>`, which is world-readable inside an isolated namespace
+— `warnIfSecretFileLoose` deliberately warns rather than refuses (§7).
 
 ---
 
@@ -160,7 +166,9 @@ amplification-DoS and a recipient-enumeration primitive.
 - Check it in **middleware, before the scan** (as `requireAuth` already does).
 - **Rate-limit** the route (reuse the avatar limiter's fixed-window shape) and
   **cap sends per tick**.
-- Prefer binding `/internal/*` to loopback where the deployment allows.
+- Loopback binding of `/internal/*` is unreliable here (container: the cron
+  is often a separate container), so the secret is the primary control; treat
+  loopback binding as a rare-case extra, not a substitute.
 - Assert **no code path logs the raw tick request URL or headers.**
 
 **Interaction with lazy accrual (load-bearing).** Computing "what is due" today

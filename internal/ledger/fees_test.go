@@ -10,14 +10,14 @@ import (
 	"github.com/johnzastrow/bitt/internal/money"
 	"github.com/johnzastrow/bitt/internal/schedule"
 	"github.com/johnzastrow/bitt/internal/store"
-	"github.com/johnzastrow/bitt/internal/store/sqlite"
+	"github.com/johnzastrow/bitt/internal/store/sqldb"
 )
 
 // newFeeFixture builds a tab of a given kind with a schedule, items, and a fee
 // policy, plus a ledger whose clock the test controls.
-func newFeeFixture(t *testing.T, kind store.TabKind, sched schedule.Schedule, policy fee.Policy, items []store.TabItem) (*Service, *sqlite.DB, store.Tab, store.User) {
+func newFeeFixture(t *testing.T, kind store.TabKind, sched schedule.Schedule, policy fee.Policy, items []store.TabItem) (*Service, *sqldb.DB, store.Tab, store.User) {
 	t.Helper()
-	db, err := sqlite.Open(sqlite.Options{
+	db, err := sqldb.Open(sqldb.Options{
 		Path:               filepath.Join(t.TempDir(), "fees.db"),
 		AppendOnlyTriggers: true,
 	})
@@ -81,7 +81,7 @@ func pay(t *testing.T, led *Service, tab store.Tab, user store.User, amount mone
 }
 
 // feeEntries returns a tab's fee entries, and their total magnitude.
-func feeEntries(t *testing.T, db *sqlite.DB, tabID int64) ([]store.Entry, money.Cents) {
+func feeEntries(t *testing.T, db *sqldb.DB, tabID int64) ([]store.Entry, money.Cents) {
 	t.Helper()
 	entries, err := db.ListEntries(context.Background(), tabID)
 	if err != nil {

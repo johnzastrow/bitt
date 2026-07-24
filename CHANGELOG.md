@@ -7,6 +7,60 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [0.8.1] - 2026-07-24 — MariaDB as a second backend
+
+DEPLOY-03. The store now runs on MariaDB (or MySQL) as well as SQLite, selected
+by configuration. SQLite stays the default and the recommendation; MariaDB is
+for a deployment that already runs one or wants the database off the app's disk.
+
+### Added
+- **`BITT_DB_DRIVER=mariadb` + `BITT_DB_DSN`** select the backend. The DSN
+  carries a password, so it accepts the `file:` form and is never logged.
+- **One store package, two dialects.** `internal/store/sqlite` became
+  `internal/store/sqldb`; the SQL queries are shared and unchanged, and only the
+  DDL, the trigger syntax, and error translation sit behind a small `dialect`
+  interface. Each backend has its own migration set (`migrations/sqlite/`,
+  `migrations/mariadb/`) with matching version stems.
+- **The whole store suite runs against both backends** — one suite, exercised
+  twice: set `BITT_TEST_MARIADB_DSN` and every existing test runs on a real
+  MariaDB, each on its own throwaway database. CI does this in a service
+  container. DEPLOY-03's "full test suite green against both backends", met
+  literally.
+- MariaDB deployment is documented in [DEPLOY.md](docs/DEPLOY.md#choosing-a-database),
+  including the one hardening step SQLite cannot offer: `REVOKE UPDATE, DELETE`
+  on the ledger tables, so the application role cannot break append-only even if
+  a trigger were dropped.
+
+### Fixed (both are SQLite-only assumptions MariaDB surfaced — as the roadmap predicted)
+- **The last-admin guard needed real row locking.** On SQLite a single writer
+  serializes every transaction, so a check-then-act is atomic by accident. On a
+  server that runs transactions in parallel, two people each deactivating a
+  different admin both saw the other as still active and both proceeded. The
+  guard now locks the active-admin rows (`SELECT ... FOR UPDATE`) in a
+  deterministic order, so they serialize without deadlocking. Pinned by a test
+  that failed on MariaDB before the fix.
+- **`idempotency_key` was too narrow.** The web layer suffixes a 64-hex-char key
+  (`...-charge`), so the stored value runs to ~75 characters and overflowed
+  `VARCHAR(64)`. MariaDB's `STRICT_ALL_TABLES` — which the app pins deliberately
+  — rejected it outright rather than silently truncating, which is the right
+  failure: truncating an idempotency key would collapse two distinct keys into
+  one and drop a charge. Column widened to `VARCHAR(100)`.
+
+### Security / correctness notes
+- MariaDB connections run under **`utf8mb4_bin`** collation and
+  **`STRICT_ALL_TABLES`**, both pinned by the app. Binary collation restores the
+  byte-for-byte key comparison SQLite does by default — MySQL's case-insensitive
+  default would let two keys differing only in case collide, and those keys are
+  the double-charge guard.
+- The append-only triggers use `SIGNAL SQLSTATE '45000'` with the same message
+  text as SQLite's `RAISE(ABORT)`, so error handling is backend-agnostic.
+  Verified firing on a live server (error 1644) against a real posted entry.
+
+### Docs
+- `docs/DATA-MODEL.md` refreshed to schema `0010`: the three notification tables
+  documented, the new `instance`/`users` columns, a MariaDB type-mapping
+  section, and the last-admin invariant updated for row locking.
+
 ## [0.8.0] - 2026-07-24 — Phase 6 begins: it deploys
 
 Three of Phase 6's five requirements. Someone other than the author can now

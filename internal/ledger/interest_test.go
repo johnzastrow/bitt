@@ -9,11 +9,11 @@ import (
 	"github.com/johnzastrow/bitt/internal/money"
 	"github.com/johnzastrow/bitt/internal/schedule"
 	"github.com/johnzastrow/bitt/internal/store"
-	"github.com/johnzastrow/bitt/internal/store/sqlite"
+	"github.com/johnzastrow/bitt/internal/store/sqldb"
 )
 
 // interestEntries returns a tab's interest charges and their total magnitude.
-func interestEntries(t *testing.T, db *sqlite.DB, tabID int64) ([]store.Entry, money.Cents) {
+func interestEntries(t *testing.T, db *sqldb.DB, tabID int64) ([]store.Entry, money.Cents) {
 	t.Helper()
 	entries, err := db.ListEntries(context.Background(), tabID)
 	if err != nil {
@@ -31,7 +31,7 @@ func interestEntries(t *testing.T, db *sqlite.DB, tabID int64) ([]store.Entry, m
 }
 
 // newLoan builds a Payoff tab with an interest rate and its principal posted.
-func newLoan(t *testing.T, aprBP int64, installment, principal money.Cents) (*Service, *sqlite.DB, store.Tab, store.User) {
+func newLoan(t *testing.T, aprBP int64, installment, principal money.Cents) (*Service, *sqldb.DB, store.Tab, store.User) {
 	t.Helper()
 	led, db, tab, user := newFeeFixture(t, store.TabPayoff,
 		schedule.Schedule{Kind: schedule.MonthlyDay, Anchor: schedule.NewDate(2026, time.January, 1), Billing: schedule.InAdvance},

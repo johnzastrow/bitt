@@ -1,4 +1,4 @@
-package sqlite
+package sqldb
 
 import (
 	"context"
@@ -445,23 +445,48 @@ func (d *DB) SetUserActive(ctx context.Context, id int64, active bool) error {
 	defer func() { _ = tx.Rollback() }()
 
 	if !active {
-		// Count the other active admins. If this account is an admin and no
-		// other active admin remains, refuse.
-		var isAdmin, otherAdmins int
-		if err := tx.QueryRowContext(ctx,
-			`SELECT is_admin FROM users WHERE id = ?`, id).Scan(&isAdmin); err != nil {
+		// Refuse to remove the last administrator. The check and the write share
+		// this transaction so they cannot be split by a concurrent one -- but on
+		// a server that runs transactions in parallel, "cannot be split" needs a
+		// lock to be true. Two people each deactivating a different admin would
+		// otherwise each count the other as still active and both proceed,
+		// leaving zero.
+		//
+		// So lock every active admin row, in id order, before deciding. Two
+		// concurrent deactivations then acquire the SAME set in the SAME order:
+		// one waits for the other rather than deadlocking, and the second one
+		// re-reads a set with the first's change already applied. On SQLite the
+		// single writer serializes regardless and lockRows() is empty.
+		rows, err := tx.QueryContext(ctx,
+			`SELECT id FROM users WHERE is_admin = 1 AND deactivated_at IS NULL ORDER BY id`+
+				d.dialect.lockRows())
+		if err != nil {
 			return translate(err)
 		}
-		if isAdmin != 0 {
-			if err := tx.QueryRowContext(ctx,
-				`SELECT COUNT(*) FROM users
-                 WHERE is_admin = 1 AND deactivated_at IS NULL AND id <> ?`, id).
-				Scan(&otherAdmins); err != nil {
+		var targetIsAdmin bool
+		var otherAdmins int
+		for rows.Next() {
+			var adminID int64
+			if err := rows.Scan(&adminID); err != nil {
+				_ = rows.Close()
 				return translate(err)
 			}
-			if otherAdmins == 0 {
-				return store.ErrLastAdmin
+			if adminID == id {
+				targetIsAdmin = true
+			} else {
+				otherAdmins++
 			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return translate(err)
+		}
+		// The cursor must close before the UPDATE below: SQLite's single
+		// connection cannot execute a write while a read cursor is open on it.
+		_ = rows.Close()
+
+		if targetIsAdmin && otherAdmins == 0 {
+			return store.ErrLastAdmin
 		}
 	}
 

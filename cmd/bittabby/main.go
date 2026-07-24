@@ -28,7 +28,7 @@ import (
 	"github.com/johnzastrow/bitt/internal/config"
 	"github.com/johnzastrow/bitt/internal/ledger"
 	"github.com/johnzastrow/bitt/internal/notify"
-	"github.com/johnzastrow/bitt/internal/store/sqlite"
+	"github.com/johnzastrow/bitt/internal/store/sqldb"
 	"github.com/johnzastrow/bitt/internal/version"
 	"github.com/johnzastrow/bitt/internal/web"
 )
@@ -155,10 +155,17 @@ func run() error {
 		return err
 	}
 
+	// The DSN carries a password, so the MariaDB case logs the driver alone.
+	// The SQLite path is not a secret and is worth having in the log.
+	dbDetail := cfg.DBPath
+	if cfg.DBDriver == "mariadb" {
+		dbDetail = "(mariadb)"
+	}
 	log.Info("starting bittabby",
 		"version", version.Full(),
 		"addr", cfg.Addr,
-		"db", cfg.DBPath,
+		"db_driver", cfg.DBDriver,
+		"db", dbDetail,
 		"append_only_triggers", cfg.AppendOnlyTriggers,
 		"secure_cookies", cfg.SecureCookies,
 	)
@@ -169,7 +176,9 @@ func run() error {
 		log.Warn("secure cookie flag is DISABLED -- do not run this way over a network")
 	}
 
-	db, err := sqlite.Open(sqlite.Options{
+	db, err := sqldb.Open(sqldb.Options{
+		Driver:             sqldb.Driver(cfg.DBDriver),
+		DSN:                cfg.DBDSN,
 		Path:               cfg.DBPath,
 		AppendOnlyTriggers: cfg.AppendOnlyTriggers,
 	})

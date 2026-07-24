@@ -27,8 +27,15 @@ const defaultTimezone = "America/New_York"
 type Config struct {
 	// Addr is the listen address, e.g. ":8080".
 	Addr string
-	// DBPath is the SQLite database file.
+	// DBDriver selects the storage backend: "sqlite" (default) or "mariadb"
+	// (DEPLOY-03). Set via BITT_DB_DRIVER.
+	DBDriver string
+	// DBPath is the SQLite database file. Used when DBDriver is sqlite.
 	DBPath string
+	// DBDSN is the MariaDB connection string, e.g.
+	// "bitt:pass@tcp(db:3306)/bitt". Used when DBDriver is mariadb. It carries a
+	// password, so it accepts the file: form and is never logged.
+	DBDSN string
 	// DefaultTimezone seeds the instance timezone at first-run setup. After
 	// setup the value stored in the database is authoritative.
 	DefaultTimezone string
@@ -178,7 +185,9 @@ func Load() (Config, error) {
 	var ld loader
 	c := Config{
 		Addr:               ld.str("BITT_ADDR", ":8080"),
+		DBDriver:           ld.str("BITT_DB_DRIVER", "sqlite"),
 		DBPath:             ld.str("BITT_DB_PATH", filepath.Join("data", "bitt.db")),
+		DBDSN:              ld.str("BITT_DB_DSN", ""),
 		DefaultTimezone:    ld.str("BITT_TIMEZONE", defaultTimezone),
 		SecureCookies:      envBool("BITT_SECURE_COOKIES", true),
 		AppendOnlyTriggers: envBool("BITT_LEDGER_TRIGGERS", true),
@@ -214,8 +223,19 @@ func Load() (Config, error) {
 	if c.Addr == "" {
 		return Config{}, fmt.Errorf("config: BITT_ADDR must not be empty")
 	}
-	if c.DBPath == "" {
-		return Config{}, fmt.Errorf("config: BITT_DB_PATH must not be empty")
+	switch c.DBDriver {
+	case "", "sqlite":
+		c.DBDriver = "sqlite"
+		if c.DBPath == "" {
+			return Config{}, fmt.Errorf("config: BITT_DB_PATH must not be empty")
+		}
+	case "mariadb", "mysql":
+		c.DBDriver = "mariadb"
+		if c.DBDSN == "" {
+			return Config{}, fmt.Errorf("config: BITT_DB_DRIVER=mariadb requires BITT_DB_DSN")
+		}
+	default:
+		return Config{}, fmt.Errorf("config: BITT_DB_DRIVER %q is not supported (want sqlite or mariadb)", c.DBDriver)
 	}
 	if err := c.Notify.validate(); err != nil {
 		return Config{}, err
@@ -262,6 +282,11 @@ func (n NotifyConfig) validate() error {
 // EnsureDataDir creates the database's parent directory with owner-only
 // permissions, since it holds financial records.
 func (c Config) EnsureDataDir() error {
+	// MariaDB keeps its data inside a server; there is no local directory to
+	// create, and DBPath is unset.
+	if c.DBDriver == "mariadb" {
+		return nil
+	}
 	dir := filepath.Dir(c.DBPath)
 	if dir == "" || dir == "." {
 		return nil

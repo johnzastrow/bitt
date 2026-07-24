@@ -11,14 +11,14 @@ import (
 	"github.com/johnzastrow/bitt/internal/money"
 	"github.com/johnzastrow/bitt/internal/schedule"
 	"github.com/johnzastrow/bitt/internal/store"
-	"github.com/johnzastrow/bitt/internal/store/sqlite"
+	"github.com/johnzastrow/bitt/internal/store/sqldb"
 )
 
 // newScheduledFixture builds a tab with a schedule and line items, and a ledger
 // whose clock the test controls.
-func newScheduledFixture(t *testing.T, sched schedule.Schedule, items []store.TabItem) (*Service, *sqlite.DB, store.Tab) {
+func newScheduledFixture(t *testing.T, sched schedule.Schedule, items []store.TabItem) (*Service, *sqldb.DB, store.Tab) {
 	t.Helper()
-	db, err := sqlite.Open(sqlite.Options{
+	db, err := sqldb.Open(sqldb.Options{
 		Path:               filepath.Join(t.TempDir(), "accrual.db"),
 		AppendOnlyTriggers: true,
 	})
@@ -61,7 +61,7 @@ func at(led *Service, y int, m time.Month, d int) *Service {
 	})
 }
 
-func accrue(t *testing.T, led *Service, db *sqlite.DB, tab store.Tab, loc *time.Location) Accrual {
+func accrue(t *testing.T, led *Service, db *sqldb.DB, tab store.Tab, loc *time.Location) Accrual {
 	t.Helper()
 	ctx := context.Background()
 	history, err := db.ListItemHistory(ctx, tab.ID)

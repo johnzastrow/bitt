@@ -17,7 +17,7 @@ import (
 	"github.com/johnzastrow/bitt/internal/ledger"
 	"github.com/johnzastrow/bitt/internal/notify"
 	"github.com/johnzastrow/bitt/internal/store"
-	"github.com/johnzastrow/bitt/internal/store/sqlite"
+	"github.com/johnzastrow/bitt/internal/store/sqldb"
 	"github.com/johnzastrow/bitt/internal/tz"
 	"github.com/johnzastrow/bitt/internal/version"
 )
@@ -29,7 +29,7 @@ type harness struct {
 	t       *testing.T
 	server  *httptest.Server
 	client  *http.Client
-	db      *sqlite.DB
+	db      *sqldb.DB
 }
 
 func newHarness(t *testing.T) *harness { return newHarnessCfg(t, config.NotifyConfig{}) }
@@ -42,7 +42,7 @@ func newHarnessWithTick(t *testing.T, secret string) *harness {
 func newHarnessCfg(t *testing.T, nc config.NotifyConfig) *harness {
 	t.Helper()
 
-	db, err := sqlite.Open(sqlite.Options{
+	db, err := sqldb.Open(sqldb.Options{
 		Path:               filepath.Join(t.TempDir(), "web.db"),
 		AppendOnlyTriggers: true,
 	})

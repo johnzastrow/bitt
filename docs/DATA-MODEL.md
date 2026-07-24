@@ -1,18 +1,22 @@
 # BitTabby — Physical Data Model and Data Dictionary
 
-The physical schema as SQLite actually holds it, plus the rules that govern each
-field. Generated from a migrated database at schema version `0007_profiles`
-and checked against `internal/store/sqlite/migrations/`.
+The physical schema and the rules that govern each field, at schema version
+`0010_instance_notify`, checked against `internal/store/sqldb/migrations/`.
 
 This describes **what is stored**. For why the application is shaped this way,
 see [PROJECT.md](PROJECT.md); for the invariants the code enforces above the
 database, see [planning/HANDOFF.md](planning/HANDOFF.md).
 
-**Portability note.** Every statement lives behind the interfaces in
-`internal/store`, and MariaDB is a planned second backend (DEPLOY-02). That is
-why there are no SQLite-only types here, no `AUTOINCREMENT` outside surrogate
-keys, and why "no schedule" is an empty string rather than `NULL` — comparisons
-then need no `COALESCE` on either backend.
+**Two backends, one schema (DEPLOY-03).** The store is `internal/store/sqldb`,
+and it runs on **SQLite** (the default) or **MariaDB**. There is one set of Go
+queries; only the DDL, the trigger syntax, and error translation differ, behind
+the small `dialect` interface. The design that makes that possible is visible in
+this document: timestamps are ISO-8601 **text** so they compare
+lexicographically and mean the same instant on either backend; "no schedule" is
+an empty string, not `NULL`, so comparisons need no `COALESCE`; there is no
+`AUTOINCREMENT` outside surrogate keys, no `ON CONFLICT`, and no `RETURNING`.
+Column types below are given in SQLite terms; [§6](#6-mariadb-type-mapping) is
+the MariaDB translation and the few places the two genuinely diverge.
 
 ---
 
@@ -137,26 +141,50 @@ erDiagram
         TEXT posted_at
     }
 
+    tab_reminders {
+        INTEGER tab_id PK "FK to tabs"
+        INTEGER days PK
+        TEXT title
+        TEXT body
+    }
+
+    instance_reminders {
+        INTEGER days PK
+        TEXT title
+        TEXT body
+    }
+
+    sent_notifications {
+        INTEGER tab_id PK "FK to tabs"
+        TEXT event_key PK
+        TEXT channel PK
+        INTEGER user_id FK
+        TEXT sent_at
+    }
+
     schema_migrations {
         TEXT version PK
         TEXT applied_at
     }
 
-    users            ||--o{ sessions         : "authenticates via"
-    users            ||--o{ tabs             : "created"
-    users            ||--o{ entries          : "recorded"
-    users            ||--o{ tab_participants : "belongs to"
-    tabs             ||--o{ tab_participants : "has"
-    tabs             ||--o{ tab_items        : "bills"
-    tabs             ||--o{ entries          : "accumulates"
-    entries          ||--o{ entry_items      : "snapshots"
-    entries          |o--o| entries          : "reverses"
-    tabs             ||--o{ posted_periods   : "claims"
-    entries          ||--o| posted_periods   : "backs"
-    tabs             ||--o{ posted_fees      : "claims"
-    entries          ||--o| posted_fees      : "backs"
-    tabs             ||--o{ posted_interest  : "claims"
-    entries          ||--o| posted_interest  : "backs"
+    users            ||--o{ sessions           : "authenticates via"
+    users            ||--o{ tabs               : "created"
+    users            ||--o{ entries            : "recorded"
+    users            ||--o{ tab_participants   : "belongs to"
+    tabs             ||--o{ tab_participants   : "has"
+    tabs             ||--o{ tab_items          : "bills"
+    tabs             ||--o{ entries            : "accumulates"
+    entries          ||--o{ entry_items        : "snapshots"
+    entries          |o--o| entries            : "reverses"
+    tabs             ||--o{ posted_periods     : "claims"
+    entries          ||--o| posted_periods     : "backs"
+    tabs             ||--o{ posted_fees        : "claims"
+    entries          ||--o| posted_fees        : "backs"
+    tabs             ||--o{ posted_interest    : "claims"
+    entries          ||--o| posted_interest    : "backs"
+    tabs             ||--o{ tab_reminders      : "overrides with"
+    tabs             ||--o{ sent_notifications : "has sent"
+    users            ||--o{ sent_notifications : "received"
 ```
 
 ### Reading the diagram
@@ -171,6 +199,11 @@ Three groups, and the distinction matters more than the arrows:
 - **Accrual claims** — `posted_periods`, `posted_fees`, `posted_interest`. Also
   append-only. Each is a `(tab, key)` primary key that makes one automatic
   posting happen exactly once, however many readers race.
+- **Notifications** — `tab_reminders`, `instance_reminders` (mutable
+  configuration for what reminders say), and `sent_notifications` (an
+  append-only send-once claim, the fourth sibling of the accrual tables). All
+  three sit **entirely off the balance path** — a delivery failure can never
+  touch the ledger.
 
 ---
 
@@ -200,6 +233,17 @@ Exactly one row, enforced by `CHECK (id = 1)`.
 | `timezone` | TEXT | no | IANA name, default `UTC`. **Every period boundary and due date is evaluated in this zone.** The binary embeds `time/tzdata` so a scratch container can still resolve it. |
 | `setup_completed_at` | TEXT | yes | `NULL` until first-run setup succeeds. Once set it never returns to `NULL`; that is what closes the setup screen permanently (AUTH-03). |
 | `created_at` | TEXT | no | When the instance was initialised. |
+| `smtp_host` | TEXT | no | `''` = email off. The non-secret delivery settings (migration 0010) an admin can set under **Notifications**. **An environment value wins over the stored one, field by field**, so a container stays reproducible from its compose file. |
+| `smtp_port` | INTEGER | no | 0 = use the built-in default (587). |
+| `smtp_username` | TEXT | no | `''` for an unauthenticated relay. |
+| `email_from` | TEXT | no | Validated by `net/mail` before storage, which refuses the newline that would carry a header injection. |
+| `ntfy_url` | TEXT | no | `''` = ntfy off. **https only.** The server is pinned here; a user chooses only a topic. |
+
+**Not here, deliberately.** The SMTP password, the ntfy token, and the tick
+secret are **environment-or-file only** and have no column. A secret in the
+database would need encryption at rest, whose key would come from the
+environment anyway, and it would land in every backup. See the header of
+migration `0010` and [DEPLOY.md](DEPLOY.md#secrets).
 
 ### 3.2 `users` — accounts
 
@@ -215,6 +259,9 @@ Exactly one row, enforced by `CHECK (id = 1)`.
 | `deactivated_at` | TEXT | yes | `NULL` means active. Deactivation is soft: the account stops authenticating but its ledger entries keep their author. Accounts are never deleted, because `entries.actor_user_id` must stay resolvable forever. |
 | `avatar_png` | BLOB | yes | The account's picture, or `NULL`. **Always PNG produced by `internal/avatar`, never the uploaded bytes** — the upload is decoded, cropped square, downscaled, and re-encoded, which strips EXIF/GPS, discards trailing data, and stops a file crafted to parse as two formats. Stored in the database rather than on disk so the deployment stays one binary and one file (DEPLOY-04), which also keeps backup/restore (DEPLOY-06) a single-file promise. **Deliberately excluded from `userColumns`**: a user row is read on every authenticated request and dragging an image through that path would be a steady, pointless cost. |
 | `avatar_updated_at` | TEXT | no | When the picture last changed, `''` for none. Serves as the ETag on the avatar route and as the `?v=` cache-buster in markup, so a changed picture appears at once instead of after the max-age. It is also the sole source of `User.HasAvatar()`, which is why it is cleared in the same statement as the blob. |
+| `ntfy_topic` | TEXT | no | The user's ntfy topic, `''` if unset. **The only user-controlled part of an ntfy destination** (the server is admin-pinned). Validated to `[A-Za-z0-9_-]{1,64}` by `notify.ValidTopic` on the way in and again at send. |
+| `notify_email` | INTEGER | no | 0/1, default 1. Whether the user wants email reminders. |
+| `notify_ntfy` | INTEGER | no | 0/1, default 0 — off until a topic is set, since ntfy needs one and email does not. |
 
 > **Hazard.** `GetSession` joins `users` with its own hand-written column list
 > rather than reusing `userColumns`, because the join needs a `u.` qualifier.
@@ -328,7 +375,11 @@ deliberately *not* the same:
 
 **The authoritative record. Append-only, enforced three ways:** `store.EntryStore`
 exposes no update or delete method, the ledger service is the only writer, and
-SQLite `BEFORE UPDATE`/`BEFORE DELETE` triggers `RAISE(ABORT)` on this table.
+`BEFORE UPDATE`/`BEFORE DELETE` triggers abort any attempt on this table —
+`RAISE(ABORT, ...)` on SQLite, `SIGNAL SQLSTATE '45000'` on MariaDB, both raising
+the same `...append-only...` message so error handling treats them identically.
+On MariaDB an operator can add a fourth layer the SQLite build has no privilege
+system for: `REVOKE UPDATE, DELETE` from the application's database role.
 
 | Column | Type | Null | Rules and meaning |
 |---|---|---|---|
@@ -398,12 +449,54 @@ tables also carry append-only triggers: repointing a claim at a different entry,
 or deleting one so a cycle could post again, would defeat this as surely as
 editing the ledger would.
 
-### 3.10 `schema_migrations`
+### 3.10 The notification tables
+
+Three tables, added in migrations 0008–0010, all **off the balance path** — the
+load-bearing rule of the notification feature is that a failed or double send can
+never touch a ledger.
+
+**`sent_notifications`** — the send-once claim, and the fourth sibling of the
+accrual claim tables. Same shape, **weaker guarantee on purpose.**
+
+| Column | Type | Rules and meaning |
+|---|---|---|
+| `tab_id` | INTEGER | PK part, FK → `tabs.id`, cascade. |
+| `event_key` | TEXT | PK part. Identifies one notifiable event, e.g. `reminder:2026-08-01:d14`. **Carries the due date and lead time, never the message text** — which is why editing a reminder cannot make an already-sent one fire again. |
+| `channel` | TEXT | PK part. `email` or `ntfy`, so a person on both is not double-notified on one channel while a retry can still reach the other. |
+| `user_id` | INTEGER | FK → `users.id`. |
+| `sent_at` | TEXT | When the claim was recorded. |
+
+Append-only, like every claim. But unlike the accrual tables its guarantee is
+**at-least-once, not exactly-once**: a network send cannot join a database
+transaction, so the claim is written *after* a confirmed success, in its own
+short transaction, never inside a ledger transaction. A crash between send and
+claim re-sends one harmless duplicate rather than dropping the notice.
+
+**`tab_reminders`** and **`instance_reminders`** — the reminder message, per tab
+and instance-wide. **Configuration, not claims**: they are meant to be edited, so
+they carry no append-only triggers.
+
+| Column | Type | Rules and meaning |
+|---|---|---|
+| `tab_id` | INTEGER | (`tab_reminders` only) PK part, FK → `tabs.id`, cascade. |
+| `days` | INTEGER | PK part. Days before the due date this reminder fires, `1..3650`. |
+| `title` | TEXT | The message title. Fills in `{tab} {amount} {due} {days} {when} {url}` at send. Provider/admin-supplied, so validated on input (no control characters) as well as at send. |
+| `body` | TEXT | The message body. Bounded to 4,096 bytes — ntfy.sh's free-tier limit, which the app enforces. |
+
+**Resolution order at send (the reason there are two tables plus the
+environment).** A tab's own reminders win; then the instance's stored defaults;
+then `BITT_REMINDER_*` from the environment; then the built-in 14/7/1. This runs
+**opposite** to how delivery settings resolve (environment beats stored),
+because a message is content — the most specific author should win — while a
+delivery setting is deployment, where the thing under version control should
+win. See `internal/web/notifyconfig.go`.
+
+### 3.11 `schema_migrations`
 
 | Column | Type | Rules |
 |---|---|---|
-| `version` | TEXT | PK. The migration filename stem, e.g. `0007_profiles`. |
-| `applied_at` | TEXT | Migrations are applied in filename order, each inside its own transaction, and recorded here. **Forward-only — there are no down migrations.** |
+| `version` | TEXT | PK. The migration filename stem, e.g. `0010_instance_notify`. |
+| `applied_at` | TEXT | Migrations are applied in filename order, each inside its own transaction, and recorded here. **Forward-only — there are no down migrations.** Each backend has its own migration set (`migrations/sqlite/`, `migrations/mariadb/`) with matching version stems, so a database records the same version whichever backend holds it. |
 
 ---
 
@@ -422,8 +515,13 @@ if they stop holding.
 5. **One claim per `(tab, period)`**, and one entry per claim.
 6. **Every entry has a resolvable `actor_user_id`** — accounts deactivate, never
    delete.
-7. **At least one active administrator exists**, enforced inside the write
-   transaction.
+7. **At least one active administrator exists.** The guard runs inside the write
+   transaction, and on MariaDB it locks the active-admin rows (`SELECT ... FOR
+   UPDATE`) so two concurrent deactivations serialize instead of each seeing the
+   other and both proceeding. On SQLite the single writer serializes regardless.
+   This is the archetypal case where a check-then-act correct under SQLite's one
+   writer needs an explicit lock the moment a real server runs transactions in
+   parallel.
 8. **Money is only ever integer cents**; no floating-point column or conversion
    exists in the money path.
 9. **Archived tabs do not accrue.**
@@ -488,3 +586,41 @@ the last one. A period-based model cannot reproduce that to the cent. This is
 why `loan_payment_cents` is entered by the Provider and never overwritten: the
 lender's figure is the one that must be paid, and the app reports the difference
 rather than pretending it can resolve it.
+
+---
+
+## 6. MariaDB type mapping
+
+The dictionary above gives SQLite types. On MariaDB the same columns are created
+with the types below (`internal/store/sqldb/migrations/mariadb/`). The mapping is
+mechanical; the notes are the handful of places the choice is load-bearing
+rather than cosmetic.
+
+| SQLite | MariaDB | Note |
+|---|---|---|
+| `INTEGER PRIMARY KEY AUTOINCREMENT` | `BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY` | Surrogate keys. |
+| `INTEGER` (counts, cents, flags) | `BIGINT` for money and counts, `INT` for small ones, `TINYINT` for 0/1 | Money is `BIGINT` cents; nothing is float, on either backend. |
+| `TEXT` (indexed / keyed) | `VARCHAR(n)` | MySQL cannot index a `TEXT` column without a prefix length. Lengths are generous; none of this data is large text. |
+| `TEXT` (timestamps) | `VARCHAR(32)` | The **same** ISO-8601 UTC strings, so they still compare lexicographically and a row means the same instant on either backend. |
+| `TEXT` (message body) | `VARCHAR(4096)` | Exactly ntfy.sh's free-tier message limit, which the app already enforces. |
+| `BLOB` | `MEDIUMBLOB` | MySQL's plain `BLOB` caps at 64 KB; `MEDIUMBLOB` removes the ceiling as a concern. |
+| `RAISE(ABORT, msg)` in a trigger | `SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = msg` | Same message text, so error translation is backend-agnostic. |
+
+**Whole-database conventions on MariaDB.** `ENGINE=InnoDB` (transactions and
+foreign keys), `CHARACTER SET utf8mb4`, and — the one that is not a default —
+**`COLLATE utf8mb4_bin`**. MySQL's default collation is case-*insensitive*, under
+which two `period_key`s or two `idempotency_key`s differing only in case would
+collide. Those keys are the entire double-charge guard, so the schema restores
+the byte-for-byte comparison SQLite does by default. The session also runs under
+`STRICT_ALL_TABLES`: an over-long value is **rejected**, not silently truncated —
+which is how the `idempotency_key` column width was found, and exactly the
+behaviour you want on a key where truncation would drop a charge.
+
+**`idempotency_key` is `VARCHAR(100)`, not `VARCHAR(64)`.** The web layer derives
+per-form keys by suffixing a 64-hex-char base (`...-charge`, `...-adjustment`),
+so the stored value runs to ~75 characters.
+
+**One thing genuinely differs.** `INTEGER PRIMARY KEY CHECK (id = 1)` on
+`instance` is a plain `INT ... CHECK (id = 1)` on MariaDB. The singleton
+guarantee is the `CHECK`, which both honour; SQLite's rowid aliasing is not
+relied upon.

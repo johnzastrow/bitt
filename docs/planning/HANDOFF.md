@@ -170,7 +170,7 @@ internal/schedule/     pure period arithmetic. No database, no clock, no I/O
 internal/fee/          pure late-fee sizing (fixed/percent, cap, rounding)
 internal/loan/         pure amortization: suggested payment, projection, drift
 internal/store/        persistence CONTRACT (interfaces only, no SQL)
-internal/store/sqlite/ the only implementation, plus embedded migrations
+internal/store/sqldb/ the store; SQLite and MariaDB behind one dialect seam
 internal/ledger/       the ONLY write boundary for financial entries. accrual.go
                        (period charges), fees.go, interest.go, payoff.go,
                        statement.go -- all accrual runs lazily on read
@@ -302,7 +302,7 @@ curl then correctly switches to GET on the redirect.
 (the WAL and shm sidecars only appear on first write). Do not remove it.
 
 **`go:embed` cannot reach outside its own package directory.** Migrations live
-at `internal/store/sqlite/migrations/` for exactly this reason.
+at `internal/store/sqldb/migrations/` for exactly this reason.
 
 **A charge can appear without anyone posting one.** Reading a tab bills it, so a
 balance moves on load. The page says so rather than letting the number move

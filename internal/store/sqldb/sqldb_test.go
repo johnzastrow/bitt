@@ -1,4 +1,4 @@
-package sqlite
+package sqldb
 
 import (
 	"context"
@@ -14,10 +14,19 @@ import (
 	"github.com/johnzastrow/bitt/internal/store"
 )
 
-// newTestDB returns a migrated database backed by a temp file. A file rather
-// than :memory: so that WAL and trigger behavior match production.
+// newTestDB returns a migrated database.
+//
+// By default it is a SQLite temp file -- a file rather than :memory: so WAL and
+// trigger behaviour match production. When BITT_TEST_MARIADB_DSN is set the
+// SAME suite runs against a real MariaDB instead, on a fresh, uniquely-named
+// database that is dropped afterward. This is how DEPLOY-03's "full test suite
+// green against both backends" is met without a parallel set of tests: there is
+// one suite, and it is exercised twice.
 func newTestDB(t *testing.T) *DB {
 	t.Helper()
+	if dsn := os.Getenv("BITT_TEST_MARIADB_DSN"); dsn != "" {
+		return newMariaTestDB(t, dsn)
+	}
 	db, err := Open(Options{
 		Path:               filepath.Join(t.TempDir(), "test.db"),
 		AppendOnlyTriggers: true,
@@ -162,14 +171,10 @@ func TestBalanceIsDerived(t *testing.T) {
 	}
 
 	// There must be no balance column to drift out of step.
-	var count int
-	err = db.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM pragma_table_info('tabs') WHERE name LIKE '%balance%'`).Scan(&count)
-	if err != nil {
-		t.Fatalf("introspect: %v", err)
-	}
-	if count != 0 {
-		t.Errorf("tabs table has %d balance-like column(s); balances must be derived (LEDGER-03)", count)
+	for _, col := range columnNames(t, db, "tabs") {
+		if strings.Contains(col, "balance") {
+			t.Errorf("tabs has a %q column; balances must be derived (LEDGER-03)", col)
+		}
 	}
 }
 
@@ -682,4 +687,40 @@ func TestPaymentMethodPersists(t *testing.T) {
 	}); err == nil {
 		t.Error("an unrecognized payment method was accepted")
 	}
+}
+
+// columnNames returns a table's column names, using whichever catalog the
+// active backend offers -- pragma_table_info on SQLite, information_schema on
+// MariaDB. It exists so a schema-introspection test runs unchanged on both.
+func columnNames(t *testing.T, db *DB, table string) []string {
+	t.Helper()
+	var query string
+	var args []any
+	switch db.dialect.name() {
+	case "mariadb":
+		query = `SELECT column_name FROM information_schema.columns
+		         WHERE table_schema = DATABASE() AND table_name = ?`
+		args = []any{table}
+	default:
+		// pragma_table_info takes the table as a literal, not a bind parameter.
+		query = `SELECT name FROM pragma_table_info('` + table + `')`
+	}
+	rows, err := db.db.QueryContext(context.Background(), query, args...)
+	if err != nil {
+		t.Fatalf("introspect %s: %v", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var cols []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan column: %v", err)
+		}
+		cols = append(cols, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("introspect %s: %v", table, err)
+	}
+	return cols
 }

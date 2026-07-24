@@ -163,7 +163,7 @@ balance path entirely -- a failed or double send can never affect a ledger.
 
 ---
 
-## Phase 6 — Ship  -- IN PROGRESS (3 of 5, 0.8.0)
+## Phase 6 — Ship  -- IN PROGRESS (4 of 5, 0.8.1)
 
 **Goal:** someone other than the author can deploy it.
 
@@ -175,11 +175,19 @@ workflow with provenance attestation, `bittabby --healthcheck`, and
 [../DEPLOY.md](../DEPLOY.md). The restore path was exercised: the data volume
 was destroyed outright and the data came back.
 
-**Remaining:** DEPLOY-03 (MariaDB) and UI-05 (PWA). MariaDB is the one with
-real risk; the PWA is self-contained.
+**Delivered (0.8.1):** DEPLOY-03. MariaDB as a second backend, selected by
+`BITT_DB_DRIVER=mariadb` + `BITT_DB_DSN`. One store package (`internal/store/
+sqldb`) serves both behind a small `dialect` seam; the entire store suite runs
+green against a real MariaDB as well as SQLite (one suite, exercised twice, via
+`BITT_TEST_MARIADB_DSN`). As the roadmap predicted, MariaDB surfaced two
+SQLite-only assumptions -- a check-then-act last-admin guard that needed row
+locking on a parallel server, and an idempotency-key column that STRICT mode
+caught as too narrow. Both fixed.
+
+**Remaining:** UI-05 (PWA), which is self-contained.
 
 **Exit criteria**
-- MariaDB selectable by configuration, with the full test suite green against both backends
+- ~~MariaDB selectable by configuration, with the full test suite green against both backends~~ (0.8.1)
 - ~~Docker image published via GitHub, running as non-root~~ (0.8.0)
 - ~~Secrets read from environment or file; none present in the image or the repository~~ (0.8.0)
 - App installs to a phone home screen and opens to a cached shell

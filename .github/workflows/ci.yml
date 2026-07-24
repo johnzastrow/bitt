@@ -48,6 +48,44 @@ jobs:
       - name: Build
         run: CGO_ENABLED=0 go build -trimpath -o /dev/null ./cmd/bittabby
 
+  # DEPLOY-03: the same store suite, run against a real MariaDB. It is a separate
+  # job because it needs a service container the SQLite job has no use for, and
+  # because a MariaDB outage should read as "the MariaDB job failed" rather than
+  # failing the whole matrix.
+  mariadb:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: roottest
+          MARIADB_DATABASE: bitt_test
+          MARIADB_USER: bitt
+          MARIADB_PASSWORD: bitttest
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Grant the test user rights over the per-test databases
+        # Each test creates and drops its own bitt_test_* database, which needs a
+        # wildcard grant the compose defaults do not include.
+        run: |
+          mysql -h127.0.0.1 -uroot -proottest -e \
+            "GRANT ALL PRIVILEGES ON \`bitt_test%\`.* TO 'bitt'@'%'; FLUSH PRIVILEGES;"
+
+      - name: Store suite against MariaDB
+        env:
+          BITT_TEST_MARIADB_DSN: bitt:bitttest@tcp(127.0.0.1:3306)/bitt_test
+        run: go test ./internal/store/sqldb/ -count=1
+
   image:
     # Build the image on every change so a broken Dockerfile is caught here
     # rather than at release. Nothing is pushed; that is release.yml's job.

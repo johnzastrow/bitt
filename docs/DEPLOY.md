@@ -11,6 +11,7 @@ short.
 
 - [Quick start with Docker](#quick-start-with-docker)
 - [Configuration](#configuration)
+- [Choosing a database](#choosing-a-database)
 - [Secrets](#secrets)
 - [Delivering reminders](#delivering-reminders)
 - [Running without Docker](#running-without-docker)
@@ -93,7 +94,9 @@ The ones that matter on a first deployment:
 | Variable | Default | Notes |
 |---|---|---|
 | `BITT_ADDR` | `:8080` | Listen address |
-| `BITT_DB_PATH` | `data/bitt.db` | `/data/bitt.db` in the image |
+| `BITT_DB_DRIVER` | `sqlite` | `sqlite` or `mariadb` (see [Choosing a database](#choosing-a-database)) |
+| `BITT_DB_PATH` | `data/bitt.db` | SQLite file; `/data/bitt.db` in the image |
+| `BITT_DB_DSN` | unset | MariaDB connection string; required when the driver is `mariadb` |
 | `BITT_TIMEZONE` | `America/New_York` | Seeds first-run setup; after that the stored value is authoritative |
 | `BITT_SECURE_COOKIES` | `true` | **Set false only for plain HTTP on localhost** |
 | `BITT_BASE_URL` | unset | External origin, used for the link in a reminder |
@@ -119,6 +122,57 @@ Reminder lead times and message text resolve the other way — a tab's own
 reminders beat the instance defaults, which beat the environment. A message is
 content, where the most specific author should win; a delivery setting is
 deployment, where the thing under version control should win.
+
+---
+
+## Choosing a database
+
+**SQLite is the default and the recommendation.** For a household instance it is
+the right answer and it is not close: one file, no server process, and a backup
+is a single file you can copy. Everything above assumes it.
+
+**MariaDB (or MySQL) is supported (DEPLOY-03)** for a deployment that already
+runs one, or that wants the database off the application's disk. Select it with:
+
+```bash
+BITT_DB_DRIVER=mariadb
+BITT_DB_DSN=file:/run/secrets/db_dsn    # user:pass@tcp(host:3306)/dbname
+```
+
+The DSN carries a password, so supply it as a `file:` secret rather than inline,
+and it is never written to a log. The database must exist; the app creates its
+own tables on first start but not the schema that holds them:
+
+```sql
+CREATE DATABASE bitt CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+CREATE USER 'bitt'@'%' IDENTIFIED BY '...';
+GRANT ALL PRIVILEGES ON bitt.* TO 'bitt'@'%';
+```
+
+The `utf8mb4_bin` collation is not optional. MySQL's default is
+case-*insensitive*, under which two idempotency keys or two period keys
+differing only in case would collide — and those keys are what stop a double
+charge. The app pins the collation and `STRICT_ALL_TABLES` on its own
+connections regardless, but creating the database with the right collation keeps
+everything consistent.
+
+**Hardening MariaDB can go one step SQLite cannot.** The ledger's append-only
+rule is enforced by triggers on both backends, but on MariaDB you can also give
+the application role no ability to break it in the first place:
+
+```sql
+REVOKE UPDATE, DELETE ON bitt.entries FROM 'bitt'@'%';
+REVOKE UPDATE, DELETE ON bitt.entry_items FROM 'bitt'@'%';
+-- and likewise posted_periods, posted_fees, posted_interest, sent_notifications
+```
+
+Do this only if you are comfortable that a future migration needing those grants
+will fail loudly until you restore them.
+
+**The two backends are not migrate-compatible.** There is no built-in path that
+copies a live SQLite database into MariaDB; choose one at deployment. The schema
+is identical table-for-table, so a bespoke export/import is possible, but it is
+not a supported button.
 
 ---
 

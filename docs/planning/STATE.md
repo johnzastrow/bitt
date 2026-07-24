@@ -1,20 +1,24 @@
 # BitTabby — Current State
 
-**Updated:** 2026-07-23
+**Updated:** 2026-07-24
 
 ## Where things stand
 
-**Phases 1-4 complete and verified.** 49 of 54 v1 requirements delivered.
+**Phases 1–5 complete; Phase 6 (ship) is 4 of 5.** 53 of 54 v1 requirements
+delivered. Only UI-05 (the PWA) remains.
 
 | Item | State |
 |------|-------|
 | Repository | `main`, working tree clean |
-| Scope | 54 requirements, 5 phases |
-| Stack | Go 1.26 + templ + htmx 2.0.4 (vendored), SQLite |
+| Version | 0.8.1 |
+| Scope | 54 requirements, 6 phases |
+| Stack | Go 1.26 + templ + htmx 2.0.4 (vendored); SQLite or MariaDB |
 | Phase 1 | Complete — walking skeleton |
 | Phase 2 | Complete — the settle loop |
 | Phase 3 | Complete — recurrence |
 | Phase 4 | Complete — payoff tabs, late fees, interest |
+| Phase 5 | Complete — notifications (email/ntfy, per-tab and instance settings) |
+| Phase 6 | In progress — Docker + deploy + backup/restore + MariaDB shipped; PWA remains |
 
 ## What works today
 
@@ -46,6 +50,9 @@ entry.
 | 1 | LEDGER-01, 03, 04, 05, 06; TAB-01, 04, 05; CHG-03; AUTH-01, 02, 03; UI-02; DEPLOY-01, 02, 04 |
 | 2 | LEDGER-02, 07; TAB-03, 06; PAY-01, 02, 03, 04, 05; AUTH-04, 05; UI-01, 03, 04 |
 | 3 | SCHED-01, 02, 03, 04, 05; CHG-01, 02, 04; TAB-02 (pulled forward) |
+| 4 | TAB-02; PAYOFF-01, 02, 03; FEE-01…07 |
+| 5 | Notifications (added by request; email/ntfy reminders, per-tab + instance config) |
+| 6 | DEPLOY-03 (MariaDB), 05 (Docker), 06 (secrets), 07 (backup/restore) — **UI-05 (PWA) outstanding** |
 
 ## Verification performed
 
@@ -73,14 +80,13 @@ entry.
 
 ## Next action
 
-**Phase 5 — notifications** (email / ntfy). Not in the original list; added by
-request. External-cron-driven `/internal/tick`, idempotent via a sent-claim
-table, per-user preferences. Must stay entirely off the ledger path. Then
-**Phase 6 — ship** (MariaDB, Docker, PWA, backup/restore).
+**UI-05 — the PWA.** The one requirement left in v1: a web-app manifest, a
+service worker that caches the app shell, and home-screen icons, so the app
+installs to a phone and opens to a cached shell (data operations still require a
+connection). Self-contained; no backend risk.
 
-Phase 4 delivered PAYOFF-01/02/03 and FEE-01 through 07, plus, by request,
-declining-balance interest on loans, an in-app upcoming-payment notice, version
-display, and a header logo.
+After that, v1 is feature-complete and the work is release polish: a milestone
+audit, a tagged `v1.0.0`, and the first published image via the release workflow.
 
 ## Working agreement
 

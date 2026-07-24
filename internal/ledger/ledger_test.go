@@ -8,12 +8,12 @@ import (
 
 	"github.com/johnzastrow/bitt/internal/money"
 	"github.com/johnzastrow/bitt/internal/store"
-	"github.com/johnzastrow/bitt/internal/store/sqlite"
+	"github.com/johnzastrow/bitt/internal/store/sqldb"
 )
 
-func newFixture(t *testing.T) (*Service, *sqlite.DB, store.User, store.Tab) {
+func newFixture(t *testing.T) (*Service, *sqldb.DB, store.User, store.Tab) {
 	t.Helper()
-	db, err := sqlite.Open(sqlite.Options{
+	db, err := sqldb.Open(sqldb.Options{
 		Path:               filepath.Join(t.TempDir(), "ledger.db"),
 		AppendOnlyTriggers: true,
 	})

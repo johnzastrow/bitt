@@ -100,7 +100,7 @@ Driven entirely by the schedule's due dates. Reuses the lazy posting path.
 
 - [x] **DEPLOY-01**: The application runs on SQLite as its initial data backend, with schema migrations running automatically and safely on startup
 - [x] **DEPLOY-02**: All SQL is isolated behind a repository interface with no dependence on SQLite-only behavior, so a second backend can be added without touching call sites
-- [ ] **DEPLOY-03**: MariaDB is supported as a second backend, selectable by configuration
+- [x] **DEPLOY-03**: MariaDB is supported as a second backend, selectable by configuration
 - [x] **DEPLOY-04**: The application ships as a single static binary with templates, assets, and migrations embedded
 - [x] **DEPLOY-05**: A Docker image is published via GitHub and runs as a non-root user
 - [x] **DEPLOY-06**: Secrets are supplied by environment or file rather than baked into the image or committed to the repository
@@ -211,7 +211,7 @@ Requirement-to-phase mapping. Every phase after Phase 1 adds to an application a
 | UI-05 | Phase 6 | Pending |
 | DEPLOY-01 | Phase 1 | Complete |
 | DEPLOY-02 | Phase 1 | Complete |
-| DEPLOY-03 | Phase 6 | Pending |
+| DEPLOY-03 | Phase 6 | Complete |
 | DEPLOY-04 | Phase 1 | Complete |
 | DEPLOY-05 | Phase 6 | Complete |
 | DEPLOY-06 | Phase 6 | Complete |

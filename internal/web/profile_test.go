@@ -84,10 +84,9 @@ func TestHeaderLinksToProfile(t *testing.T) {
 			t.Errorf("the profile page has no %q section: %s", want, truncate(body))
 		}
 	}
-	// Notification preferences are deferred to Phase 5; offering switches that
-	// deliver nothing would be a promise the app cannot keep.
-	if strings.Contains(body, "Notification") {
-		t.Error("the profile offers notification settings, which nothing delivers yet")
+	// Notification preferences ship in Phase 5.
+	if !strings.Contains(body, "Notifications") {
+		t.Error("the profile is missing the notifications section")
 	}
 }
 
@@ -441,5 +440,47 @@ func TestProfileEmailRejectsControlCharacters(t *testing.T) {
 	u, _ := h.db.GetUser(t.Context(), 1)
 	if strings.ContainsAny(u.Email, "\r\n") {
 		t.Errorf("a control character reached the stored email: %q", u.Email)
+	}
+}
+
+func TestNotificationPrefsRoundTrip(t *testing.T) {
+	h := newHarness(t)
+	h.completeSetup()
+
+	// The profile page offers the notification section.
+	_, body := h.get("/profile")
+	if !strings.Contains(body, "Notifications") || !strings.Contains(body, "ntfy topic") {
+		t.Errorf("no notification preferences section: %s", truncate(body))
+	}
+
+	// Save valid prefs.
+	_, body = h.post("/profile/notifications", url.Values{
+		"csrf_token":   {h.csrfToken("/profile")},
+		"notify_email": {"1"},
+		"notify_ntfy":  {"1"},
+		"ntfy_topic":   {"bitt-jane-9x2"},
+	})
+	if !strings.Contains(body, "preferences saved") {
+		t.Fatalf("prefs not saved: %s", truncate(body))
+	}
+	u, _ := h.db.GetUser(t.Context(), 1)
+	if !u.NotifyEmail || !u.NotifyNtfy || u.NtfyTopic != "bitt-jane-9x2" {
+		t.Errorf("stored prefs wrong: %+v", u)
+	}
+
+	// A bad topic is rejected.
+	_, body = h.post("/profile/notifications", url.Values{
+		"csrf_token": {h.csrfToken("/profile")}, "ntfy_topic": {"bad/topic with spaces"},
+	})
+	if !strings.Contains(body, "letters, numbers") {
+		t.Errorf("a bad topic was accepted: %s", truncate(body))
+	}
+
+	// Asking for ntfy without a topic is refused.
+	_, body = h.post("/profile/notifications", url.Values{
+		"csrf_token": {h.csrfToken("/profile")}, "notify_ntfy": {"1"}, "ntfy_topic": {""},
+	})
+	if !strings.Contains(body, "Choose an ntfy topic") {
+		t.Errorf("ntfy without a topic was accepted: %s", truncate(body))
 	}
 }

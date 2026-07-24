@@ -118,6 +118,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /profile/password", s.requireAuth(http.HandlerFunc(s.postProfilePassword)))
 	mux.Handle("POST /profile/avatar", s.requireAuth(http.HandlerFunc(s.postProfileAvatar)))
 	mux.Handle("POST /profile/avatar/remove", s.requireAuth(http.HandlerFunc(s.postProfileAvatarRemove)))
+	mux.Handle("POST /profile/notifications", s.requireAuth(http.HandlerFunc(s.postProfileNotify)))
 	mux.Handle("GET /users/{id}/avatar", s.requireAuth(http.HandlerFunc(s.getAvatar)))
 
 	// Administration (AUTH-04)

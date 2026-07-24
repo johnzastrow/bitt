@@ -7,6 +7,48 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [0.7.0] - 2026-07-24 — Phase 5: notifications
+
+Payment reminders reach people who do not have the app open, over email and
+ntfy, driven by an external cron. Built to the pre-implementation security
+design (docs/SECURITY-PHASE5.md); every control there is in place, and the whole
+feature stays off the balance path -- a failed or double send can never touch a
+ledger.
+
+### Added
+- **Email and ntfy delivery** of payment reminders at 14, 7, and 1 days before a
+  due date, to the payees on a tab. `internal/notify` is the delivery package
+  and the security surface: it rejects (never strips) control characters in
+  every header value, keeps all user text -- tab names, memos -- in the message
+  body, refuses to follow redirects, and bounds each send with a timeout.
+- **`POST /internal/tick`**, the cron entry point. Outside `requireAuth` (a cron
+  has no session), authenticated by a shared secret in an `Authorization: Bearer`
+  header, constant-time compared, **failing closed when unset**, checked before
+  any work, and rate-limited. The scan it runs is read-only with respect to the
+  ledger.
+- **The sent-notifications claim table** (migration 0008), send-then-claim
+  (at-least-once): deliver first, claim only on confirmed success, so a transient
+  failure re-sends rather than dropping the notice. Before sending, live state is
+  re-derived -- a paid-early or settled tab is never dunned.
+- **Notification preferences** on the profile: per-channel email/ntfy toggles and
+  an ntfy topic, validated to the same strict charset the sender enforces. The
+  section that was deferred from 0.6.0 now that there is delivery behind it.
+- **Config**: SMTP settings, an admin-pinned `BITT_NTFY_URL` (users choose only a
+  topic -- the SSRF decision), `BITT_TICK_SECRET`, and `BITT_BASE_URL` for links.
+  All via `file:`-capable, fail-closed config loading.
+
+### Security notes
+- ntfy SSRF policy is tuned for a self-hosted container: the ntfy host is admin
+  config, so LAN/private addresses (a sidecar or LAN ntfy box) are allowed, while
+  loopback and link-local -- the cloud metadata endpoint -- are refused, checked
+  at dial time to defeat DNS rebinding.
+- The tick endpoint never provokes ledger accrual, so an outbound-triggered,
+  cron-reachable endpoint cannot become a balance-path write.
+
+### Still open (documented for a follow-up)
+- Payment-made / payment-missed event notices (only the pre-due reminders ship).
+- A backlog cap and per-recipient failure bounding on the scan.
+
 ## [0.6.4] - 2026-07-24 — Pre-Phase-5 security design and hardening
 
 Phase 5 (notifications) is the app's first outbound side effect and first reach

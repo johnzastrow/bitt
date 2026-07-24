@@ -10,6 +10,10 @@ import (
 // ProfileData is everything the account settings screen renders.
 type ProfileData struct {
 	User store.User
+	// EmailEnabled and NtfyEnabled report whether the instance has each channel
+	// configured, so the form can say when a toggle would do nothing.
+	EmailEnabled bool
+	NtfyEnabled  bool
 }
 
 // Profile is the account's own settings (name, email, password, picture).
@@ -75,6 +79,45 @@ templ Profile(p Page, d ProfileData) {
 					</small>
 				</label>
 				<button class="primary" type="submit">Save details</button>
+			</form>
+		</section>
+		<section class="card form">
+			<h2>Notifications</h2>
+			if !d.EmailEnabled && !d.NtfyEnabled {
+				<p class="muted small">
+					This instance has no notification delivery configured, so these preferences will not send anything
+					yet. An administrator sets up email or ntfy delivery.
+				</p>
+			}
+			<form method="post" action="/profile/notifications" class="stack">
+				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+				<label class="checkrow">
+					<input type="checkbox" name="notify_email" value="1" checked?={ d.User.NotifyEmail }/>
+					<span>
+						Email me payment reminders
+						if !d.EmailEnabled {
+							<small>Email delivery is not configured on this instance yet.</small>
+						}
+					</span>
+				</label>
+				<label class="checkrow">
+					<input type="checkbox" name="notify_ntfy" value="1" checked?={ d.User.NotifyNtfy }/>
+					<span>
+						Send me ntfy push notifications
+						if !d.NtfyEnabled {
+							<small>ntfy delivery is not configured on this instance yet.</small>
+						}
+					</span>
+				</label>
+				<label>
+					ntfy topic
+					<input type="text" name="ntfy_topic" value={ d.User.NtfyTopic } placeholder="e.g. bitt-alex-7fk2" pattern="[A-Za-z0-9_-]{1,64}"/>
+					<small>
+						Subscribe to this topic in the ntfy app to receive pushes. Letters, numbers, dashes, and
+						underscores only. Pick something hard to guess &mdash; anyone who knows it can send you notes.
+					</small>
+				</label>
+				<button class="primary" type="submit">Save notification preferences</button>
 			</form>
 		</section>
 		<section class="card form">

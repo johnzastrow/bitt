@@ -9,6 +9,7 @@ import (
 
 	"github.com/johnzastrow/bitt/internal/auth"
 	"github.com/johnzastrow/bitt/internal/avatar"
+	"github.com/johnzastrow/bitt/internal/notify"
 	"github.com/johnzastrow/bitt/internal/store"
 	"github.com/johnzastrow/bitt/internal/web/views"
 )
@@ -70,7 +71,9 @@ func (s *Server) allowAvatarUpload(userID int64) bool {
 func (s *Server) getProfile(w http.ResponseWriter, r *http.Request) {
 	user := userFrom(r.Context())
 	s.render(w, r, http.StatusOK, views.Profile(s.page(w, r, "Your profile"), views.ProfileData{
-		User: *user,
+		User:         *user,
+		EmailEnabled: s.cfg.Notify.EmailEnabled(),
+		NtfyEnabled:  s.cfg.Notify.NtfyEnabled(),
 	}))
 }
 
@@ -325,4 +328,37 @@ func plural(n int, one, many string) string {
 		return "1 " + one
 	}
 	return strconv.Itoa(n) + " " + many
+}
+
+// postProfileNotify saves a user's notification preferences: their ntfy topic
+// and the per-channel toggles.
+func (s *Server) postProfileNotify(w http.ResponseWriter, r *http.Request) {
+	user := userFrom(r.Context())
+	if !s.profileFormOK(w, r) {
+		return
+	}
+
+	topic := strings.TrimSpace(r.PostFormValue("ntfy_topic"))
+	wantNtfy := r.PostFormValue("notify_ntfy") != ""
+	wantEmail := r.PostFormValue("notify_email") != ""
+
+	// A topic is validated to the same strict charset the sender enforces, so a
+	// value that could alter a request path or a header never reaches storage.
+	if topic != "" && !notify.ValidTopic(topic) {
+		redirectWith(w, r, "/profile", "err", "An ntfy topic may use only letters, numbers, dashes, and underscores.")
+		return
+	}
+	// ntfy delivery needs a topic; asking for it without one is a mistake worth
+	// naming rather than silently storing an unusable preference.
+	if wantNtfy && topic == "" {
+		redirectWith(w, r, "/profile", "err", "Choose an ntfy topic to receive push notifications.")
+		return
+	}
+
+	if err := s.store.SetNotifyPrefs(r.Context(), user.ID, topic, wantEmail, wantNtfy); err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	s.log.Info("notification prefs saved", "user_id", user.ID, "email", wantEmail, "ntfy", wantNtfy)
+	redirectWith(w, r, "/profile", "ok", "Notification preferences saved.")
 }

@@ -362,6 +362,13 @@ a.who {
 
 a.who:hover { background: var(--chalk-sunk); }
 
+/* A name preceded by its avatar, used in the participants and admin lists. */
+.person {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
 .profilehead {
   display: flex;
   align-items: center;

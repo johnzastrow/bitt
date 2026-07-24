@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -346,5 +347,68 @@ func TestAvatarUploadIsRateLimited(t *testing.T) {
 	if !limited {
 		t.Errorf("no limit applied after %d uploads -- image decoding is the one "+
 			"expensive thing an authenticated user can ask for in a loop", avatarLimit+2)
+	}
+}
+
+// An uploaded picture appears wherever the person is named, not only in their
+// own header: the participants list and the admin users list. The plumbing that
+// makes this possible is Participant.AvatarUpdatedAt, populated by the join.
+func TestAvatarShownInListings(t *testing.T) {
+	h := newHarness(t)
+	h.completeSetup()
+
+	// The admin uploads a picture and attaches a second person to a tab.
+	if _, body := h.uploadAvatar(t, samplePNG(t, 128, 128), "me.png"); !strings.Contains(body, "picture is updated") {
+		t.Fatalf("upload failed: %s", truncate(body))
+	}
+	sam := h.addUser("sam@example.com", "Sam Payee", false)
+	tab := h.makeTab("Shared")
+	h.post(tab+"/participants", url.Values{
+		"csrf_token": {h.csrfToken(tab)},
+		"user_id":    {strconv.FormatInt(sam.ID, 10)},
+	})
+
+	// The participants section on the tab page shows the admin's avatar image
+	// and Sam's initials fallback.
+	_, body := h.get(tab)
+	if !strings.Contains(body, "/users/1/avatar") {
+		t.Errorf("the participants list does not show the uploaded avatar: %s", truncate(body))
+	}
+	if !strings.Contains(body, "avatarfallback") {
+		t.Errorf("the participant with no picture shows no initials fallback: %s", truncate(body))
+	}
+
+	// The admin users list shows it too.
+	_, body = h.get("/admin/users")
+	if !strings.Contains(body, "/users/1/avatar") {
+		t.Errorf("the admin users list does not show the avatar: %s", truncate(body))
+	}
+}
+
+// The participant join must carry the avatar timestamp, or every participant
+// row silently falls back to initials even for people who have a picture.
+func TestListParticipantsCarriesAvatarTimestamp(t *testing.T) {
+	h := newHarness(t)
+	h.completeSetup()
+	if _, body := h.uploadAvatar(t, samplePNG(t, 64, 64), "me.png"); !strings.Contains(body, "updated") {
+		t.Fatalf("upload failed: %s", truncate(body))
+	}
+
+	tab := h.makeTab("Solo")
+	people, err := h.db.ListParticipants(t.Context(), tabIDFrom(t, mustBody(t, h, tab)))
+	if err != nil {
+		t.Fatalf("list participants: %v", err)
+	}
+	var found bool
+	for _, who := range people {
+		if who.UserID == 1 {
+			found = true
+			if who.AvatarUpdatedAt == "" {
+				t.Error("the provider has a picture but the participant row carries no timestamp")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the provider is not in the participants list")
 	}
 }

@@ -325,6 +325,9 @@ type Participant struct {
 	// Denormalized for display; populated by ListParticipants.
 	DisplayName string
 	Email       string
+	// AvatarUpdatedAt lets a participant row show the person's picture without
+	// a second query per row. Empty means no picture, exactly as on User.
+	AvatarUpdatedAt string
 }
 
 // Entry is a posted ledger entry. Once written it is never modified or removed.

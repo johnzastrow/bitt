@@ -867,7 +867,10 @@ templ TabDetail(p Page, d TabDetailData) {
 					<ul class="people">
 						for _, who := range d.Participants {
 							<li>
-								<span>{ who.DisplayName }</span>
+								<span class="person">
+									@Avatar(who.UserID, who.DisplayName, who.AvatarUpdatedAt, 28)
+									<span>{ who.DisplayName }</span>
+								</span>
 								<span class={ "pill", "pill-" + string(who.Role) }>{ string(who.Role) }</span>
 								if d.CanManage {
 									<form method="post" action={ participantRemoveAction(d.Tab.ID, who.UserID) } class="inline pushright">

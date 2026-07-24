@@ -61,10 +61,15 @@ templ AdminUsers(p Page, users []AdminUser) {
 					for _, row := range users {
 						<tr class={ userRowClass(row) }>
 							<td>
-								{ row.User.DisplayName }
-								if row.Self {
-									<span class="muted small">(you)</span>
-								}
+								<span class="person">
+									@Avatar(row.User.ID, row.User.DisplayName, row.User.AvatarUpdatedAt, 28)
+									<span>
+										{ row.User.DisplayName }
+										if row.Self {
+											<span class="muted small">(you)</span>
+										}
+									</span>
+								</span>
 							</td>
 							<td class="muted">{ row.User.Email }</td>
 							<td>

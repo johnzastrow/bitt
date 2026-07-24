@@ -571,7 +571,7 @@ func (d *DB) AddParticipant(ctx context.Context, p store.Participant) error {
 // ListParticipants returns a tab's participants with display details.
 func (d *DB) ListParticipants(ctx context.Context, tabID int64) ([]store.Participant, error) {
 	rows, err := d.db.QueryContext(ctx,
-		`SELECT p.tab_id, p.user_id, p.role, p.added_at, u.display_name, u.email
+		`SELECT p.tab_id, p.user_id, p.role, p.added_at, u.display_name, u.email, u.avatar_updated_at
          FROM tab_participants p
          JOIN users u ON u.id = p.user_id
          WHERE p.tab_id = ?
@@ -588,7 +588,7 @@ func (d *DB) ListParticipants(ctx context.Context, tabID int64) ([]store.Partici
 			role  string
 			added string
 		)
-		if err := rows.Scan(&p.TabID, &p.UserID, &role, &added, &p.DisplayName, &p.Email); err != nil {
+		if err := rows.Scan(&p.TabID, &p.UserID, &role, &added, &p.DisplayName, &p.Email, &p.AvatarUpdatedAt); err != nil {
 			return nil, translate(err)
 		}
 		p.Role = store.Role(role)

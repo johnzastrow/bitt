@@ -21,7 +21,7 @@ templ Profile(p Page, d ProfileData) {
 		<section class="card form">
 			<h1>Your profile</h1>
 			<div class="profilehead">
-				@AvatarImage(d.User, 72)
+				@UserAvatar(d.User, 72)
 				<div>
 					<strong>{ d.User.DisplayName }</strong>
 					<span class="muted small">{ d.User.Email }</span>
@@ -102,33 +102,36 @@ templ Profile(p Page, d ProfileData) {
 	}
 }
 
-// AvatarImage renders an account's picture, or its initials when it has none.
+// UserAvatar renders an account's picture from a full User. It is the common
+// case -- the header and the profile header -- and delegates to Avatar.
+templ UserAvatar(u store.User, size int) {
+	@Avatar(u.ID, u.DisplayName, u.AvatarUpdatedAt, size)
+}
+
+// Avatar renders a person's picture, or their initials when they have none.
+//
+// It takes the three primitives it needs -- id, name, and the avatar timestamp
+// -- rather than a store.User, so anything that names a person can show a face:
+// a participant row, an admin list entry, a User. The timestamp doubles as
+// "has a picture" (empty means none) and as the cache-buster.
 //
 // The fallback is not decoration: every avatar slot needs to render something,
 // and a broken-image icon or an empty box beside a name reads as a fault. The
-// initials are derived from the name, so they are stable and need no storage.
-templ AvatarImage(u store.User, size int) {
-	if u.HasAvatar() {
+// initials come from the name, so they are stable and need no storage.
+templ Avatar(id int64, name, avatarUpdatedAt string, size int) {
+	if avatarUpdatedAt != "" {
 		<img
 			class="avatar"
-			src={ avatarSrc(u) }
-			alt={ u.DisplayName }
+			src={ "/users/" + strconv.FormatInt(id, 10) + "/avatar?v=" + avatarUpdatedAt }
+			alt={ name }
 			width={ strconv.Itoa(size) }
 			height={ strconv.Itoa(size) }
 		/>
 	} else {
-		<span class={ "avatar", "avatarfallback", avatarTone(u.ID) } aria-hidden="true">
-			{ initials(u.DisplayName) }
+		<span class={ "avatar", "avatarfallback", avatarTone(id) } aria-hidden="true">
+			{ initials(name) }
 		</span>
 	}
-}
-
-// avatarSrc points at the account's picture, with the last-updated stamp as a
-// cache-buster. The route already answers conditional requests with a 304, but
-// a changed picture should appear at once rather than after the max-age --
-// the same lesson the stylesheet taught in 0.5.2.
-func avatarSrc(u store.User) string {
-	return "/users/" + strconv.FormatInt(u.ID, 10) + "/avatar?v=" + u.AvatarUpdatedAt
 }
 
 // initials takes at most two letters from a display name.

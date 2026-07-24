@@ -7,6 +7,21 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [0.6.2] - 2026-07-24 — Avatars everywhere a person is named
+
+### Changed
+- **A person's picture now shows wherever they are named**, not only in their
+  own header: the tab participants list and the admin users list. Uploading a
+  picture and seeing it in one place but nowhere else read as half-finished.
+  People without a picture keep their initials fallback, so every slot renders
+  something.
+- The `AvatarImage` component was generalised to `Avatar(id, name, timestamp)`
+  from its old `store.User` argument, so anything that names a person can render
+  a face; a `UserAvatar` wrapper keeps the common User case tidy.
+- `store.Participant` now carries `AvatarUpdatedAt`, populated by the existing
+  `ListParticipants` join, so a participant row shows a picture without a
+  second query per row.
+
 ## [0.6.1] - 2026-07-24 — Settle buttons pay a period, not the whole balance
 
 ### Changed

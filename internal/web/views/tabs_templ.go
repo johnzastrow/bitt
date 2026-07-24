@@ -1008,7 +1008,7 @@ func NewTab(p Page) templ.Component {
 				}()
 			}
 			ctx = templ.InitializeContext(ctx)
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 83, "<section class=\"card narrow\"><h1>New tab</h1><form method=\"post\" action=\"/tabs\" class=\"stack kindform\"><input type=\"hidden\" name=\"csrf_token\" value=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 83, "<section class=\"card form\"><h1>New tab</h1><form method=\"post\" action=\"/tabs\" class=\"stack kindform\"><input type=\"hidden\" name=\"csrf_token\" value=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

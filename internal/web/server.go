@@ -244,8 +244,9 @@ func (s *Server) setupPending(ctx context.Context) bool {
 // page builds the chrome data for a render, minting a CSRF token as it goes.
 func (s *Server) page(w http.ResponseWriter, r *http.Request, title string) views.Page {
 	p := views.Page{
-		Title:     title,
-		CSRFToken: auth.EnsureCSRFToken(w, r, s.cfg.SecureCookies),
+		Title:        title,
+		CSRFToken:    auth.EnsureCSRFToken(w, r, s.cfg.SecureCookies),
+		AssetVersion: AssetVersion(),
 	}
 	if u := userFrom(r.Context()); u != nil {
 		p.User = u

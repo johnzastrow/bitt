@@ -12,6 +12,22 @@ type Page struct {
 	CSRFToken string
 	Flash     string
 	Error     string
+	// AssetVersion is a digest of the embedded assets, appended to their URLs
+	// so a browser cannot serve a stylesheet from before the change that
+	// mattered. The web package computes it; views cannot import web.
+	AssetVersion string
+}
+
+// asset builds a cache-busting URL for an embedded asset. Every reference to
+// /static/ goes through this -- a bare path is cached for a year by the
+// handler's immutable rule only when it carries the digest, but it is still the
+// kind of thing that goes stale in a browser for a minute, and there is no
+// reason for any of them to be bare.
+func (p Page) asset(name string) string {
+	if p.AssetVersion == "" {
+		return "/static/" + name
+	}
+	return "/static/" + name + "?v=" + p.AssetVersion
 }
 
 templ Layout(p Page) {
@@ -22,8 +38,8 @@ templ Layout(p Page) {
 			<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
 			<meta name="color-scheme" content="light dark"/>
 			<title>{ pageTitle(p.Title) }</title>
-			<link rel="stylesheet" href="/static/app.css"/>
-			<script src="/static/htmx.min.js" defer></script>
+			<link rel="stylesheet" href={ p.asset("app.css") }/>
+			<script src={ p.asset("htmx.min.js") } defer></script>
 		</head>
 		<body
 			if p.CSRFToken != "" {
@@ -33,7 +49,7 @@ templ Layout(p Page) {
 			if p.User != nil {
 				<header class="topbar">
 					<a class="brand" href="/">
-						<img class="logo" src="/static/logo.svg" alt="" width="28" height="28"/>
+						<img class="logo" src={ p.asset("logo.svg") } alt="" width="28" height="28"/>
 						<span>BitTabby</span>
 					</a>
 					<nav>

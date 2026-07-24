@@ -747,3 +747,92 @@ func findInputs(body, name string) []string {
 		i = j + len(needle)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Static assets: cache busting
+// ---------------------------------------------------------------------------
+
+// A long cache lifetime on a stable URL is how a shipped stylesheet change goes
+// unnoticed. The URL has to change when the content does.
+func TestAssetURLsCarryTheContentDigest(t *testing.T) {
+	v := AssetVersion()
+	if len(v) != 12 {
+		t.Fatalf("AssetVersion() = %q, want 12 hex characters", v)
+	}
+	if v != AssetVersion() {
+		t.Error("AssetVersion is not stable across calls")
+	}
+	if got := AssetURL("app.css"); got != "/static/app.css?v="+v {
+		t.Errorf("AssetURL = %q", got)
+	}
+
+	h := newHarness(t)
+	_, body := h.get("/login")
+	for _, asset := range []string{"app.css", "htmx.min.js"} {
+		want := "/static/" + asset + "?v=" + v
+		if !strings.Contains(body, want) {
+			t.Errorf("the page does not reference %s with its digest: %s", asset, truncate(body))
+		}
+		// A bare reference would be cached for a minute and is a bug waiting to
+		// happen, so none should remain.
+		if strings.Contains(body, `"/static/`+asset+`"`) {
+			t.Errorf("%s is referenced without a digest", asset)
+		}
+	}
+}
+
+// Only a request carrying the current digest may be cached indefinitely.
+func TestStaticCacheLifetimeDependsOnTheDigest(t *testing.T) {
+	h := newHarness(t)
+
+	resp, _ := h.get("/static/app.css?v=" + AssetVersion())
+	if got := resp.Header.Get("Cache-Control"); !strings.Contains(got, "immutable") {
+		t.Errorf("digested asset Cache-Control = %q, want immutable", got)
+	}
+
+	for _, path := range []string{"/static/app.css", "/static/app.css?v=stale"} {
+		resp, _ = h.get(path)
+		got := resp.Header.Get("Cache-Control")
+		if strings.Contains(got, "immutable") {
+			t.Errorf("%s was served as immutable (%q) without the current digest", path, got)
+		}
+		if !strings.Contains(got, "max-age=60") {
+			t.Errorf("%s Cache-Control = %q, want a short lifetime", path, got)
+		}
+	}
+}
+
+// Every input type the forms actually use must be styled, or fields render at
+// browser defaults beside styled ones and stop lining up. This is a stylesheet
+// assertion rather than a rendering one; the visual check is a Playwright run.
+func TestStylesheetCoversEveryInputTypeInUse(t *testing.T) {
+	css, err := staticFS.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatalf("read stylesheet: %v", err)
+	}
+	sheet := string(css)
+
+	h := newHarness(t)
+	h.completeSetup()
+
+	seen := make(map[string]bool)
+	for _, path := range []string{"/tabs/new", "/"} {
+		_, body := h.get(path)
+		for _, chunk := range strings.Split(body, `<input type="`)[1:] {
+			if end := strings.Index(chunk, `"`); end > 0 {
+				seen[chunk[:end]] = true
+			}
+		}
+	}
+
+	for typ := range seen {
+		switch typ {
+		case "hidden", "radio", "checkbox", "submit":
+			continue // deliberately not given the text-field treatment
+		}
+		if !strings.Contains(sheet, `input[type="`+typ+`"]`) {
+			t.Errorf("forms use input[type=%q] but the stylesheet never mentions it, "+
+				"so it renders at browser defaults beside styled fields", typ)
+		}
+	}
+}

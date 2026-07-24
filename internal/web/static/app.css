@@ -153,6 +153,9 @@ body {
 }
 
 .card.narrow { max-width: 26rem; margin-inline: auto; }
+/* A form with a schedule, a fee policy, and a kind-scoped section needs more
+   than the 26rem that suits a login box. */
+.card.form { max-width: 34rem; margin-inline: auto; }
 .card.empty { text-align: center; }
 
 .cards { list-style: none; margin: 0; padding: 0; }
@@ -201,7 +204,8 @@ h2 { font-size: var(--t-lg); margin: 0 0 var(--s3); letter-spacing: -0.01em; }
 .stack label { display: flex; flex-direction: column; gap: var(--s1); font-weight: 550; }
 .stack small { font-weight: 400; color: var(--fg-muted); font-size: var(--t-sm); }
 
-input[type="text"], input[type="email"], input[type="password"] {
+input[type="text"], input[type="email"], input[type="password"],
+input[type="number"], input[type="date"], input[type="search"], input[type="file"] {
   font: inherit;
   color: var(--fg);
   background: var(--bg);
@@ -323,11 +327,36 @@ tfoot td { font-weight: 650; border-bottom: none; }
   display: none;
 }
 
+/* The kind-scoped groups are plain sections, not boxes. A bordered fieldset
+   inside a bordered card inside a max-width column stacks three sets of padding
+   and squeezes the fields into a gutter, which is what made this form look
+   cramped and misaligned. They keep the fieldset element for the grouping
+   semantics and lose the decoration. */
+.kindform > fieldset {
+  border: none;
+  padding: 0;
+}
+
+.kindform > fieldset > legend {
+  padding: 0;
+  font-size: var(--t-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+}
+
+.kindchoice { gap: var(--s2); }
+
 /* The kind choice itself: two stacked options, each a whole clickable row
    rather than a bare radio and a word. */
 .kindchoice .kindoption {
   display: flex;
+  /* .stack label sets column, which stacked the radio above its own text.
+     Every property that rule sets has to be answered here, not just the ones
+     that look wrong. */
+  flex-direction: row;
   align-items: flex-start;
+  font-weight: 400;
   gap: var(--s3);
   padding: var(--s3);
   border: 1px solid var(--border);
@@ -348,8 +377,9 @@ tfoot td { font-weight: 650; border-bottom: none; }
 }
 
 .kindchoice .kindoption input {
-  margin-top: 0.2rem;
+  margin-top: 0.15rem;
   flex: 0 0 auto;
+  width: auto;
 }
 
 .kindchoice .kindoption span {

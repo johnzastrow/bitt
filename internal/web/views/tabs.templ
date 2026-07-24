@@ -260,7 +260,7 @@ templ SettleConfirm(p Page, c TabCard) {
 // validated server-side by kind, which is the real gate.
 templ NewTab(p Page) {
 	@Layout(p) {
-		<section class="card narrow">
+		<section class="card form">
 			<h1>New tab</h1>
 			<form method="post" action="/tabs" class="stack kindform">
 				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>

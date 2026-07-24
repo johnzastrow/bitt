@@ -7,6 +7,39 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [0.5.2] - 2026-07-23 — Create-form layout, and assets that actually update
+
+### Fixed
+- **Static assets were cached for an hour behind a stable URL.** The reasoning
+  in `static.go` was that replacing the binary made a long `max-age` safe; it
+  does not, because it does nothing to a stylesheet a browser has already
+  cached. The 0.5.1 kind-scoped fields therefore did not appear at all for
+  anyone who had loaded the app in the previous hour, and the feature looked
+  broken rather than stale. Asset URLs now carry a digest of the embedded
+  content (`/static/app.css?v=…`), so a change to the stylesheet changes the
+  URL. A request carrying the current digest is cached for a year and marked
+  immutable; anything else gets 60 seconds, so a stale copy heals quickly.
+  The digest hashes content rather than the version constant, since the version
+  does not change between development builds but the stylesheet does.
+- **`input[type="number"]` and `input[type="date"]` were never styled.** They
+  fell outside the selector list and rendered at browser defaults — wrong width,
+  no padding, no border radius — beside styled text fields. Visible as soon as
+  0.5.1 added two number inputs, but the date input had been wrong since the
+  schedule form shipped. A test now walks the rendered forms and fails if any
+  input type in use is missing from the stylesheet.
+- **The create form was cramped.** Bordered fieldsets nested inside a bordered
+  card inside a 26rem column stacked three sets of padding. The kind-scoped
+  groups are now plain sections with a small heading, and the form has its own
+  34rem width rather than borrowing the login box's.
+- **The kind radio sat above its own label text** instead of beside it:
+  `.stack label` sets `flex-direction: column`, which won because the new rule
+  never declared a direction.
+
+### Notes
+- Verified with Playwright against a throwaway instance: the Payoff and Services
+  halves show and hide correctly, and the text, number, and date inputs now
+  share a width and left edge.
+
 ## [0.5.1] - 2026-07-23 — Timezone picker and kind-scoped tab fields
 
 ### Added

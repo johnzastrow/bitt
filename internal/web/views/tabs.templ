@@ -491,9 +491,14 @@ templ FeeFields(current fee.Policy) {
 
 // HistoryRow pairs an entry with what the viewer may do to it.
 type HistoryRow struct {
-	Entry   store.Entry
-	Actor   string
-	CanUndo bool
+	Entry store.Entry
+	Actor string
+	// ActorID and ActorAvatar let the row show who recorded the entry with a
+	// face, not just a name. ActorAvatar is empty for a person with no picture
+	// and for a removed account, both of which fall back to initials.
+	ActorID     int64
+	ActorAvatar string
+	CanUndo     bool
 }
 
 // TabDetailData is everything the tab page renders.
@@ -930,7 +935,12 @@ templ TabDetail(p Page, d TabDetailData) {
 												<span class="memo">{ row.Entry.Memo }</span>
 											}
 										</td>
-										<td class="muted">{ row.Actor }</td>
+										<td class="muted">
+											<span class="person">
+												@Avatar(row.ActorID, row.Actor, row.ActorAvatar, 22)
+												<span>{ row.Actor }</span>
+											</span>
+										</td>
 										<td class={ "right", "amount", amountClass(row.Entry.Amount) }>{ row.Entry.Amount.Display() }</td>
 										<td class="right">
 											if row.CanUndo && row.Entry.Kind == store.KindFee {

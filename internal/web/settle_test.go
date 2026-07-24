@@ -715,3 +715,23 @@ func TestPrimaryButtonFallsBackWithoutAPeriod(t *testing.T) {
 		t.Errorf("a tab with no period should still settle its balance: %s", truncate(body))
 	}
 }
+
+// History rows name who recorded each entry with a face, not just text.
+func TestHistoryRowsShowActorAvatars(t *testing.T) {
+	h := newHarness(t)
+	h.completeSetup()
+
+	if _, body := h.uploadAvatar(t, samplePNG(t, 96, 96), "me.png"); !strings.Contains(body, "updated") {
+		t.Fatalf("upload failed: %s", truncate(body))
+	}
+	tab := h.makeTab("Chores")
+	h.post(tab+"/charges", url.Values{
+		"csrf_token": {h.csrfToken(tab)}, "amount": {"20.00"}, "memo": {"Mowing"},
+	})
+
+	_, body := h.get(tab)
+	// The charge's actor is the admin, who has a picture.
+	if !strings.Contains(body, "/users/1/avatar") {
+		t.Errorf("history does not show the actor's avatar: %s", truncate(body))
+	}
+}

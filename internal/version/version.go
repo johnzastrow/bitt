@@ -15,7 +15,7 @@ import "fmt"
 
 // Number is the semantic version. Bump it on every functional change: patch for
 // a fix, minor for a feature, major for a break. This is the value to edit.
-const Number = "0.6.2"
+const Number = "0.6.3"
 
 // Commit and Date are set at build time via -ldflags, e.g.
 //
@@ -25,7 +25,7 @@ var (
 	Date   = "unknown"
 )
 
-// Short is the version as a person cites it: "v0.6.2".
+// Short is the version as a person cites it: "v0.6.3".
 func Short() string { return "v" + Number }
 
 // Full adds the build provenance for logs and diagnostics, degrading gracefully

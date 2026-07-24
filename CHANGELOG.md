@@ -7,6 +7,16 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [0.6.3] - 2026-07-24 — Avatars in history rows
+
+### Changed
+- **The ledger history now shows who recorded each entry with a face**, not only
+  a name, completing the avatar treatment across every place a person appears.
+  The actor lookup already loaded the full user, so no extra query was added.
+- `initials` was hardened to take the first *letter* of each word, skipping
+  punctuation, so a removed account renders "R" rather than "(" and CJK names
+  keep their first character. Covered by a unit test.
+
 ## [0.6.2] - 2026-07-24 — Avatars everywhere a person is named
 
 ### Changed

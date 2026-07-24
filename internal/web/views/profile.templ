@@ -2,6 +2,7 @@ package views
 
 import (
 	"strconv"
+	"unicode"
 
 	"github.com/johnzastrow/bitt/internal/store"
 )
@@ -137,15 +138,21 @@ templ Avatar(id int64, name, avatarUpdatedAt string, size int) {
 // initials takes at most two letters from a display name.
 func initials(name string) string {
 	var out []rune
-	prev := ' '
+	inWord := false
 	for _, r := range name {
-		if r != ' ' && prev == ' ' {
-			out = append(out, r)
+		if r == ' ' {
+			inWord = false
+			continue
+		}
+		// First letter of each word, skipping punctuation, so "(removed)" gives
+		// "R" rather than "(".
+		if !inWord && unicode.IsLetter(r) {
+			out = append(out, unicode.ToUpper(r))
+			inWord = true
 			if len(out) == 2 {
 				break
 			}
 		}
-		prev = r
 	}
 	if len(out) == 0 {
 		return "?"

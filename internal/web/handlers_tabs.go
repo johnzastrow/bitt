@@ -407,10 +407,13 @@ func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 	for _, e := range entries {
 		canUndo := ledger.CanUndo(e, reversed) &&
 			(role == store.RoleProvider || e.ActorUserID == user.ID)
+		actor := actorFor(actors, e.ActorUserID)
 		rows = append(rows, views.HistoryRow{
-			Entry:   e,
-			Actor:   actorName(actors, e.ActorUserID),
-			CanUndo: canUndo,
+			Entry:       e,
+			Actor:       actor.Name,
+			ActorID:     e.ActorUserID,
+			ActorAvatar: actor.AvatarKey,
+			CanUndo:     canUndo,
 		})
 	}
 
@@ -716,23 +719,33 @@ func (s *Server) denyTab(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 // actorNames resolves the display names shown against history rows.
-func (s *Server) actorNames(r *http.Request, entries []store.Entry) (map[int64]string, error) {
-	names := make(map[int64]string)
+// actorInfo is what the history needs to name and picture whoever recorded an
+// entry: the display name and the avatar timestamp, resolved once per actor.
+type actorInfo struct {
+	Name      string
+	AvatarKey string
+}
+
+func (s *Server) actorNames(r *http.Request, entries []store.Entry) (map[int64]actorInfo, error) {
+	actors := make(map[int64]actorInfo)
 	for _, e := range entries {
-		if _, seen := names[e.ActorUserID]; seen {
+		if _, seen := actors[e.ActorUserID]; seen {
 			continue
 		}
 		u, err := s.store.GetUser(r.Context(), e.ActorUserID)
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
-				names[e.ActorUserID] = "(removed)"
+				// A deactivated account keeps its entries, but a genuinely
+				// removed one leaves a dangling id. Name it plainly and show no
+				// picture.
+				actors[e.ActorUserID] = actorInfo{Name: "(removed)"}
 				continue
 			}
 			return nil, err
 		}
-		names[e.ActorUserID] = u.DisplayName
+		actors[e.ActorUserID] = actorInfo{Name: u.DisplayName, AvatarKey: u.AvatarUpdatedAt}
 	}
-	return names, nil
+	return actors, nil
 }
 
 // parseItems reads the parallel name and amount fields from the tab form.
@@ -780,11 +793,11 @@ func parseItems(names, amounts []string) ([]store.TabItem, error) {
 	return items, nil
 }
 
-func actorName(actors map[int64]string, id int64) string {
-	if n, ok := actors[id]; ok {
-		return n
+func actorFor(actors map[int64]actorInfo, id int64) actorInfo {
+	if a, ok := actors[id]; ok {
+		return a
 	}
-	return "--"
+	return actorInfo{Name: "--"}
 }
 
 func itemAmounts(items []store.TabItem) []money.Cents {

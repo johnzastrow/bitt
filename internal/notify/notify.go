@@ -56,6 +56,77 @@ var topicPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 // profile handler validates a topic at input, not only at send.
 func ValidTopic(s string) bool { return topicPattern.MatchString(s) }
 
+// Message template bounds, in BYTES -- which is what the limits they encode are
+// measured in, and what len() on a Go string already counts.
+//
+// The body ceiling is not an aesthetic choice: ntfy.sh caps a message at 4,096
+// bytes on its free tier, and a message over it is REFUSED, not truncated. So
+// that is the real limit a Provider is writing against, and the app enforces the
+// same one rather than inventing a smaller number that would look arbitrary.
+//
+// The title bound is our own. A title becomes an email Subject and a phone's
+// lock-screen heading, and neither shows anything like 120 characters.
+const (
+	MaxTitleTemplate = 120
+	MaxBodyTemplate  = NtfyMessageLimit
+)
+
+// NtfyMessageLimit is the message size ntfy.sh accepts on a free account. A
+// send over it fails, so it is worth showing a Provider before they save.
+const NtfyMessageLimit = 4096
+
+// NtfyWarnAt is where the interface starts cautioning. Ten percent of headroom
+// is roughly what variable substitution needs: a long tab name and a {url} can
+// add a couple of hundred bytes to a template that fits comfortably on screen,
+// and the size that matters is the one after they are filled in.
+const NtfyWarnAt = NtfyMessageLimit * 9 / 10
+
+// ValidTitleTemplate reports whether s is safe and sensible as a notification
+// title template.
+//
+// Titles become an email Subject and an ntfy header, so this is the same rule
+// sanitizeHeader enforces at send time, applied at input instead: no control
+// characters at all, newlines included. Checking here is not redundant with the
+// send-time check -- it is what stops a Provider from saving a template that
+// would fail every one of their payees' reminders closed, days later, with
+// nothing on screen to explain why.
+//
+// The substituted values are not covered by this; a hostile tab name reaching a
+// title is still caught at send time, which is where it can be seen.
+func ValidTitleTemplate(s string) bool {
+	if strings.TrimSpace(s) == "" || len(s) > MaxTitleTemplate {
+		return false
+	}
+	return !hasControl(s, false)
+}
+
+// ValidBodyTemplate reports whether s is safe as a notification body template.
+//
+// A body is not a header, so newlines are legitimate and expected -- the
+// default message uses them. Every other control character is refused, since
+// none of them belongs in a message a person reads and their presence means
+// either a paste accident or an attempt at something.
+func ValidBodyTemplate(s string) bool {
+	if strings.TrimSpace(s) == "" || len(s) > MaxBodyTemplate {
+		return false
+	}
+	return !hasControl(s, true)
+}
+
+// hasControl reports whether s contains a control character, optionally
+// allowing the newline that a multi-line body needs.
+func hasControl(s string, allowNewline bool) bool {
+	for _, r := range s {
+		if r == '\n' && allowNewline {
+			continue
+		}
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
 // Notifier delivers messages over the configured channels. A zero Notifier
 // sends nothing, which is the correct behaviour when notifications are off.
 type Notifier struct {

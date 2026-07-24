@@ -94,7 +94,7 @@ func (s *Server) runNotifications(ctx context.Context) (sent, skipped int) {
 			continue
 		}
 		lead := daysBetween(today, due)
-		spec, ok := s.reminderFor(lead)
+		spec, ok := s.reminderForTab(ctx, tab.ID, lead)
 		if !ok {
 			continue
 		}
@@ -203,8 +203,39 @@ func leadPhrase(days int) string {
 	}
 }
 
-// reminderFor returns the configured reminder rule whose lead time matches the
-// given days-until-due, if any.
+// reminderForTab returns the rule that fires this many days before the tab's
+// due date: the tab's own reminders when the Provider has set any, and the
+// instance defaults otherwise.
+//
+// A customised tab is customised completely -- its list replaces the instance
+// one rather than merging with it. Merging would make removal impossible: a
+// Provider who drops the 14-day notice from a tab would keep getting it from
+// the instance default, and the interface would be lying about what it does.
+//
+// A read failure sends nothing rather than falling back. The fallback message
+// is exactly the one the Provider may have deliberately replaced, and the
+// send-then-claim design means a skipped reminder is retried on the next tick
+// rather than lost.
+func (s *Server) reminderForTab(ctx context.Context, tabID int64, days int) (config.Reminder, bool) {
+	own, err := s.store.ListTabReminders(ctx, tabID)
+	if err != nil {
+		s.log.Error("tick: list tab reminders", "tab_id", tabID, "error", err)
+		return config.Reminder{}, false
+	}
+	for _, r := range own {
+		if r.Days == days {
+			return config.Reminder{Days: r.Days, Title: r.Title, Body: r.Body}, true
+		}
+	}
+	if len(own) > 0 {
+		return config.Reminder{}, false
+	}
+	return s.reminderFor(days)
+}
+
+// reminderFor returns the instance-wide reminder rule whose lead time matches
+// the given days-until-due, if any. It is the fallback for a tab the Provider
+// has not customised.
 func (s *Server) reminderFor(days int) (config.Reminder, bool) {
 	for _, r := range s.cfg.Reminders {
 		if r.Days == days {

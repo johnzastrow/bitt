@@ -7,6 +7,53 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [0.7.3] - 2026-07-24 — Per-tab reminders, set by the Provider
+
+Completes the notification model Phase 5 set out to deliver. 0.7.0–0.7.1 shipped
+instance-wide reminder defaults from the environment; those were always the
+fallback layer. The Provider owns a tab's billing cadence, so the Provider now
+says when its payees hear about it and what the message says.
+
+### Added
+- **A Reminders card on every tab**, in the Setup group, Provider-only like the
+  schedule, late-fee, and interest cards. Lead times as a comma-separated list
+  ("21, 7, 1", at most six), plus the title and message. Migration `0009` adds
+  `tab_reminders`; a tab with no rows falls back to the instance defaults, and
+  clearing the days field is how it goes back to them.
+- **A customised tab is customised completely** — its list replaces the instance
+  one rather than merging with it. Merging would make removal impossible: a
+  Provider who dropped the 14-day notice would keep receiving it from the
+  instance default. `Server.reminderForTab` is where that resolves, and a read
+  failure sends nothing rather than falling back to a message the Provider may
+  have deliberately replaced.
+- **Live byte counters** on the title and message fields, with a caution band.
+  Sizes are counted in BYTES, not characters, because that is what the limit is:
+  ntfy.sh refuses a message over 4,096 bytes on a free account rather than
+  shortening it, so an emoji costs four and an accented tab name costs two. The
+  message ceiling is now that same 4,096 rather than an invented smaller number,
+  and the caution starts at 90% to leave room for the variables to expand. The
+  server renders the count too, so it is right with scripting off.
+
+### Security
+- These templates are **the first user-controlled text to reach a mail header**
+  (via `{tab}` in a Subject), a real change from admin-only env config. Two
+  layers now: `notify.ValidTitleTemplate` / `ValidBodyTemplate` refuse control
+  characters at input, and `internal/notify` still rejects them at send time.
+  Validating at input is not redundant — it is what stops a saved template from
+  failing every one of a tab's reminders closed, days later, with nothing on
+  screen to explain why.
+- `tab_reminders` carries no append-only triggers, deliberately: it is
+  configuration, not a claim. Editing a reminder cannot re-send anything, since
+  `sent_notifications` is keyed on (tab, event, channel) and the event key
+  carries the due date and lead time, never the message text.
+
+### Fixed
+- A `<textarea>` submits CRLF line endings per the HTML form spec, which the
+  first version of the validator refused as control characters — making every
+  multi-line message written in a browser impossible to save. Found by a
+  Playwright pass after the Go tests, which post LF directly, had all passed.
+  CRLF is now normalised before validation, and a test pins it.
+
 ## [0.7.2] - 2026-07-24 — Running balances and the projected payment schedule
 
 ### Added

@@ -471,6 +471,68 @@ func (d *DB) SetInterestRate(ctx context.Context, tabID int64, annualBasisPoints
 	return nil
 }
 
+// ListTabReminders returns a tab's own payment reminders, longest lead first --
+// the order they fire in, which is the order the interface lists them.
+func (d *DB) ListTabReminders(ctx context.Context, tabID int64) ([]store.TabReminder, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT days, title, body FROM tab_reminders WHERE tab_id = ? ORDER BY days DESC`, tabID)
+	if err != nil {
+		return nil, translate(err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []store.TabReminder
+	for rows.Next() {
+		var r store.TabReminder
+		if err := rows.Scan(&r.Days, &r.Title, &r.Body); err != nil {
+			return nil, fmt.Errorf("sqlite: scan tab reminder: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, translate(rows.Err())
+}
+
+// SetTabReminders replaces a tab's reminders in one transaction.
+//
+// Delete-then-insert rather than a merge, because the set is the unit the
+// Provider edits: dropping a lead time from the form must drop it from the tab,
+// and clearing the form entirely must return the tab to the instance defaults.
+// Doing both inside one transaction means a tab is never briefly reminderless
+// to a concurrent tick scan.
+func (d *DB) SetTabReminders(ctx context.Context, tabID int64, rs []store.TabReminder) error {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sqlite: begin set tab reminders: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// The tab must exist, or a delete of nothing followed by an insert that the
+	// foreign key rejects would report a confusing error.
+	var exists int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM tabs WHERE id = ?`, tabID).
+		Scan(&exists); err != nil {
+		return translate(err)
+	}
+	if exists == 0 {
+		return store.ErrNotFound
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM tab_reminders WHERE tab_id = ?`, tabID); err != nil {
+		return translate(err)
+	}
+	for _, r := range rs {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO tab_reminders (tab_id, days, title, body) VALUES (?, ?, ?, ?)`,
+			tabID, r.Days, r.Title, r.Body); err != nil {
+			return translate(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlite: commit set tab reminders: %w", err)
+	}
+	return nil
+}
+
 // GetItem loads one line item, so a caller can authorize against its tab
 // before changing it.
 func (d *DB) GetItem(ctx context.Context, itemID int64) (store.TabItem, error) {

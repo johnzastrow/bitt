@@ -135,6 +135,13 @@ payment made and a payment missed, to all parties on a tab.
 by an authenticated `/internal/tick` cron endpoint (shared secret, constant-time,
 fail-closed, read-only scan), send-then-claim via the `sent_notifications` claim
 table, per-user channel + topic preferences. Built to `docs/SECURITY-PHASE5.md`.
+
+**Completed (0.7.3):** per-tab, Provider-set reminders -- the lead times and the
+message text, on a Reminders card in each tab's Setup group (migration `0009`,
+`tab_reminders`). The instance-wide env config is the fallback for any tab the
+Provider has not customised. This was the phase's stated model; the env-only
+version was the fallback layer, not the end state.
+
 Follow-up (not core): payment-made/missed event notices, a backlog cap.
 
 **Exit criteria (draft)**

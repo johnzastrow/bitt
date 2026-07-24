@@ -451,6 +451,17 @@ func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The tab's own reminders, and the instance defaults it falls back to when
+	// it has none. Only the Provider can see or set them, so the read is
+	// skipped entirely for a payee.
+	var reminders []store.TabReminder
+	if access.CanManage() {
+		if reminders, err = s.store.ListTabReminders(r.Context(), tab.ID); err != nil {
+			s.serverError(w, r, err)
+			return
+		}
+	}
+
 	data := views.TabDetailData{
 		Tab:            tab,
 		Items:          items,
@@ -474,6 +485,10 @@ func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 		CanTransact:    access.CanTransact(),
 		AsAdmin:        access.Admin,
 		Upcoming:       s.upcoming(tab, acc, itemTotal),
+
+		Reminders:        reminders,
+		DefaultReminders: s.defaultReminders(),
+		NotifyReady:      s.notifier != nil && s.notifier.Enabled(),
 	}
 	if tab.Kind == store.TabPayoff {
 		payoff, err := s.payoffFor(r, tab)

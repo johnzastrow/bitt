@@ -108,6 +108,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /tabs/{id}/fee", s.requireAuth(http.HandlerFunc(s.postFeePolicy)))
 	mux.Handle("POST /tabs/{id}/interest", s.requireAuth(http.HandlerFunc(s.postInterestRate)))
 	mux.Handle("POST /tabs/{id}/loan", s.requireAuth(http.HandlerFunc(s.postLoanTerms)))
+	mux.Handle("POST /tabs/{id}/reminders", s.requireAuth(http.HandlerFunc(s.postTabReminders)))
 	mux.Handle("POST /tabs/{id}/items", s.requireAuth(http.HandlerFunc(s.postItem)))
 	mux.Handle("POST /tabs/{id}/items/{itemID}", s.requireAuth(http.HandlerFunc(s.postItemUpdate)))
 	mux.Handle("POST /tabs/{id}/items/{itemID}/remove", s.requireAuth(http.HandlerFunc(s.postItemRemove)))

@@ -8,7 +8,29 @@ invariants, and the 0.5/0.6 traps. This file is the Phase 5 delta.
 
 ---
 
-## The next task (start here): per-tab, provider-set reminders
+## DONE in 0.7.3: per-tab, provider-set reminders
+
+This section described the next task; it was built in 0.7.3 substantially as
+written. What shipped, against the plan below: migration `0009` with the
+suggested `(tab_id, days, title, body)` table; `ListTabReminders` /
+`SetTabReminders` on the store; a Reminders card in the tab page's Setup group;
+and `Server.reminderForTab` at the `reminderFor(lead)` call site.
+
+Three things the plan did not anticipate, all of which matter:
+
+1. **A customised tab does not merge with the instance defaults, it replaces
+   them.** Otherwise removing a lead time from a tab is impossible -- the
+   instance default keeps sending it.
+2. **The templates became USER text.** A Provider is an ordinary user, and the
+   title reaches a mail Subject, so `notify.ValidTitleTemplate` /
+   `ValidBodyTemplate` validate at input as well as at send.
+3. **A `<textarea>` submits CRLF.** Refusing control characters without
+   normalising that first makes every multi-line message unsaveable in a
+   browser. Only a real browser catches this; the Go tests post LF.
+
+The original plan follows, for the reasoning behind the shape.
+
+### The plan as written
 
 The user's stated model: **the Provider configures notifications per tab** — the
 reminder lead times and the message text — because the Provider owns the tab's
@@ -104,7 +126,7 @@ ones:
 
 ---
 
-## State at handoff
+## State at handoff (as of 0.7.1; see the top of this file for 0.7.3)
 
 - `main` at `fa0ca90`, tree clean. Version 0.7.1. Schema at migration `0008`.
 - Running: v0.7.1 on `:8080` over plain HTTP against `data/bitt.db` (real user

@@ -322,6 +322,23 @@ type TabItem struct {
 	RemovedAt *time.Time
 }
 
+// TabReminder is one of a tab's own payment reminders: how many days before a
+// due date it fires, and the message it sends.
+//
+// It is the per-tab override of the instance-wide config.Reminder, and carries
+// the same fields for that reason -- the render path takes either. A tab with
+// no reminders of its own falls back to the instance list, so this type never
+// needs an "inherit" state.
+//
+// Title and Body are Provider-supplied text that reaches a mail header once
+// {tab} and friends are substituted, which is why the handler validates them
+// and internal/notify checks again at send time.
+type TabReminder struct {
+	Days  int
+	Title string
+	Body  string
+}
+
 // Participant links a user to a tab in a role.
 type Participant struct {
 	TabID   int64
@@ -530,6 +547,22 @@ type TabStore interface {
 	// re-deriving them from a corrected payment would rewrite history the
 	// ledger deliberately makes immutable.
 	SetLoanTerms(ctx context.Context, tabID int64, termPeriods int, payment money.Cents) error
+
+	// ListTabReminders returns a tab's own payment reminders, soonest lead time
+	// last (14, 7, 1 -- the order they fire in). An empty result means the tab
+	// has not been customised and the instance defaults apply.
+	ListTabReminders(ctx context.Context, tabID int64) ([]TabReminder, error)
+
+	// SetTabReminders replaces a tab's reminders with the given set, in one
+	// transaction. An empty set clears them, returning the tab to the instance
+	// defaults -- which is how a Provider un-customises a tab, and why this
+	// replaces rather than merges.
+	//
+	// It touches no claim table. sent_notifications is keyed on
+	// (tab, event, channel) and the event key carries the due date and the lead
+	// time, not the message text, so editing a reminder can never make an
+	// already-delivered notice send again.
+	SetTabReminders(ctx context.Context, tabID int64, rs []TabReminder) error
 
 	ListItems(ctx context.Context, tabID int64) ([]TabItem, error)
 	// ListItemHistory returns every item the tab has ever carried, superseded

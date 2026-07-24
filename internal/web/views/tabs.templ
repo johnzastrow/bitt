@@ -8,6 +8,7 @@ import (
 	"github.com/johnzastrow/bitt/internal/fee"
 	"github.com/johnzastrow/bitt/internal/ledger"
 	"github.com/johnzastrow/bitt/internal/money"
+	"github.com/johnzastrow/bitt/internal/notify"
 	"github.com/johnzastrow/bitt/internal/schedule"
 	"github.com/johnzastrow/bitt/internal/store"
 )
@@ -547,6 +548,16 @@ type TabDetailData struct {
 	// Upcoming is the next scheduled payment or charge, when it falls within
 	// the notice window.
 	Upcoming Upcoming
+	// Reminders are the tab's own payment reminders. Empty means the Provider
+	// has not customised this tab and DefaultReminders apply.
+	Reminders []store.TabReminder
+	// DefaultReminders is the instance-wide fallback, carried for display so
+	// the form can show what a tab inherits before it is customised.
+	DefaultReminders []store.TabReminder
+	// NotifyReady reports whether this instance can deliver a notification at
+	// all. When it cannot, the reminder settings still save -- they are simply
+	// not going anywhere yet, and the card says so rather than pretending.
+	NotifyReady bool
 	// Today is the current date in the instance timezone.
 	Today schedule.Date
 	// CanManage covers the tab's own settings: name, kind, schedule, items,
@@ -1088,6 +1099,90 @@ templ TabDetail(p Page, d TabDetailData) {
 							<button class="primary" type="submit">Save late fee</button>
 						</form>
 					</section>
+					<section class="card">
+						<h2>Reminders</h2>
+						<p class="muted small">
+							{ reminderSourceNote(d) }
+							Reminders go to the payees on this tab who have notifications switched on, and only while
+							something is actually owed.
+						</p>
+						if !d.Scheduled {
+							<p class="banner">
+								This tab has no schedule, so it has no due dates to count down to and no reminder will
+								fire. Set a schedule above first.
+							</p>
+						}
+						if !d.NotifyReady {
+							<p class="muted small">
+								This instance has no notification delivery configured yet, so nothing is sent. These
+								settings still save, and take effect once an administrator sets up email or ntfy.
+							</p>
+						}
+						<form method="post" action={ remindersAction(d.Tab.ID) } class="stack">
+							<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+							<label>
+								Days before each due date
+								<input
+									type="text"
+									name="reminder_days"
+									value={ reminderDaysValue(d) }
+									placeholder="e.g. 14, 7, 1 -- blank to use the instance defaults"
+								/>
+								<small>
+									A comma-separated list, at most { strconv.Itoa(maxTabRemindersUI) }. Clearing it returns this tab to
+									the instance defaults.
+								</small>
+							</label>
+							<label>
+								Title
+								<input
+									type="text"
+									name="reminder_title"
+									value={ reminderTitleValue(d) }
+									maxlength={ strconv.Itoa(notify.MaxTitleTemplate) }
+									data-counter="reminder-title-count"
+									data-limit={ strconv.Itoa(notify.MaxTitleTemplate) }
+									data-unit="bytes"
+								/>
+								<small>
+									One line. It becomes the email subject and the push notification&#39;s heading.
+									<span id="reminder-title-count" class={ "counter", sizeClass(reminderTitleValue(d), notify.MaxTitleTemplate, notify.MaxTitleTemplate) }>
+										{ sizeNote(reminderTitleValue(d), notify.MaxTitleTemplate) }
+									</span>
+								</small>
+							</label>
+							<label>
+								Message
+								<textarea
+									name="reminder_body"
+									rows="5"
+									maxlength={ strconv.Itoa(notify.MaxBodyTemplate) }
+									data-counter="reminder-body-count"
+									data-limit={ strconv.Itoa(notify.MaxBodyTemplate) }
+									data-warn={ strconv.Itoa(notify.NtfyWarnAt) }
+									data-unit="bytes"
+								>{ reminderBodyValue(d) }</textarea>
+								<small>
+									<span id="reminder-body-count" class={ "counter", sizeClass(reminderBodyValue(d), notify.NtfyWarnAt, notify.MaxBodyTemplate) }>
+										{ sizeNote(reminderBodyValue(d), notify.MaxBodyTemplate) }
+									</span>
+									&mdash; a free ntfy.sh account refuses a message over { groupInt(notify.NtfyMessageLimit) } bytes rather than
+									shortening it, so this is measured in bytes. The variables below count toward it once they are
+									filled in, so leave room for a long tab name and the link.
+								</small>
+							</label>
+							<p class="muted small">
+								Both fill in these variables when the reminder is sent:
+								<code>{ "{tab}" }</code> the tab name,
+								<code>{ "{amount}" }</code> what is owed,
+								<code>{ "{due}" }</code> the due date,
+								<code>{ "{days}" }</code> the lead time in days,
+								<code>{ "{when}" }</code> that lead time in words, and
+								<code>{ "{url}" }</code> a link to this tab.
+							</p>
+							<button class="primary" type="submit">Save reminders</button>
+						</form>
+					</section>
 					if d.IsPayoff() {
 						<section class="card">
 							<h2>Interest</h2>
@@ -1278,6 +1373,10 @@ func feeAction(id int64) templ.SafeURL {
 
 func interestAction(id int64) templ.SafeURL {
 	return templ.SafeURL("/tabs/" + strconv.FormatInt(id, 10) + "/interest")
+}
+
+func remindersAction(id int64) templ.SafeURL {
+	return templ.SafeURL("/tabs/" + strconv.FormatInt(id, 10) + "/reminders")
 }
 
 func loanAction(id int64) templ.SafeURL {
@@ -1582,6 +1681,108 @@ func balanceLabel(c money.Cents) string {
 	default:
 		return "Settled up"
 	}
+}
+
+// maxTabRemindersUI is how many lead times one tab may carry, mirrored here so
+// the form can say so. The handler is what enforces it.
+const maxTabRemindersUI = 6
+
+// sizeNote renders how much of a field's byte budget is used.
+//
+// It is measured in bytes rather than characters because the limit it reports
+// is: ntfy counts a message in bytes, so an emoji costs four and an accented
+// name costs two. Counting characters would tell a Provider a message fits when
+// the send is about to refuse it.
+//
+// The server renders this, and counter.js keeps it current while typing. The
+// two produce the same string, so a page with scripting off is not showing a
+// different kind of number -- only a staler one.
+func sizeNote(s string, limit int) string {
+	return fmt.Sprintf("%s of %s bytes", groupInt(len(s)), groupInt(limit))
+}
+
+// sizeClass colours the counter: plain under the warning mark, cautioning
+// between it and the limit, and clearly wrong above it.
+func sizeClass(s string, warn, limit int) string {
+	switch n := len(s); {
+	case n > limit:
+		return "over"
+	case n > warn:
+		return "warn"
+	default:
+		return ""
+	}
+}
+
+// groupInt writes a count with thousands separators, matching how money.Display
+// groups digits so the two do not disagree on the same page.
+func groupInt(n int) string {
+	s := strconv.Itoa(n)
+	if n < 0 {
+		return s
+	}
+	var b strings.Builder
+	for i, r := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// reminderSourceNote says which reminders this tab is actually using, because
+// "the fields are filled in" and "this tab has its own" are different states
+// and the form cannot show the difference on its own.
+func reminderSourceNote(d TabDetailData) string {
+	if len(d.Reminders) > 0 {
+		return "This tab sends its own reminders, set here."
+	}
+	if len(d.DefaultReminders) > 0 {
+		return "This tab uses the instance defaults, shown below. Saving them makes them this tab's own, " +
+			"after which changing the instance defaults will not change this tab."
+	}
+	return "This instance has no default reminders configured, so nothing is sent until this tab sets its own."
+}
+
+// reminderDaysValue renders the lead times for the form: the tab's own, or the
+// instance defaults it currently inherits.
+func reminderDaysValue(d TabDetailData) string {
+	rs := effectiveReminders(d)
+	parts := make([]string, 0, len(rs))
+	for _, r := range rs {
+		parts = append(parts, strconv.Itoa(r.Days))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// reminderTitleValue and reminderBodyValue prefill the message.
+//
+// The form carries one message for all of a tab's lead times, so where the
+// instance defaults differ per lead time -- which the environment allows -- the
+// longest lead's message is the one shown. Saving then applies it to all of
+// them, which is the behaviour the form describes.
+func reminderTitleValue(d TabDetailData) string {
+	if rs := effectiveReminders(d); len(rs) > 0 {
+		return rs[0].Title
+	}
+	return ""
+}
+
+func reminderBodyValue(d TabDetailData) string {
+	if rs := effectiveReminders(d); len(rs) > 0 {
+		return rs[0].Body
+	}
+	return ""
+}
+
+// effectiveReminders is what this tab actually sends: its own if it has any,
+// otherwise the instance defaults.
+func effectiveReminders(d TabDetailData) []store.TabReminder {
+	if len(d.Reminders) > 0 {
+		return d.Reminders
+	}
+	return d.DefaultReminders
 }
 
 // projectedClass colors a projected balance. Every row but the last is money

@@ -729,3 +729,58 @@ func TestNotifyPrefsAndClaim(t *testing.T) {
 		t.Errorf("WasSent(unknown) = %v, %v; want false", none, err)
 	}
 }
+
+// Migration 0009: a tab's own reminders round-trip, replace wholesale, and
+// clear back to nothing.
+func TestTabRemindersRoundTrip(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	user := mustUser(t, db, "r@example.com")
+	tab, err := db.CreateTab(ctx, store.Tab{Name: "T", Kind: store.TabServices, CreatedBy: user.ID}, nil)
+	if err != nil {
+		t.Fatalf("tab: %v", err)
+	}
+
+	// A tab starts with none, which is what means "use the instance defaults".
+	if got, err := db.ListTabReminders(ctx, tab.ID); err != nil || len(got) != 0 {
+		t.Fatalf("a new tab has %d reminders (%v), want none", len(got), err)
+	}
+
+	want := []store.TabReminder{
+		{Days: 14, Title: "T14", Body: "B14"},
+		{Days: 3, Title: "T3", Body: "B3"},
+	}
+	if err := db.SetTabReminders(ctx, tab.ID, want); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	got, err := db.ListTabReminders(ctx, tab.ID)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	// Longest lead first: the order they fire in.
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("round-tripped as %+v, want %+v", got, want)
+	}
+
+	// Setting replaces rather than merges, so a dropped lead time is gone.
+	if err := db.SetTabReminders(ctx, tab.ID, []store.TabReminder{{Days: 1, Title: "T1", Body: "B1"}}); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	got, err = db.ListTabReminders(ctx, tab.ID)
+	if err != nil || len(got) != 1 || got[0].Days != 1 {
+		t.Fatalf("after replace: %+v (%v), want only the 1-day reminder", got, err)
+	}
+
+	// An empty set clears the tab back to the instance defaults.
+	if err := db.SetTabReminders(ctx, tab.ID, nil); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if got, err := db.ListTabReminders(ctx, tab.ID); err != nil || len(got) != 0 {
+		t.Errorf("after clearing: %+v (%v), want none", got, err)
+	}
+
+	// A tab that does not exist is a not-found, not a silent success.
+	if err := db.SetTabReminders(ctx, 999999, want); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("setting reminders on a missing tab = %v, want ErrNotFound", err)
+	}
+}

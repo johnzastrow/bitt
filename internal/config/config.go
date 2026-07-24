@@ -54,17 +54,27 @@ type Config struct {
 	// Notify holds the notification delivery settings (Phase 5). A zero value
 	// means notifications are configured off, which is a valid way to run.
 	Notify NotifyConfig
-	// Reminders are the payment-reminder lead times and their message
-	// templates, in send order. Defaults to 14/7/1 days before the due date
-	// with a built-in message; each is overridable.
+	// Reminders are the INSTANCE-WIDE payment-reminder lead times and their
+	// message templates, in send order. Defaults to 14/7/1 days before the due
+	// date with a built-in message; each is overridable by environment.
+	//
+	// These are the fallback layer. A tab whose Provider has set its own
+	// reminders (store.TabReminder, migration 0009) uses those instead, and
+	// ignores this list entirely -- see Server.reminderForTab.
 	Reminders []Reminder
 }
 
 // Reminder is one payment-reminder rule: how many days before a due date it
 // fires, and the title and body templates for its message.
 //
-// Templates are ADMIN-configured (from the environment), so they are trusted
-// text. They interpolate a small set of {variables} filled per send:
+// An instance-wide Reminder is ADMIN-configured (from the environment), so its
+// templates are trusted text. The per-tab override is not: store.TabReminder
+// carries the same fields from a Provider, who is an ordinary user, and the
+// handler that accepts them validates both against notify.ValidTitleTemplate
+// and notify.ValidBodyTemplate before storing.
+//
+// Either way the templates interpolate the same small set of {variables},
+// filled per send:
 //
 //	{tab}     the tab name
 //	{amount}  the amount owed, e.g. "$505.65"

@@ -40,6 +40,7 @@ templ Layout(p Page) {
 			<title>{ pageTitle(p.Title) }</title>
 			<link rel="stylesheet" href={ p.asset("app.css") }/>
 			<script src={ p.asset("htmx.min.js") } defer></script>
+			<script src={ p.asset("counter.js") } defer></script>
 		</head>
 		<body
 			if p.CSRFToken != "" {

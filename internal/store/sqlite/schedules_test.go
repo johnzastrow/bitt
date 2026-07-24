@@ -682,3 +682,50 @@ func TestLoanTermsRoundTrip(t *testing.T) {
 		t.Error("setting terms on a missing tab was accepted")
 	}
 }
+
+// Migration 0008: notification prefs round-trip and the send-once claim.
+func TestNotifyPrefsAndClaim(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	user := mustUser(t, db, "n@example.com")
+
+	if err := db.SetNotifyPrefs(ctx, user.ID, "bitt-topic-1", true, true); err != nil {
+		t.Fatalf("set prefs: %v", err)
+	}
+	got, err := db.GetUser(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+	if got.NtfyTopic != "bitt-topic-1" || !got.NotifyEmail || !got.NotifyNtfy {
+		t.Errorf("prefs round-tripped as topic=%q email=%v ntfy=%v", got.NtfyTopic, got.NotifyEmail, got.NotifyNtfy)
+	}
+
+	tab, err := db.CreateTab(ctx, store.Tab{Name: "T", Kind: store.TabServices, CreatedBy: user.ID}, nil)
+	if err != nil {
+		t.Fatalf("tab: %v", err)
+	}
+
+	// First claim wins; the second is a no-op (send-once).
+	first, err := db.ClaimSent(ctx, tab.ID, "req:2026-08-01:u1", "email", user.ID)
+	if err != nil || !first {
+		t.Fatalf("first claim = %v, %v; want true", first, err)
+	}
+	second, err := db.ClaimSent(ctx, tab.ID, "req:2026-08-01:u1", "email", user.ID)
+	if err != nil || second {
+		t.Errorf("second claim = %v, %v; want false (already sent)", second, err)
+	}
+	// A different channel for the same event is independent.
+	ntfy, err := db.ClaimSent(ctx, tab.ID, "req:2026-08-01:u1", "ntfy", user.ID)
+	if err != nil || !ntfy {
+		t.Errorf("ntfy channel claim = %v, %v; want true", ntfy, err)
+	}
+
+	was, err := db.WasSent(ctx, tab.ID, "req:2026-08-01:u1", "email")
+	if err != nil || !was {
+		t.Errorf("WasSent(email) = %v, %v; want true", was, err)
+	}
+	none, err := db.WasSent(ctx, tab.ID, "never", "email")
+	if err != nil || none {
+		t.Errorf("WasSent(unknown) = %v, %v; want false", none, err)
+	}
+}

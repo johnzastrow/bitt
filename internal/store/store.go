@@ -189,6 +189,12 @@ type User struct {
 	// AvatarUpdatedAt is when the picture last changed, or "" for none. It is
 	// the ETag the avatar route serves, so a browser can revalidate cheaply.
 	AvatarUpdatedAt string
+	// NtfyTopic is the user's ntfy topic (the only user-controlled part of an
+	// ntfy destination; the server is admin-pinned). Empty means unset.
+	NtfyTopic string
+	// NotifyEmail and NotifyNtfy are the per-channel delivery toggles.
+	NotifyEmail bool
+	NotifyNtfy  bool
 }
 
 // HasAvatar reports whether the account has an uploaded picture. The image
@@ -429,6 +435,20 @@ type UserStore interface {
 	// ErrNotFound when the account has none. It is the only read that touches
 	// the image, which is why it is separate from GetUser.
 	GetAvatar(ctx context.Context, id int64) ([]byte, string, error)
+
+	// SetNotifyPrefs replaces a user's delivery preferences.
+	SetNotifyPrefs(ctx context.Context, userID int64, ntfyTopic string, email, ntfy bool) error
+
+	// ClaimSent records that one notification event was delivered to one user on
+	// one channel, and reports whether this call made the claim (true) or it
+	// already existed (false). It is written AFTER a confirmed send, in its own
+	// transaction, never inside a ledger transaction -- the at-least-once
+	// guarantee of Phase 5 (D2).
+	ClaimSent(ctx context.Context, tabID int64, eventKey, channel string, userID int64) (bool, error)
+
+	// WasSent reports whether a notification event has already gone to a user on
+	// a channel, so the scan can skip it without attempting delivery.
+	WasSent(ctx context.Context, tabID int64, eventKey, channel string) (bool, error)
 
 	// SetUserActive deactivates or reactivates an account (AUTH-04).
 	//

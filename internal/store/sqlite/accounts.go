@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -129,7 +130,7 @@ func (d *DB) CreateUser(ctx context.Context, u store.User) (store.User, error) {
 // user row on every authenticated request, and pulling an image through that
 // path would be a steady, pointless cost. Only GetAvatar touches the blob.
 const userColumns = `id, email, display_name, password_hash, is_admin, created_at, ` +
-	`deactivated_at, avatar_updated_at`
+	`deactivated_at, avatar_updated_at, ntfy_topic, notify_email, notify_ntfy`
 
 func scanUser(row interface{ Scan(...any) error }) (store.User, error) {
 	var (
@@ -138,11 +139,14 @@ func scanUser(row interface{ Scan(...any) error }) (store.User, error) {
 		created     string
 		deactivated sql.NullString
 	)
+	var notifyEmail, notifyNtfy int
 	if err := row.Scan(&u.ID, &u.Email, &u.DisplayName, &u.PasswordHash, &isAdmin, &created,
-		&deactivated, &u.AvatarUpdatedAt); err != nil {
+		&deactivated, &u.AvatarUpdatedAt, &u.NtfyTopic, &notifyEmail, &notifyNtfy); err != nil {
 		return store.User{}, translate(err)
 	}
 	u.IsAdmin = isAdmin != 0
+	u.NotifyEmail = notifyEmail != 0
+	u.NotifyNtfy = notifyNtfy != 0
 
 	var err error
 	if u.CreatedAt, err = parseTime(created); err != nil {
@@ -321,6 +325,8 @@ func (d *DB) GetSession(ctx context.Context, tokenHash string) (store.Session, s
 		isAdmin     int
 		uCreated    string
 		deactivated sql.NullString
+		notifyEmail int
+		notifyNtfy  int
 	)
 	// This restates the user columns rather than reusing userColumns, because
 	// they need the "u." qualifier for the join. Any column added to a User
@@ -330,7 +336,7 @@ func (d *DB) GetSession(ctx context.Context, tokenHash string) (store.Session, s
 	err := d.db.QueryRowContext(ctx,
 		`SELECT s.token_hash, s.user_id, s.created_at, s.expires_at, s.last_seen_at,
                 u.id, u.email, u.display_name, u.password_hash, u.is_admin, u.created_at,
-                u.deactivated_at, u.avatar_updated_at
+                u.deactivated_at, u.avatar_updated_at, u.ntfy_topic, u.notify_email, u.notify_ntfy
          FROM sessions s
          JOIN users u ON u.id = s.user_id
          WHERE s.token_hash = ?
@@ -339,10 +345,12 @@ func (d *DB) GetSession(ctx context.Context, tokenHash string) (store.Session, s
 		tokenHash, nowText()).
 		Scan(&s.TokenHash, &s.UserID, &created, &expires, &lastSeen,
 			&u.ID, &u.Email, &u.DisplayName, &u.PasswordHash, &isAdmin, &uCreated,
-			&deactivated, &u.AvatarUpdatedAt)
+			&deactivated, &u.AvatarUpdatedAt, &u.NtfyTopic, &notifyEmail, &notifyNtfy)
 	if err != nil {
 		return store.Session{}, store.User{}, translate(err)
 	}
+	u.NotifyEmail = notifyEmail != 0
+	u.NotifyNtfy = notifyNtfy != 0
 	u.IsAdmin = isAdmin != 0
 
 	for _, p := range []struct {
@@ -482,4 +490,55 @@ func (d *DB) SetUserActive(ctx context.Context, id int64, active bool) error {
 		return fmt.Errorf("sqlite: commit set active: %w", err)
 	}
 	return nil
+}
+
+// SetNotifyPrefs replaces a user's delivery preferences. The topic is validated
+// by the caller (notify.ValidTopic) before it reaches here.
+func (d *DB) SetNotifyPrefs(ctx context.Context, userID int64, ntfyTopic string, email, ntfy bool) error {
+	res, err := d.db.ExecContext(ctx,
+		`UPDATE users SET ntfy_topic = ?, notify_email = ?, notify_ntfy = ? WHERE id = ?`,
+		ntfyTopic, boolToInt(email), boolToInt(ntfy), userID)
+	if err != nil {
+		return translate(err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqlite: set notify prefs: %w", err)
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+// ClaimSent records a delivered notification, reporting whether this call made
+// the claim. The primary key makes it at-most-once per (tab, event, channel);
+// a duplicate insert is a conflict, not this caller's claim.
+func (d *DB) ClaimSent(ctx context.Context, tabID int64, eventKey, channel string, userID int64) (bool, error) {
+	_, err := d.db.ExecContext(ctx,
+		`INSERT INTO sent_notifications (tab_id, event_key, channel, user_id, sent_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		tabID, eventKey, channel, userID, nowText())
+	if err != nil {
+		if errors.Is(translate(err), store.ErrConflict) {
+			return false, nil
+		}
+		return false, translate(err)
+	}
+	return true, nil
+}
+
+// WasSent reports whether a notification event has already gone out on a channel.
+func (d *DB) WasSent(ctx context.Context, tabID int64, eventKey, channel string) (bool, error) {
+	var one int
+	err := d.db.QueryRowContext(ctx,
+		`SELECT 1 FROM sent_notifications WHERE tab_id = ? AND event_key = ? AND channel = ?`,
+		tabID, eventKey, channel).Scan(&one)
+	if err != nil {
+		if errors.Is(translate(err), store.ErrNotFound) {
+			return false, nil
+		}
+		return false, translate(err)
+	}
+	return true, nil
 }

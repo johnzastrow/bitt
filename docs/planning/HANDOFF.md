@@ -84,31 +84,31 @@ Phase 6 is ship.
 | `cb11413` | Payoff: loan amount required so the principal always posts |
 | (0.5.0) | Loan terms, scheduled payments, schedule intervals, U.S. Rule interest |
 
-Full suite green including `-race`. Coverage: fee 96%, money 96%, ledger ~90%,
-schedule 87%, sqlite ~73%, web ~71%, auth 44%.
+Full suite green including `-race`. Coverage: fee 96%, money 90%, loan 89%,
+ledger 89%, schedule 87%, sqlite 72%, web 71%, auth 44%.
 
-**Running now:** the demo binary is live on `:8080` (migrated through 0005). To
-restart from cold: `make build && BITT_SECURE_COOKIES=false ./bittabby`.
+**Running now:** v0.5.0 on `:8080`, against an **empty** database. To restart
+from cold: `make build && BITT_SECURE_COOKIES=false ./bittabby`, then open
+http://localhost:8080 and complete the first-run setup screen.
 
-### The one live-data gotcha to know about
+### There is no demo data any more
 
-The demo database has two Payoff tabs, "Car Loan" and "Car Loan 2", that are
-**set up wrong**: their $22,000 went into a *line item* instead of the loan
-amount, so neither has a principal charge and both read as paid off.
+The earlier walkthrough database was deleted at the user's request once 0.5.0
+landed, so `data/bitt.db` is gone and the app opens on first-run setup. Two
+things that were true of it are worth carrying forward, because both describe
+traps rather than data:
 
-0.5.0 removes the trap that caused this — a Payoff tab's expected payment is now
-its own field, and line items belong to Services tabs only. Migration 0006
-backfills the payment from the sum of active items, which is exactly what the
-old code read, so **those two tabs migrate with a $22,000 "payment"**. That is
-faithful to what they meant before and is still wrong. The fix is to post
-$22,000 as a charge (Day to day → Post a charge) and set the real monthly
-payment under Setup → Loan term and payment. Do NOT edit their ledger directly
-— it is append-only and theirs.
-
-**The demo database has not been migrated.** It was still at schema 0005 when
-0.5.0 was built, and the running instance on `:8080` is the old binary. The
-migration was verified against a *copy* of it. Running the new binary against
-`data/bitt.db` will migrate it, forward-only.
+- It held two Payoff tabs whose loan amount had been typed into a *line item*
+  instead of the loan amount, so neither had a principal charge and both read as
+  paid off. **0.5.0 removes the trap**: a Payoff tab's expected payment is now
+  its own field and line items belong to Services tabs only.
+- Migration 0006 backfills `loan_payment_cents` from the sum of a Payoff tab's
+  active line items, which is exactly what the old code read. That is faithful
+  on upgrade, but a tab mis-configured the old way will arrive carrying its
+  **loan amount as its per-period payment**. If someone upgrades a real database
+  and a loan shows an implausible payment, that is why. Fix it in
+  Setup → Loan term and payment; never edit the ledger directly, it is
+  append-only and theirs.
 
 ---
 

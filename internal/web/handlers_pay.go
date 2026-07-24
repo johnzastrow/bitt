@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -147,22 +148,80 @@ func (s *Server) cardFor(w http.ResponseWriter, r *http.Request, user *store.Use
 		return views.TabCard{}, false
 	}
 
+	period, err := s.cardPeriodPayment(r.Context(), tab, balance)
+	if err != nil {
+		s.serverError(w, r, err)
+		return views.TabCard{}, false
+	}
+
 	return views.TabCard{
 		Tab:            tab,
 		Balance:        balance,
 		Role:           role,
 		SettleAmount:   settleAmount(balance),
+		PeriodPayment:  period,
 		IdempotencyKey: key,
 	}, true
 }
 
-// settleAmount is what a one-tap settle pays: the outstanding balance, or zero
-// when the tab is settled or in credit.
+// settleAmount is the whole outstanding balance -- what "Other amount" prefills
+// and what pays off a loan. Zero when the tab is settled or in credit.
 func settleAmount(balance money.Cents) money.Cents {
 	if balance < 0 {
 		return balance.Neg()
 	}
 	return 0
+}
+
+// periodPayment is the expected payment for a single period, capped at what is
+// owed. It is what the primary settle button offers.
+//
+//   - Payoff: the loan's scheduled installment (tab.LoanPayment).
+//   - Services: the sum of the current line items -- the recurring charge.
+//
+// Capping at the balance keeps a near-final payment from overshooting into
+// credit: when less than a period remains, paying "the period" means paying
+// what is left. Zero when no periodic amount is defined (a hand-billed tab), in
+// which case the button falls back to settling the whole balance, and zero when
+// nothing is owed.
+func periodPayment(base, balance money.Cents) money.Cents {
+	owed := settleAmount(balance)
+	if base <= 0 || owed <= 0 {
+		return 0
+	}
+	if base > owed {
+		return owed
+	}
+	return base
+}
+
+// periodBase returns a tab's per-period expected amount before capping: the
+// loan payment for a Payoff tab, the item total for a Services tab. The item
+// total is supplied by the caller, which already has the items loaded.
+func periodBase(tab store.Tab, itemTotal money.Cents) money.Cents {
+	if tab.Kind == store.TabPayoff {
+		return tab.LoanPayment
+	}
+	return itemTotal
+}
+
+// cardPeriodPayment computes the primary-button amount for a card, loading the
+// line items only when the tab is a Services tab that needs them. A Payoff tab
+// reads its installment straight off the tab and touches no items.
+func (s *Server) cardPeriodPayment(ctx context.Context, tab store.Tab, balance money.Cents) (money.Cents, error) {
+	var itemTotal money.Cents
+	if tab.Kind != store.TabPayoff {
+		items, err := s.store.ListItems(ctx, tab.ID)
+		if err != nil {
+			return 0, err
+		}
+		sum, ok := money.Sum(itemAmounts(items))
+		if !ok {
+			return 0, errors.New("item total overflow")
+		}
+		itemTotal = sum
+	}
+	return periodPayment(periodBase(tab, itemTotal), balance), nil
 }
 
 // ---------------------------------------------------------------------------

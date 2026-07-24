@@ -7,6 +7,28 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [0.6.1] - 2026-07-24 — Settle buttons pay a period, not the whole balance
+
+### Changed
+- **The dashboard's primary settle button now offers one period's payment**, not
+  the entire outstanding balance. On a Payoff loan that means the scheduled
+  installment (e.g. "Pay $505.65") rather than "Settle $21,966.00"; on a
+  Services tab it means one period's charge rather than every period that has
+  accrued. Paying the period is the ordinary act, so it is the one-tap default;
+  clearing a whole loan is the exception and lives behind "Other amount", which
+  still prefills the full balance. The same default now prefills the tab page's
+  payment field, so a full loan payoff is a deliberate edit rather than an
+  accidental tap.
+- The button reads "Pay $X" for a period payment and "Settle $X" when that
+  amount clears the whole balance, since the two are different acts. When less
+  than a period remains it settles what is left rather than overshooting an
+  installment into credit. A hand-billed tab with no periodic amount keeps the
+  settle-the-balance button, since there is no period to offer.
+
+### Notes
+- Verified with Playwright against the layout from the reported screenshot: the
+  loan card offers "Pay $505.65" beside "Other amount".
+
 ## [0.6.0] - 2026-07-23 — Account profiles
 
 Click your own name in the header to reach `/profile`.

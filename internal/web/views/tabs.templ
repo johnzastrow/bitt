@@ -19,9 +19,18 @@ type TabCard struct {
 	Balance money.Cents
 	// Role is the viewer's role on this tab.
 	Role store.Role
-	// SettleAmount is what a one-tap settle would pay: the outstanding balance,
-	// or zero when nothing is owed (UI-03 prefill).
+	// SettleAmount is the whole outstanding balance -- what "Other amount"
+	// prefills, and what a loan is paid off with. Zero when nothing is owed.
 	SettleAmount money.Cents
+	// PeriodPayment is the expected payment for one period: the loan's scheduled
+	// installment on a Payoff tab, the sum of the line items on a Services tab,
+	// each capped at the balance so a near-final payment does not overshoot.
+	//
+	// This is what the primary button offers, because paying the period is the
+	// ordinary act; settling an entire loan in one go is the exception, and it
+	// lives behind "Other amount". Zero when no periodic amount is defined, in
+	// which case the primary button falls back to settling the balance.
+	PeriodPayment money.Cents
 	// IdempotencyKey is minted per render, so a double-tapped settle posts once
 	// (LEDGER-07).
 	IdempotencyKey string
@@ -48,6 +57,36 @@ type TabCard struct {
 
 // CanSettle reports whether the settle control should appear.
 func (c TabCard) CanSettle() bool { return c.SettleAmount > 0 }
+
+// detailPrefill is what the tab page's payment field starts at: one period's
+// payment when the tab has one, otherwise the whole balance. Editable either
+// way -- the point is only that the default is the ordinary payment, not an
+// accidental full loan payoff.
+func detailPrefill(d TabDetailData) money.Cents {
+	if d.PeriodPayment > 0 {
+		return d.PeriodPayment
+	}
+	return d.SettleAmount
+}
+
+// PrimaryAmount is what the main button pays: the expected period payment when
+// one is defined, otherwise the whole balance. Both are already capped at what
+// is owed, so this is never more than the balance.
+func (c TabCard) PrimaryAmount() money.Cents {
+	if c.PeriodPayment > 0 {
+		return c.PeriodPayment
+	}
+	return c.SettleAmount
+}
+
+// PrimaryLabel names the main button. "Pay" for a period payment, "Settle" when
+// it clears the whole balance, since the two are meaningfully different acts.
+func (c TabCard) PrimaryLabel() string {
+	if c.PeriodPayment > 0 && c.PeriodPayment < c.SettleAmount {
+		return "Pay " + c.PeriodPayment.Display()
+	}
+	return "Settle " + c.PrimaryAmount().Display()
+}
 
 // Scheduled reports whether the tab bills itself.
 func (c TabCard) Scheduled() bool { return !c.NextDue.IsZero() }
@@ -135,7 +174,7 @@ templ TabCardView(p Page, c TabCard) {
 					hx-target={ "#" + cardID(c.Tab.ID) }
 					hx-swap="innerHTML"
 				>
-					{ fmt.Sprintf("Settle %s", c.SettleAmount.Display()) }
+					{ c.PrimaryLabel() }
 				</button>
 				<button
 					class="ghost settle"
@@ -199,10 +238,16 @@ templ SettleConfirm(p Page, c TabCard) {
 					{ balanceLabel(c.Balance) }. Anything beyond that becomes a credit against the next charge.
 				</p>
 			} else {
-				<input type="hidden" name="amount" value={ c.SettleAmount.String() }/>
+				<input type="hidden" name="amount" value={ c.PrimaryAmount().String() }/>
 				<p class="confirmq">
-					Record a payment of <strong>{ c.SettleAmount.Display() }</strong>?
+					Record a payment of <strong>{ c.PrimaryAmount().Display() }</strong>?
 				</p>
+				if c.PeriodPayment > 0 && c.PeriodPayment < c.SettleAmount {
+					<p class="muted small">
+						This is one period&#39;s payment. { c.SettleAmount.Display() } is owed in total &mdash;
+						use &ldquo;Different amount&rdquo; to pay more or settle it all.
+					</p>
+				}
 			}
 			<label class="methodrow">
 				How was it paid?
@@ -463,6 +508,11 @@ type TabDetailData struct {
 	Role           store.Role
 	IdempotencyKey string
 	SettleAmount   money.Cents
+	// PeriodPayment is the expected payment for one period, capped at the
+	// balance -- the loan installment or the item total. It prefills the
+	// payment field so the ordinary act is one keystroke and settling an entire
+	// loan is a deliberate edit rather than the default.
+	PeriodPayment money.Cents
 	// Statements is the per-period view, newest first (CHG-04).
 	Statements []ledger.Statement
 	// Scheduled reports whether the tab bills itself, and NextDue when the next
@@ -704,6 +754,12 @@ templ TabDetail(p Page, d TabDetailData) {
 							<input type="text" name="memo" placeholder="Note (optional)" aria-label="Note"/>
 							<button class="primary" type="submit">Record payment</button>
 						</form>
+						if d.PeriodPayment > 0 && d.PeriodPayment < d.SettleAmount {
+							<p class="muted small">
+								Prefilled with one period&#39;s payment of { d.PeriodPayment.Display() }.
+								{ d.SettleAmount.Display() } is owed in total.
+							</p>
+						}
 					</section>
 				}
 				if d.IsProvider() {

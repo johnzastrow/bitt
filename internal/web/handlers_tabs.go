@@ -55,11 +55,17 @@ func (s *Server) getDashboard(w http.ResponseWriter, r *http.Request) {
 			s.serverError(w, r, err)
 			return
 		}
+		period, err := s.cardPeriodPayment(r.Context(), t, balance)
+		if err != nil {
+			s.serverError(w, r, err)
+			return
+		}
 		card := views.TabCard{
 			Tab:            t,
 			Balance:        balance,
 			Role:           role,
 			SettleAmount:   settleAmount(balance),
+			PeriodPayment:  period,
 			IdempotencyKey: key,
 		}
 		if acc.Scheduled {
@@ -445,6 +451,7 @@ func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 		Role:           role,
 		IdempotencyKey: key,
 		SettleAmount:   settleAmount(balance),
+		PeriodPayment:  periodPayment(periodBase(tab, itemTotal), balance),
 		Statements:     statements,
 		Scheduled:      acc.Scheduled,
 		NextDue:        acc.Next.Due,

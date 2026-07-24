@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/johnzastrow/bitt/internal/auth"
+	"github.com/johnzastrow/bitt/internal/schedule"
 	"github.com/johnzastrow/bitt/internal/store"
 )
 
@@ -601,5 +602,116 @@ func TestAdjustmentIsProviderOnly(t *testing.T) {
 	})
 	if !strings.Contains(body, "Only the provider") {
 		t.Errorf("a payee was allowed to adjust the balance: %s", truncate(body))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The primary settle button pays a period, not the whole balance
+// ---------------------------------------------------------------------------
+
+// On a Payoff loan the dashboard's main button offers the scheduled payment,
+// and the full payoff is reachable through "Other amount". This is the change
+// the payee-buttons feedback asked for: paying the period is the ordinary act;
+// clearing a whole loan in one tap is the exception.
+func TestPayoffPrimaryButtonPaysThePeriod(t *testing.T) {
+	h := newHarness(t)
+	h.completeSetup()
+
+	today := instanceToday(t)
+	// A $5,000 loan with a $250 scheduled payment, one period already due.
+	tabID, _ := h.createPayoffTab("5000.00", "250.00", today.AddDays(-1), nil)
+
+	_, body := h.get("/")
+	if !strings.Contains(body, "Pay $250.00") {
+		t.Errorf("the primary button does not offer the period payment: %s", truncate(body))
+	}
+	if strings.Contains(body, "Settle $5,000.00") {
+		t.Errorf("the primary button still offers the whole payoff: %s", truncate(body))
+	}
+	if !strings.Contains(body, "Other amount") {
+		t.Errorf("no Other amount button for the full payoff: %s", truncate(body))
+	}
+
+	// The confirmation for the primary button posts the period, and says the
+	// rest is still owed.
+	_, confirm := h.get(tabPath(tabID) + "/settle")
+	if !strings.Contains(confirm, "$250.00") {
+		t.Errorf("the confirmation is not for the period payment: %s", truncate(confirm))
+	}
+	if !strings.Contains(confirm, "5,000.00 is owed in total") {
+		t.Errorf("the confirmation does not mention the full balance: %s", truncate(confirm))
+	}
+
+	// "Other amount" prefills the full payoff, which is where a loan is cleared.
+	_, custom := h.get(tabPath(tabID) + "/settle?custom=1")
+	if !strings.Contains(custom, `value="5000.00"`) {
+		t.Errorf("Other amount does not prefill the full payoff: %s", truncate(custom))
+	}
+}
+
+// The same behavior on a Services tab: the button pays one period's charge.
+func TestServicesPrimaryButtonPaysThePeriod(t *testing.T) {
+	h := newHarness(t)
+	h.completeSetup()
+
+	today := instanceToday(t)
+	// Two line items totaling $75. The tab is created with the items present, so
+	// when the schedule backdated below accrues, each period posts the full $75.
+	tab := h.makeTab("Streaming", "Streaming", "45.00", "Music", "30.00")
+	h.post(tab+"/schedule", url.Values{
+		"csrf_token":      {h.csrfToken(tab)},
+		"schedule_kind":   {string(schedule.MonthlyDay)},
+		"schedule_anchor": {today.AddDays(-40).String()},
+	})
+	// Reading accrues the overdue periods, so the balance is more than one.
+	h.get(tab)
+
+	_, body := h.get("/")
+	// The card offers one period's $75, not the multiple that has accrued.
+	if !strings.Contains(body, "Pay $75.00") {
+		t.Errorf("the Services primary button does not offer one period's charge: %s", truncate(body))
+	}
+}
+
+// When less than a period remains, the primary button pays only what is left
+// rather than overshooting a whole installment into credit.
+func TestPrimaryButtonCapsAtTheBalance(t *testing.T) {
+	h := newHarness(t)
+	h.completeSetup()
+
+	today := instanceToday(t)
+	// A $5,000 loan, $250 period, but only $100 outstanding after a big payment.
+	tabID, _ := h.createPayoffTab("5000.00", "250.00", today.AddDays(-1), nil)
+	h.post(tabPath(tabID)+"/payments", url.Values{
+		"csrf_token": {h.csrfToken(tabPath(tabID))},
+		"amount":     {"4900.00"},
+		"method":     {"transfer"},
+	})
+
+	_, body := h.get("/")
+	// $100 is owed, less than the $250 period, so the button settles $100.
+	if strings.Contains(body, "Pay $250.00") {
+		t.Errorf("the button offered a full period beyond the balance: %s", truncate(body))
+	}
+	if !strings.Contains(body, "Settle $100.00") {
+		t.Errorf("the button does not settle the $100 remaining: %s", truncate(body))
+	}
+}
+
+// A hand-billed tab with no periodic amount keeps the settle-the-balance
+// button, since there is no period to offer.
+func TestPrimaryButtonFallsBackWithoutAPeriod(t *testing.T) {
+	h := newHarness(t)
+	h.completeSetup()
+
+	// A Services tab with a manual charge and no schedule or items.
+	tab := h.makeTab("Odd jobs")
+	h.post(tab+"/charges", url.Values{
+		"csrf_token": {h.csrfToken(tab)}, "amount": {"60.00"}, "memo": {"Fence"},
+	})
+
+	_, body := h.get("/")
+	if !strings.Contains(body, "Settle $60.00") {
+		t.Errorf("a tab with no period should still settle its balance: %s", truncate(body))
 	}
 }

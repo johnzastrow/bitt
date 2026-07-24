@@ -57,6 +57,21 @@ run: generate ## Run locally on :8080 over plain HTTP
 .PHONY: check
 check: fmt vet test ## Format, vet, and test -- run before committing
 
+.PHONY: image
+image: ## Build the container image as bittabby:dev
+	docker build \
+	  --build-arg COMMIT=$(COMMIT) \
+	  --build-arg BUILD_DATE=$(BUILD_DATE) \
+	  -t bittabby:dev .
+
+.PHONY: up
+up: ## Bring the compose stack up (see docs/DEPLOY.md for the secret it needs)
+	docker compose up -d
+
+.PHONY: down
+down: ## Stop the compose stack, keeping the data volume
+	docker compose down
+
 .PHONY: clean
 clean: ## Remove build output
 	rm -f $(BINARY)

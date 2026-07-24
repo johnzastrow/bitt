@@ -7,6 +7,61 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [0.8.0] - 2026-07-24 — Phase 6 begins: it deploys
+
+Three of Phase 6's five requirements. Someone other than the author can now
+stand this up, and the instructions are ones that have been run rather than
+written.
+
+### Added
+- **A container image** (`Dockerfile`), ~25 MB on
+  `gcr.io/distroless/static-debian12:nonroot` — no shell, no package manager,
+  no userland. Runs as uid 65532 with `no-new-privileges` and all capabilities
+  dropped. No templ step: the generated files are committed, so the image built
+  from a tag is the code at that tag. **DEPLOY-05.**
+- **`compose.yaml`**, with a named data volume, file-based secrets, and a
+  `reminders` sidecar that calls `/internal/tick` hourly — because nothing sends
+  without an external caller and that is the step most likely to be missed.
+- **GitHub Actions**: CI (vet, test, race, image build, and a check that the
+  committed `_templ.go` files are current) and a release workflow publishing
+  multi-arch `linux/amd64,linux/arm64` images to ghcr.io on a version tag, with
+  a build-provenance attestation and a guard that the tag matches
+  `internal/version`. **DEPLOY-05.**
+- **`bittabby --healthcheck`**, which probes `/healthz` on loopback and reports
+  through its exit code. The image has no curl and no shell to probe with, and
+  shipping either to satisfy a `HEALTHCHECK` would put a whole userland into an
+  image holding one static binary.
+- **[docs/DEPLOY.md](docs/DEPLOY.md)** — quick start, configuration, secrets,
+  reminder delivery, backup, restore, and upgrading. **DEPLOY-07.**
+- `.env.example` now covers the notification variables, which it had not since
+  Phase 5 landed.
+
+### Verified
+- **The restore path was exercised, not just written.** Seeded a real tab and
+  balance, took a cold backup, destroyed the volume with `down -v`, restored,
+  and confirmed the tab and its balance came back. The procedure in DEPLOY.md is
+  that run.
+- The full compose stack was run end to end: non-root app, non-root sidecar, one
+  `0600` secret file readable by both, healthcheck reporting `healthy`, and the
+  sidecar authenticating against `/internal/tick`.
+
+### Changed
+- **The loose-secret-file warning now considers the directory.** A `0644` file
+  inside a `0700` directory is not exposed — no other account can traverse to
+  reach it — and warning about it fired on a legitimate container deployment.
+  A warning that fires on correct configuration is one operators learn to
+  scroll past.
+- `docs/REQUIREMENTS.md` numbered the ship phase as 5, from before notifications
+  were inserted as Phase 5. It is Phase 6 throughout now, matching the roadmap.
+
+### Note on secrets and ownership
+Docker bind-mounts a secret file with the **host's** ownership, so a `0600` file
+owned by you is unreadable by a container running as 65532 — the app fails
+closed rather than starting without it. `chown 65532` on the secret is what
+makes `0600` work on the host and in both containers at once. This is called out
+in `compose.yaml`, in DEPLOY.md, and here, because it is the step people will
+"fix" back.
+
 ## [0.7.4] - 2026-07-24 — Notification settings in the app, secrets left out of it
 
 Instance-wide notification config was environment-only, which meant a shell in a

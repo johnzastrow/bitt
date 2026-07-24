@@ -163,18 +163,27 @@ balance path entirely -- a failed or double send can never affect a ledger.
 
 ---
 
-## Phase 6 — Ship  -- NEXT
+## Phase 6 — Ship  -- IN PROGRESS (3 of 5, 0.8.0)
 
 **Goal:** someone other than the author can deploy it.
 
 5 requirements: UI-05; DEPLOY-03, 05, 06, 07
 
+**Delivered (0.8.0):** DEPLOY-05, 06, 07. A ~25MB distroless image running as
+uid 65532, `compose.yaml` with a reminder sidecar, CI and a ghcr.io release
+workflow with provenance attestation, `bittabby --healthcheck`, and
+[../DEPLOY.md](../DEPLOY.md). The restore path was exercised: the data volume
+was destroyed outright and the data came back.
+
+**Remaining:** DEPLOY-03 (MariaDB) and UI-05 (PWA). MariaDB is the one with
+real risk; the PWA is self-contained.
+
 **Exit criteria**
 - MariaDB selectable by configuration, with the full test suite green against both backends
-- Docker image published via GitHub, running as non-root
-- Secrets read from environment or file; none present in the image or the repository
+- ~~Docker image published via GitHub, running as non-root~~ (0.8.0)
+- ~~Secrets read from environment or file; none present in the image or the repository~~ (0.8.0)
 - App installs to a phone home screen and opens to a cached shell
-- Backup and restore documented, and the restore path actually exercised once
+- ~~Backup and restore documented, and the restore path actually exercised once~~ (0.8.0)
 
 **Risk:** MariaDB is where SQLite-only assumptions surface. DEPLOY-02 in Phase 1 is what keeps this from becoming a rewrite — if this phase requires touching call sites, the repository interface leaked.
 

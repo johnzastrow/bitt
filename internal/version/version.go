@@ -8,7 +8,7 @@
 // Versioning follows semver. Pre-1.0, the minor tracks the delivered phase:
 // 0.1 walking skeleton, 0.2 the settle loop, 0.3 recurrence, 0.4 payoff tabs
 // and late fees, 0.5 loan terms and scheduled payments, 0.6 account profiles,
-// 0.7 notifications.
+// 0.7 notifications, 0.8 ship (Docker, deployment, backup/restore).
 // The patch increments for fixes between phases. See CHANGELOG.md.
 package version
 
@@ -16,7 +16,7 @@ import "fmt"
 
 // Number is the semantic version. Bump it on every functional change: patch for
 // a fix, minor for a feature, major for a break. This is the value to edit.
-const Number = "0.7.4"
+const Number = "0.8.0"
 
 // Commit and Date are set at build time via -ldflags, e.g.
 //

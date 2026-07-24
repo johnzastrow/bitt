@@ -1,0 +1,65 @@
+# Lint, test, and build on every push and pull request.
+#
+# The suite is the gate. It runs twice -- once plainly and once under the race
+# detector -- because the accrual path claims periods under concurrency, and a
+# data race there would corrupt a ledger rather than crash a request.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Generated templates are committed and current
+        # The Dockerfile does a plain `go build`, which is only correct while
+        # the generated files in the tree match their .templ sources. A stale
+        # commit would ship a container built from templates nobody can see in
+        # the diff.
+        run: |
+          go run github.com/a-h/templ/cmd/templ@v0.3.1020 generate
+          if ! git diff --exit-code --stat; then
+            echo "::error::generated *_templ.go files are out of date -- run 'make generate' and commit"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Test under the race detector
+        run: go test -race ./...
+
+      - name: Build
+        run: CGO_ENABLED=0 go build -trimpath -o /dev/null ./cmd/bittabby
+
+  image:
+    # Build the image on every change so a broken Dockerfile is caught here
+    # rather than at release. Nothing is pushed; that is release.yml's job.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          build-args: |
+            COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -1,0 +1,45 @@
+# Keep the build context to source. Anything here either cannot help the build
+# or must never reach an image.
+
+# The financial store, above all else. A stray data/ in a build context would
+# bake someone's ledger and password hashes into a published image.
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Secrets and local configuration.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Build output. The image builds its own binary; copying a host one in would
+# make the image's provenance a lie.
+/bittabby
+/dist/
+/bin/
+*.exe
+*.test
+coverage.*
+
+# Version control and CI.
+.git/
+.github/
+.gitignore
+.dockerignore
+
+# Documentation and planning: large, and none of it is compiled.
+docs/
+*.md
+
+# Editor and OS.
+.claude/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp

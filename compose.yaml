@@ -1,0 +1,127 @@
+# BitTabby, deployed (DEPLOY-05, DEPLOY-06).
+#
+#   mkdir -p secrets
+#   head -c 32 /dev/urandom | base64 > secrets/tick_secret
+#   sudo chown 65532 secrets/tick_secret && chmod 600 secrets/tick_secret
+#   docker compose up -d
+#
+# That chown is the one surprising step, and it is worth understanding rather
+# than copying. Docker bind-mounts a secret file into a container with the
+# HOST's ownership, unchanged. Both containers here run as uid 65532, so a file
+# owned by you and mode 0600 is one NEITHER of them can read -- the app refuses
+# to start rather than run without its secret, and the reminder caller sends an
+# empty bearer token. Handing the file to 65532 is what makes 0600 work end to
+# end, on the host and in both containers.
+#
+# Then open http://localhost:8080 and complete first-run setup. The full guide,
+# including backup and restore, is in docs/DEPLOY.md.
+
+services:
+  bittabby:
+    image: ghcr.io/johnzastrow/bitt:latest
+    # To build from a checkout instead of pulling a published image:
+    #   docker compose build && docker compose up -d
+    build:
+      context: .
+      args:
+        COMMIT: dev
+        BUILD_DATE: dev
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+
+    environment:
+      # Set this once you are behind HTTPS -- a reverse proxy, a tunnel, or a
+      # load balancer terminating TLS. Leaving it false on anything reachable
+      # from a network sends session cookies without the Secure flag.
+      BITT_SECURE_COOKIES: "false"
+
+      # Every period boundary on this instance is computed in this zone. It
+      # seeds the first-run screen; after setup the stored value is
+      # authoritative and this is only a default.
+      BITT_TIMEZONE: America/New_York
+
+      # The external origin, used to build the link in a reminder. It is
+      # deliberately not taken from a request's Host header, because the only
+      # caller that needs it arrives on a cron request whose Host is whatever
+      # the cron sent -- and a link built from that is a phishing vector. Unset
+      # means reminders simply omit the link rather than guessing one.
+      BITT_BASE_URL: http://localhost:8080
+
+      # Secrets are read from the file the value points at, never from the
+      # image and never from this file. Any BITT_* value accepts the form.
+      BITT_TICK_SECRET: file:/run/secrets/tick_secret
+
+      # Notification delivery. Server, port, user, from address, and the ntfy
+      # URL can all be set in the app instead, under Notifications -- but an
+      # environment value WINS over one set there, so a setting you want to
+      # manage in the app should be left unset here.
+      # BITT_SMTP_HOST: smtp.example.com
+      # BITT_SMTP_PORT: "587"
+      # BITT_SMTP_USERNAME: bitt@example.com
+      # BITT_SMTP_PASSWORD: file:/run/secrets/smtp_password
+      # BITT_EMAIL_FROM: BitTabby <bitt@example.com>
+      # BITT_NTFY_URL: https://ntfy.sh
+
+    secrets:
+      - tick_secret
+      # - smtp_password
+
+    volumes:
+      # A NAMED volume, not a bind mount. The image creates /data owned by
+      # 65532 (the non-root user it runs as) and Docker copies that ownership
+      # into a fresh named volume. A bind mount does not inherit it, so a host
+      # directory has to be chowned to 65532 by hand first -- see docs/DEPLOY.md.
+      - bitt-data:/data
+
+    # The container runs as a non-root user with no shell and no package
+    # manager, so these cost nothing and close the usual escalation routes.
+    read_only: false # SQLite writes its WAL beside the database, inside /data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # Reminders are delivered by an EXTERNAL caller hitting /internal/tick. There
+  # is no timer inside the server, deliberately -- a background scheduler is
+  # what stalled this project's predecessor, and an app that only acts when
+  # asked is one that cannot quietly bill someone at 3am.
+  #
+  # This is that caller: an hourly POST with the shared secret. Anything that
+  # can make an authenticated HTTP request will do instead -- a host crontab, a
+  # systemd timer, an uptime monitor. See docs/DEPLOY.md for those.
+  #
+  # Sending is idempotent per (tab, event, channel), so an hour that fires twice
+  # sends nothing twice, and an hour that is missed sends late rather than never.
+  reminders:
+    image: curlimages/curl:latest
+    restart: unless-stopped
+    # The same non-root user as the app, so one 0600 secret file serves both.
+    user: "65532:65532"
+    depends_on:
+      - bittabby
+    secrets:
+      - tick_secret
+    entrypoint:
+      - sh
+      - -c
+      - |
+        while :; do
+          sleep 3600
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $$(cat /run/secrets/tick_secret)" \
+            http://bittabby:8080/internal/tick || true
+        done
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+secrets:
+  tick_secret:
+    file: ./secrets/tick_secret
+  # smtp_password:
+  #   file: ./secrets/smtp_password
+
+volumes:
+  bitt-data:

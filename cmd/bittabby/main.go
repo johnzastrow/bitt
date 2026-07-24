@@ -8,7 +8,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -68,6 +70,8 @@ func runArgs(args []string) (handled bool, err error) {
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return true, nil
+	case "--healthcheck", "healthcheck":
+		return true, healthcheck()
 	}
 	return true, fmt.Errorf("unrecognized argument %q\n\n%s", args[0], usage)
 }
@@ -77,9 +81,10 @@ func runArgs(args []string) (handled bool, err error) {
 const usage = `bittabby -- self-hosted shared-tab tracker
 
 Usage:
-  bittabby            start the server
-  bittabby --version  print the version and exit
-  bittabby --help     print this message and exit
+  bittabby                start the server
+  bittabby --version      print the version and exit
+  bittabby --help         print this message and exit
+  bittabby --healthcheck  probe a running server and exit 0 if it is healthy
 
 Configuration is read from the environment:
   BITT_ADDR                 listen address (default :8080)
@@ -91,6 +96,53 @@ Configuration is read from the environment:
 Starting the server applies any pending schema migrations, which are
 forward-only. Take a copy first if that matters.
 `
+
+// healthcheck probes a running server on this host and reports its state
+// through the exit code: 0 healthy, non-zero not.
+//
+// It exists because the container image has no shell and no curl to probe with.
+// Shipping either one to satisfy a HEALTHCHECK would put a whole userland into
+// an image that currently holds one static binary, which is a poor trade for a
+// GET this binary can perform on itself.
+//
+// It talks to the loopback address on the configured port rather than to
+// BITT_ADDR verbatim, since that is often ":8080" or "0.0.0.0:8080", neither of
+// which is a destination.
+func healthcheck() error {
+	addr := os.Getenv("BITT_ADDR")
+	if addr == "" {
+		addr = ":8080"
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		return fmt.Errorf("healthcheck: BITT_ADDR %q has no port", addr)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), healthcheckTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		"http://127.0.0.1:"+port+"/healthz", nil)
+	if err != nil {
+		return fmt.Errorf("healthcheck: %w", err)
+	}
+	resp, err := (&http.Client{Timeout: healthcheckTimeout}).Do(req)
+	if err != nil {
+		return fmt.Errorf("healthcheck: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	// Read and discard so the connection can be reused and nothing is left
+	// half-consumed on the server side.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<10))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("healthcheck: server returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// healthcheckTimeout bounds the probe. A container healthcheck has its own
+// timeout, and hanging until that fires reports "unhealthy" far later than
+// necessary.
+const healthcheckTimeout = 5 * time.Second
 
 func run() error {
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))

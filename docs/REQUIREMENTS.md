@@ -102,9 +102,9 @@ Driven entirely by the schedule's due dates. Reuses the lazy posting path.
 - [x] **DEPLOY-02**: All SQL is isolated behind a repository interface with no dependence on SQLite-only behavior, so a second backend can be added without touching call sites
 - [ ] **DEPLOY-03**: MariaDB is supported as a second backend, selectable by configuration
 - [x] **DEPLOY-04**: The application ships as a single static binary with templates, assets, and migrations embedded
-- [ ] **DEPLOY-05**: A Docker image is published via GitHub and runs as a non-root user
-- [ ] **DEPLOY-06**: Secrets are supplied by environment or file rather than baked into the image or committed to the repository
-- [ ] **DEPLOY-07**: Backup and restore for the financial data store is documented
+- [x] **DEPLOY-05**: A Docker image is published via GitHub and runs as a non-root user
+- [x] **DEPLOY-06**: Secrets are supplied by environment or file rather than baked into the image or committed to the repository
+- [x] **DEPLOY-07**: Backup and restore for the financial data store is documented
 
 ---
 
@@ -157,7 +157,8 @@ Requirement-to-phase mapping. Every phase after Phase 1 adds to an application a
 | 2 | The settle loop — this is the product | LEDGER-02, 07; TAB-03, 06; PAY-01, 02, 03, 04, 05; AUTH-04, 05; UI-01, 03, 04 | 14 |
 | 3 | Recurrence — schedules, lazy accrual, statements | SCHED-01, 02, 03, 04, 05; CHG-01, 02, 04 | 8 |
 | 4 | Payoff tabs and late fees | TAB-02; PAYOFF-01, 02, 03; FEE-01, 02, 03, 04, 05, 06, 07 | 11 |
-| 5 | Ship — MariaDB, Docker, PWA shell | UI-05; DEPLOY-03, 05, 06, 07 | 5 |
+| 5 | Notifications — email and ntfy reminders | (added after this list was written; see ROADMAP.md) | — |
+| 6 | Ship — MariaDB, Docker, PWA shell | UI-05; DEPLOY-03, 05, 06, 07 | 5 |
 
 | REQ-ID | Phase | Status |
 |--------|-------|--------|
@@ -207,14 +208,14 @@ Requirement-to-phase mapping. Every phase after Phase 1 adds to an application a
 | UI-02 | Phase 1 | Complete |
 | UI-03 | Phase 2 | Complete |
 | UI-04 | Phase 2 | Complete |
-| UI-05 | Phase 5 | Pending |
+| UI-05 | Phase 6 | Pending |
 | DEPLOY-01 | Phase 1 | Complete |
 | DEPLOY-02 | Phase 1 | Complete |
-| DEPLOY-03 | Phase 5 | Pending |
+| DEPLOY-03 | Phase 6 | Pending |
 | DEPLOY-04 | Phase 1 | Complete |
-| DEPLOY-05 | Phase 5 | Pending |
-| DEPLOY-06 | Phase 5 | Pending |
-| DEPLOY-07 | Phase 5 | Pending |
+| DEPLOY-05 | Phase 6 | Complete |
+| DEPLOY-06 | Phase 6 | Complete |
+| DEPLOY-07 | Phase 6 | Complete |
 
 **Coverage:** 54/54 v1 requirements mapped across 5 phases. No orphans, no duplicates.
 

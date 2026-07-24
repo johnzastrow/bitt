@@ -1,6 +1,7 @@
 package config
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -159,4 +160,74 @@ func TestDefaultReminderUsesEveryVariable(t *testing.T) {
 				v, defaultReminderTitle, defaultReminderBody)
 		}
 	}
+}
+
+// The loose-secret warning has to understand directories, or it fires on the
+// deployment this project documents.
+//
+// Docker bind-mounts a secret file into the container with the host's
+// ownership, and the container runs as a different non-root user -- so the file
+// must be group/other-readable for the app to read it at all. Inside a 0700
+// directory that is not an exposed secret, and warning about it would train an
+// operator to ignore the warning that matters.
+func TestSecretFileWarningConsidersTheDirectory(t *testing.T) {
+	cases := []struct {
+		name     string
+		dirMode  os.FileMode
+		fileMode os.FileMode
+		wantWarn bool
+	}{
+		{"owner-only file, owner-only dir", 0o700, 0o600, false},
+		{"owner-only file, open dir", 0o755, 0o600, false},
+		{"readable file inside a closed dir", 0o700, 0o644, false},
+		{"readable file inside an open dir", 0o755, 0o644, true},
+		{"world-writable file inside an open dir", 0o755, 0o666, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "secrets")
+			if err := os.Mkdir(dir, tc.dirMode); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			// Mkdir applies the umask, so set the mode explicitly.
+			if err := os.Chmod(dir, tc.dirMode); err != nil {
+				t.Fatalf("chmod dir: %v", err)
+			}
+			path := filepath.Join(dir, "tick_secret")
+			if err := os.WriteFile(path, []byte("s3cret\n"), tc.fileMode); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			if err := os.Chmod(path, tc.fileMode); err != nil {
+				t.Fatalf("chmod file: %v", err)
+			}
+
+			warned := captureStderr(t, func() { warnIfSecretFileLoose("BITT_TICK_SECRET", path) })
+			if got := strings.Contains(warned, "warning"); got != tc.wantWarn {
+				t.Errorf("warned = %v, want %v (dir %#o, file %#o): %q",
+					got, tc.wantWarn, tc.dirMode, tc.fileMode, warned)
+			}
+		})
+	}
+}
+
+// captureStderr runs fn with os.Stderr redirected and returns what it wrote.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	saved := os.Stderr
+	os.Stderr = w
+	fn()
+	os.Stderr = saved
+	_ = w.Close()
+
+	var buf strings.Builder
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	_ = r.Close()
+	return buf.String()
 }

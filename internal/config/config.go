@@ -305,23 +305,45 @@ func (l *loader) str(key, def string) string {
 	return strings.TrimSpace(string(b))
 }
 
-// warnIfSecretFileLoose notes a file: secret that is readable beyond its owner.
+// warnIfSecretFileLoose notes a file: secret that is genuinely readable beyond
+// its owner -- meaning both the file's own bits allow it AND the directory
+// holding the file can be traversed to reach it.
 //
-// It warns rather than refuses: the documented file:/run/secrets/name
-// convention (Docker, Kubernetes) mounts secret files world-readable inside an
-// isolated namespace, so a hard refusal would break the very deployment the
-// feature exists for. The app reads the file rather than owning it, so a
-// warning plus the 0600 note in .env.example is the right ceiling.
+// The directory half is not pedantry, it is what makes the warning worth
+// reading. Docker bind-mounts a secret file into the container with the host's
+// ownership, and the container runs as a different, non-root user -- so the
+// documented deployment needs a file the owner is not the reader of, which in
+// practice means group/other-readable bits inside a 0700 directory. That is not
+// an exposed secret: no other account on the host can traverse the directory to
+// reach it. Warning about it anyway would fire on the setup this project's own
+// compose file tells people to use, and a warning that fires on correct
+// configuration is one operators learn to scroll past.
+//
+// It warns rather than refuses, because the file:/run/secrets/name convention
+// (Docker, Kubernetes) also mounts secrets world-readable inside an isolated
+// namespace, and a hard refusal would break the deployment the feature exists
+// for.
+//
+// Only the immediate parent is checked. A full walk to the root would catch a
+// loose grandparent, but the common mistake by a wide margin is a
+// world-readable file in a directory nobody thought about, and that is what
+// this catches.
 func warnIfSecretFileLoose(key, path string) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return
 	}
-	if info.Mode().Perm()&0o077 != 0 {
-		fmt.Fprintf(os.Stderr,
-			"config: warning: %s secret file %q is readable by group or others (%#o); prefer 0600\n",
-			key, path, info.Mode().Perm())
+	if info.Mode().Perm()&0o077 == 0 {
+		return
 	}
+	// A directory another account cannot enter is one they cannot read a file
+	// out of, whatever that file's own bits say.
+	if dir, err := os.Stat(filepath.Dir(path)); err == nil && dir.Mode().Perm()&0o055 == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr,
+		"config: warning: %s secret file %q is readable by group or others (%#o), in a directory they can enter; prefer 0600, or 0700 on the directory\n",
+		key, path, info.Mode().Perm())
 }
 
 func envBool(key string, def bool) bool {

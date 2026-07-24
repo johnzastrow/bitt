@@ -143,3 +143,16 @@ func TestLoadReminders(t *testing.T) {
 		t.Error("a non-positive day count was accepted")
 	}
 }
+
+// The built-in message is the worked example an administrator edits from, so
+// between the title and the body it must use every variable there is. A new
+// variable added without a place in the default leaves it undemonstrated.
+func TestDefaultReminderUsesEveryVariable(t *testing.T) {
+	both := defaultReminderTitle + "\n" + defaultReminderBody
+	for _, v := range []string{"{tab}", "{amount}", "{due}", "{days}", "{when}", "{url}"} {
+		if !strings.Contains(both, v) {
+			t.Errorf("the default reminder never uses %s:\ntitle: %s\nbody:  %s",
+				v, defaultReminderTitle, defaultReminderBody)
+		}
+	}
+}

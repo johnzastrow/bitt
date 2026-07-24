@@ -135,6 +135,65 @@ func Simulate(t Terms, payment money.Cents) Outcome {
 	return Outcome{}
 }
 
+// Installment is one payment in a projected schedule: what is paid, and what is
+// still owed once it lands.
+type Installment struct {
+	// Number counts from one at the next payment, not from the origination of
+	// the loan -- a projection starts from where the loan actually is.
+	Number int
+	// Payment is what falls due. It is the installment every period but the
+	// last, which is whatever is left.
+	Payment money.Cents
+	// Balance is what remains owed after this payment: outstanding principal
+	// plus any unpaid interest. Zero on the final row.
+	Balance money.Cents
+}
+
+// Project runs payment against terms period by period and returns every payment
+// remaining until the loan is repaid.
+//
+// It is Simulate with the per-period detail kept rather than folded into
+// totals, and it runs the identical arithmetic, so the two cannot disagree
+// about when a loan retires or what it costs. nil means the loan never retires
+// -- the same condition Simulate reports through Outcome.Retires -- and there
+// is then no schedule to show.
+func Project(t Terms, payment money.Cents) []Installment {
+	if !t.Valid() || payment <= 0 {
+		return nil
+	}
+
+	principal, unpaid := t.Principal, t.AccruedUnpaid
+	out := make([]Installment, 0, 12)
+	for n := 1; n <= MaxPeriods; n++ {
+		interest, ok := money.InterestFor(principal, t.APRBp, t.RateNum, t.RateDen)
+		if !ok {
+			return nil
+		}
+		unpaid += interest
+
+		// The last payment is whatever is actually left, and lands on zero.
+		owed := principal + unpaid
+		if owed <= payment {
+			return append(out, Installment{Number: n, Payment: owed})
+		}
+
+		// U.S. Rule: interest first, and only then principal.
+		if payment >= unpaid {
+			principal -= payment - unpaid
+			unpaid = 0
+		} else {
+			unpaid -= payment
+			// Principal did not move. Whether it ever will depends on the
+			// payment against *this period's* interest, exactly as in Simulate.
+			if payment <= interest {
+				return nil
+			}
+		}
+		out = append(out, Installment{Number: n, Payment: payment, Balance: principal + unpaid})
+	}
+	return nil
+}
+
 // SuggestPayment returns the smallest per-period payment that retires the loan
 // within its term, together with what that schedule costs.
 //

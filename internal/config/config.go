@@ -82,9 +82,20 @@ type Reminder struct {
 	Body  string
 }
 
+// The built-in reminder message. Between them the two templates use every
+// variable there is, so the shipped default doubles as the worked example an
+// administrator edits from: nobody has to guess what {days} looks like beside
+// {when}, or where {url} lands, before writing their own.
+//
+// Each variable earns its place rather than being there to be demonstrated. The
+// title is what a phone shows on a locked screen, so it carries the tab, the
+// amount, and how soon -- enough to act on without opening anything. The body
+// names the lead time it is ({days}), says the same "when" in words and as a
+// date, restates the amount now that there is room for it, and ends on the link.
 const (
-	defaultReminderTitle = "Payment due {when}"
-	defaultReminderBody  = "A payment on the tab \"{tab}\" is due {when}, on {due}.\n{amount} is owed.\n{url}"
+	defaultReminderTitle = "{tab}: {amount} due {when}"
+	defaultReminderBody  = "Your {days}-day reminder: a payment on the tab \"{tab}\" is due {when}, on {due}.\n" +
+		"{amount} is owed.\n{url}"
 )
 
 // NotifyConfig is the delivery configuration for notifications.

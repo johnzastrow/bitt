@@ -825,3 +825,48 @@ tr.reversal td { color: var(--fg-muted); }
   background: var(--bg);
 }
 .groupbody .card:last-child { margin-bottom: var(--s3); }
+
+/* ---------- A card that folds ---------- */
+
+/* One card whose own contents collapse, as against .group, which folds several
+   cards under a shared header. The projected payment schedule uses it: on a
+   long loan it is hundreds of rows of reference material, so it stays shut
+   until it is asked for, and its summary carries the figures worth seeing
+   without opening it. */
+.fold > .foldhead {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s2);
+  font-size: var(--t-lg);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.fold > .foldhead::-webkit-details-marker { display: none; }
+.fold > .foldhead::before {
+  content: "\25B8"; /* right-pointing triangle */
+  color: var(--fg-muted);
+  font-size: var(--t-sm);
+  transition: transform 120ms ease;
+}
+.fold[open] > .foldhead { margin-bottom: var(--s3); }
+.fold[open] > .foldhead::before { transform: rotate(90deg); }
+
+/* The projected schedule is a long numeric table -- a thirty-year loan is 360
+   rows -- so it scrolls inside its own card rather than stretching the page,
+   and its head stays put while it does. */
+.foldscroll { max-height: 26rem; overflow: auto; }
+.forecast { font-variant-numeric: tabular-nums; }
+.forecast thead th {
+  position: sticky;
+  top: 0;
+  background: var(--card-bg);
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+.forecast tfoot td { font-weight: 650; border-bottom: none; }
+
+/* The running balance beside each history entry is supporting context for the
+   amount it follows, so it sits a shade quieter than the amount itself. */
+.amount.running { font-weight: 500; }

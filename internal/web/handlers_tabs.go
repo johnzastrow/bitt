@@ -403,6 +403,12 @@ func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 	// where it would be refused. Computed from the entries already loaded.
 	reversed := ledger.ReversedSeqs(entries)
 
+	// The running balance beside each entry. Entries arrive newest first, so the
+	// walk starts at the balance the page shows and subtracts each entry back
+	// out: the top row is the current balance by construction, and the column
+	// cannot disagree with the figure above it.
+	running := balance
+
 	rows := make([]views.HistoryRow, 0, len(entries))
 	for _, e := range entries {
 		canUndo := ledger.CanUndo(e, reversed) &&
@@ -414,7 +420,9 @@ func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 			ActorID:     e.ActorUserID,
 			ActorAvatar: actor.AvatarKey,
 			CanUndo:     canUndo,
+			Balance:     running,
 		})
+		running -= e.Amount
 	}
 
 	participants, err := s.store.ListParticipants(r.Context(), tab.ID)
@@ -477,6 +485,8 @@ func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 		// Advisory only: the suggested payment and the true-up against it.
 		// Nothing here posts, and the Provider's entered payment is unchanged.
 		data.Plan = ledger.ComputePlan(tab, payoff)
+		// The payments still to come, at the payment being made now.
+		data.Forecast = ledger.ComputeForecast(tab, payoff, data.Today)
 	}
 
 	s.render(w, r, http.StatusOK, views.TabDetail(s.page(w, r, tab.Name), data))

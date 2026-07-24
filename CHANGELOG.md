@@ -7,6 +7,34 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [0.7.2] - 2026-07-24 — Running balances and the projected payment schedule
+
+### Added
+- **A balance column in the tab history.** Every entry now shows the tab balance
+  as it stood immediately after it, so the history reads like a bank statement.
+  Rows run newest first, and the top row is the balance in the tab's header by
+  construction -- the column is walked back from that figure, so the two cannot
+  disagree.
+- **A collapsible Payments table on Payoff tabs**, projecting every payment
+  still to come: payment date, amount, and the balance left owed after it, down
+  to zero. Its folded summary carries the count, the total cost to finish, and
+  the projected payoff date. `loan.Project` runs the same per-period arithmetic
+  as `loan.Simulate` -- U.S. Rule allocation, interest rounded once per period
+  -- and a test pins the two together, so the schedule agrees with what the
+  ledger will actually post. Nothing is stored; it is derived on each render
+  from the entries that produce the balance, and it is empty whenever there is
+  nothing honest to project (no schedule, no expected payment, already settled,
+  or a payment too small to ever retire the loan -- that last is the true-up
+  banner's business).
+
+### Changed
+- **The built-in reminder message now uses every template variable**, so the
+  shipped default doubles as the worked example an administrator edits from.
+  Title: `{tab}: {amount} due {when}`. Body: `Your {days}-day reminder: a
+  payment on the tab "{tab}" is due {when}, on {due}.` / `{amount} is owed.` /
+  `{url}`. Overriding it works exactly as before via `BITT_REMINDER_TITLE` /
+  `BITT_REMINDER_BODY` and their per-lead-time variants.
+
 ## [0.7.1] - 2026-07-24 — Configurable reminder days and messages
 
 ### Added

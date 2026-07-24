@@ -31,6 +31,13 @@ import (
 )
 
 func main() {
+	if handled, err := runArgs(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "bittabby: %v\n", err)
+			os.Exit(2)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		// The detail goes to stderr for the operator; nothing sensitive is
 		// included, since config never logs values.
@@ -38,6 +45,51 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// runArgs handles the command line, reporting whether it did something that
+// should stop main from starting a server.
+//
+// The server takes all its configuration from the environment and accepts no
+// flags, so historically it ignored argv entirely. That is a worse default than
+// it sounds: `bittabby --version` looks like a question and was answered by
+// silently starting a server against BITT_DB_PATH, which on one occasion
+// migrated a live database that was only meant to be inspected. Anything
+// unrecognized is now refused, and the two questions people actually ask are
+// answered without touching the database.
+func runArgs(args []string) (handled bool, err error) {
+	if len(args) == 0 {
+		return false, nil
+	}
+	switch args[0] {
+	case "-v", "--version", "version":
+		fmt.Println(version.Full())
+		return true, nil
+	case "-h", "--help", "help":
+		fmt.Print(usage)
+		return true, nil
+	}
+	return true, fmt.Errorf("unrecognized argument %q\n\n%s", args[0], usage)
+}
+
+// usage lists what the binary accepts. Configuration is environment-only, so
+// this is mostly a pointer at the variables that matter.
+const usage = `bittabby -- self-hosted shared-tab tracker
+
+Usage:
+  bittabby            start the server
+  bittabby --version  print the version and exit
+  bittabby --help     print this message and exit
+
+Configuration is read from the environment:
+  BITT_ADDR                 listen address (default :8080)
+  BITT_DB_PATH              SQLite database path (default data/bitt.db)
+  BITT_TIMEZONE             default instance timezone, used at first-run setup
+  BITT_SECURE_COOKIES       set false only for plain HTTP on localhost
+  BITT_APPEND_ONLY_TRIGGERS set false only to recover a database by hand
+
+Starting the server applies any pending schema migrations, which are
+forward-only. Take a copy first if that matters.
+`
 
 func run() error {
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))

@@ -17,6 +17,7 @@ import (
 	"github.com/johnzastrow/bitt/internal/ledger"
 	"github.com/johnzastrow/bitt/internal/store"
 	"github.com/johnzastrow/bitt/internal/store/sqlite"
+	"github.com/johnzastrow/bitt/internal/tz"
 	"github.com/johnzastrow/bitt/internal/version"
 )
 
@@ -572,4 +573,177 @@ func (c *clientFor) login(email, password string) {
 		c.t.Fatalf("login %s: %v", email, err)
 	}
 	_ = resp.Body.Close()
+}
+
+// ---------------------------------------------------------------------------
+// Setup: the timezone picker
+// ---------------------------------------------------------------------------
+
+// The setup screen offers the zone list rather than asking someone to recall an
+// IANA name exactly.
+func TestSetupOffersTimezoneOptions(t *testing.T) {
+	h := newHarness(t)
+	_, body := h.get("/setup")
+
+	if !strings.Contains(body, `list="timezone-options"`) {
+		t.Errorf("the timezone field is not wired to a datalist: %s", truncate(body))
+	}
+	if !strings.Contains(body, `<datalist id="timezone-options">`) {
+		t.Error("no datalist is rendered")
+	}
+	for _, want := range []string{"UTC", "America/New_York", "Asia/Kolkata"} {
+		if !strings.Contains(body, `<option value="`+want+`">`) {
+			t.Errorf("%q is not offered", want)
+		}
+	}
+	// Every offered zone must be one the handler would accept, or the picker
+	// hands people a value the form then rejects.
+	for _, zone := range tz.Zones() {
+		if !tz.Valid(zone) {
+			t.Errorf("offered zone %q would be rejected on submit", zone)
+		}
+	}
+}
+
+// The datalist is a convenience, not the authority: the server still validates.
+func TestSetupRejectsAnUnknownTimezone(t *testing.T) {
+	h := newHarness(t)
+	_, body := h.post("/setup", url.Values{
+		"csrf_token":   {h.csrfToken("/setup")},
+		"display_name": {"Admin"},
+		"email":        {"admin@example.com"},
+		"password":     {"correct-horse-battery-staple"},
+		"timezone":     {"Mars/Olympus"},
+	})
+	if !strings.Contains(body, "not a recognized timezone") {
+		t.Errorf("an unknown zone was not rejected: %s", truncate(body))
+	}
+
+	// A valid zone absent from the offered list must still be accepted, since
+	// the list can lag the runtime's tzdata.
+	_, body = h.post("/setup", url.Values{
+		"csrf_token":   {h.csrfToken("/setup")},
+		"display_name": {"Admin"},
+		"email":        {"admin@example.com"},
+		"password":     {"correct-horse-battery-staple"},
+		"timezone":     {"Etc/GMT+5"},
+	})
+	if strings.Contains(body, "not a recognized timezone") {
+		t.Errorf("a loadable zone outside the offered list was rejected: %s", truncate(body))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// New tab: fields scoped to the chosen kind
+// ---------------------------------------------------------------------------
+
+// The create form carries the markup the stylesheet keys off, so the two halves
+// can be shown and hidden without JavaScript.
+func TestNewTabScopesFieldsByKind(t *testing.T) {
+	h := newHarness(t)
+	h.completeSetup()
+	_, body := h.get("/tabs/new")
+
+	for _, want := range []string{
+		`class="stack kindform"`,
+		`id="kind-services"`,
+		`id="kind-payoff"`,
+		`class="stack payoff-only"`,
+		`class="stack services-only"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q in the create form: %s", want, truncate(body))
+		}
+	}
+
+	// Services is the default selection, matching parseTabKind's default.
+	if !strings.Contains(body, `id="kind-services" value="services" checked`) {
+		t.Errorf("Services is not preselected: %s", truncate(body))
+	}
+
+	// Nothing that gets hidden may be `required` -- the browser refuses to
+	// submit a form with an invalid hidden field and cannot show why.
+	for _, field := range []string{"loan_amount", "interest_apr", "loan_term", "loan_payment", "item_name", "item_amount"} {
+		for _, tag := range findInputs(body, field) {
+			if strings.Contains(tag, "required") {
+				t.Errorf("%s is required but lives in a kind-scoped block: %s", field, tag)
+			}
+		}
+	}
+}
+
+// Both kinds still create correctly through the reworked form.
+func TestNewTabCreatesEitherKind(t *testing.T) {
+	h := newHarness(t)
+	h.completeSetup()
+
+	h.post("/tabs", url.Values{
+		"csrf_token":  {h.csrfToken("/tabs/new")},
+		"name":        {"Phone plan"},
+		"kind":        {"services"},
+		"item_name":   {"Line"},
+		"item_amount": {"40.00"},
+	})
+	h.post("/tabs", url.Values{
+		"csrf_token":   {h.csrfToken("/tabs/new")},
+		"name":         {"Car loan"},
+		"kind":         {"payoff"},
+		"loan_amount":  {"21852.48"},
+		"interest_apr": {"5.24"},
+		"loan_term":    {"48"},
+		"loan_payment": {"505.65"},
+	})
+
+	tabs, err := h.db.ListTabsForUser(t.Context(), 1)
+	if err != nil {
+		t.Fatalf("list tabs: %v", err)
+	}
+	byName := make(map[string]store.Tab, len(tabs))
+	for _, tab := range tabs {
+		byName[tab.Name] = tab
+	}
+
+	services, ok := byName["Phone plan"]
+	if !ok {
+		t.Fatal("the Services tab was not created")
+	}
+	if services.Kind != store.TabServices || services.LoanTermPeriods != 0 || services.LoanPayment != 0 {
+		t.Errorf("Services tab picked up loan fields: %+v", services)
+	}
+
+	payoff, ok := byName["Car loan"]
+	if !ok {
+		t.Fatal("the Payoff tab was not created")
+	}
+	if payoff.LoanTermPeriods != 48 || payoff.LoanPayment != 50_565 {
+		t.Errorf("Payoff tab terms are %d periods at %s",
+			payoff.LoanTermPeriods, payoff.LoanPayment.Display())
+	}
+	// A Payoff tab takes no line items, whatever the form posted.
+	items, err := h.db.ListItems(t.Context(), payoff.ID)
+	if err != nil {
+		t.Fatalf("list items: %v", err)
+	}
+	if len(items) != 0 {
+		t.Errorf("the Payoff tab carries %d line items, want none", len(items))
+	}
+}
+
+// findInputs returns every <input> tag in body carrying the given name.
+func findInputs(body, name string) []string {
+	var out []string
+	needle := `name="` + name + `"`
+	for i := 0; ; {
+		j := strings.Index(body[i:], needle)
+		if j < 0 {
+			return out
+		}
+		j += i
+		start := strings.LastIndex(body[:j], "<input")
+		end := strings.Index(body[j:], ">")
+		if start >= 0 && end >= 0 {
+			out = append(out, body[start:j+end+1])
+		}
+		i = j + len(needle)
+	}
 }

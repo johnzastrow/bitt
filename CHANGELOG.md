@@ -7,6 +7,49 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [0.5.1] - 2026-07-23 — Timezone picker and kind-scoped tab fields
+
+### Added
+- **Timezone autocomplete on the setup screen.** The field was free text, which
+  asked people to recall an IANA name exactly. It now offers 410 zones through a
+  `<datalist>`, so typing "York" finds `America/New_York` — a native `<select>`
+  keyboard-searches only from the start of the value and would never find it.
+  Common zones are listed first; the rest are alphabetical. The form now
+  proposes `America/New_York` rather than `UTC`; `BITT_TIMEZONE` still overrides
+  it, and UTC remains the *fallback* when a stored zone fails to load, because a
+  broken value should degrade to something neutral rather than to a guess that
+  shifts every boundary five hours.
+- **`internal/tz`**, holding the embedded zone list. Go exposes no way to
+  enumerate the zones inside `time/tzdata`, and reading `/usr/share/zoneinfo` at
+  runtime would give a full list in development and an empty one in a scratch
+  container — the exact case the embedded tzdata exists for. The list is
+  generated and committed, the same arrangement as the vendored htmx asset, and
+  every name is filtered through `time.LoadLocation` before being offered.
+
+### Changed
+- **The create form shows only the fields belonging to the chosen tab kind.**
+  Loan amount, interest, term, and payment appear for Payoff; line items for
+  Services. The kind is now a radio group, and the stylesheet hides the
+  irrelevant half via `:has()` on the checked radio — no JavaScript, which the
+  content-security policy forbids inline, and no round trip. Where `:has()` is
+  unsupported every field shows, which is the previous behaviour.
+  Nothing kind-scoped is `required`, since a hidden required field blocks
+  submission with a message the browser cannot display; validation stays
+  server-side, by kind, as it already was.
+
+### Fixed
+- **The binary accepted no arguments and silently ignored them**, so
+  `bittabby --version` looked like a question and was answered by starting a
+  server against `BITT_DB_PATH` — which on one occasion applied a forward-only
+  migration to a database that was only meant to be inspected. `--version` and
+  `--help` now answer without touching the database, and anything unrecognized
+  exits 2 with usage.
+
+### Notes
+- The timezone list is a convenience, never the authority. A zone the running
+  tzdata can load is accepted whether or not the committed list has caught up,
+  and an unknown one is still rejected by `time.LoadLocation`.
+
 ## [0.5.0] - 2026-07-23 — Loan terms, scheduled payments, and schedule intervals
 
 A Payoff loan can now state how long it runs and what it costs per period, and

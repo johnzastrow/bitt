@@ -15,6 +15,14 @@ import (
 )
 
 // Config is the resolved deployment configuration.
+// defaultTimezone seeds a new instance when BITT_TIMEZONE is not set.
+//
+// It only ever pre-fills the first-run form, which the operator can change
+// before submitting, and it is not a fallback: a stored zone that fails to load
+// falls back to UTC, because a broken value should degrade to something neutral
+// rather than to a guess that silently shifts every boundary five hours.
+const defaultTimezone = "America/New_York"
+
 type Config struct {
 	// Addr is the listen address, e.g. ":8080".
 	Addr string
@@ -42,7 +50,7 @@ func Load() (Config, error) {
 	c := Config{
 		Addr:               envString("BITT_ADDR", ":8080"),
 		DBPath:             envString("BITT_DB_PATH", filepath.Join("data", "bitt.db")),
-		DefaultTimezone:    envString("BITT_TIMEZONE", "UTC"),
+		DefaultTimezone:    envString("BITT_TIMEZONE", defaultTimezone),
 		SecureCookies:      envBool("BITT_SECURE_COOKIES", true),
 		AppendOnlyTriggers: envBool("BITT_LEDGER_TRIGGERS", true),
 		ReadTimeout:        envDuration("BITT_READ_TIMEOUT", 15*time.Second),

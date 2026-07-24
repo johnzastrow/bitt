@@ -246,11 +246,23 @@ templ SettleConfirm(p Page, c TabCard) {
 }
 
 // NewTab is the tab creation form (TAB-01, TAB-04).
+// NewTab is the create form.
+//
+// The kind is a radio group rather than a select, and the fields that belong to
+// only one kind are wrapped in .payoff-only / .services-only. The stylesheet
+// hides the irrelevant half through :has() on the checked radio -- no
+// JavaScript, which the content-security policy forbids inline anyway, and no
+// round trip. Where :has() is unsupported the rule simply does not match and
+// every field shows, which is exactly the behaviour before this existed.
+//
+// Nothing hidden is ever `required`: a hidden required field blocks submission
+// with a validation message the browser cannot even show. Every one of these is
+// validated server-side by kind, which is the real gate.
 templ NewTab(p Page) {
 	@Layout(p) {
 		<section class="card narrow">
 			<h1>New tab</h1>
-			<form method="post" action="/tabs" class="stack">
+			<form method="post" action="/tabs" class="stack kindform">
 				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
 				<label>
 					Name
@@ -260,37 +272,49 @@ templ NewTab(p Page) {
 					What this covers
 					<input type="text" name="description" placeholder="Optional"/>
 				</label>
-				<label>
-					Kind
-					<select name="kind">
-						for _, k := range store.TabKinds() {
-							<option value={ string(k) }>{ k.Label() } &mdash; { k.Describe() }</option>
-						}
-					</select>
-				</label>
-				<label>
-					Loan amount (Payoff tabs only)
-					<input type="text" name="loan_amount" inputmode="decimal" placeholder="Leave blank for a Services tab"/>
-				</label>
-				<label>
-					Annual interest rate % (Payoff tabs only)
-					<input type="text" name="interest_apr" inputmode="decimal" placeholder="0 for an interest-free loan"/>
-				</label>
-				<label>
-					Number of payments (Payoff tabs only)
-					<input type="number" name="loan_term" min="0" max={ strconv.Itoa(schedule.MaxPeriods) } placeholder="e.g. 48 &mdash; blank for open-ended"/>
-				</label>
-				<label>
-					Scheduled payment (Payoff tabs only)
-					<input type="text" name="loan_payment" inputmode="decimal" placeholder="What the lender charges each period"/>
-				</label>
-				<p class="muted small">
-					On a Payoff tab, the loan amount posts once as the opening balance and the scheduled payment is what
-					the Payee is expected to pay each period &mdash; two different figures. Enter the payment your lender
-					actually charges; once the tab exists it will show the payment its own arithmetic works out, so any
-					disagreement is visible. Leave it blank for an open-ended IOU. Line items below are for Services tabs.
-				</p>
-				<fieldset class="stack">
+				<fieldset class="stack kindchoice">
+					<legend>Kind</legend>
+					for i, k := range store.TabKinds() {
+						<label class="kindoption">
+							<input
+								type="radio"
+								name="kind"
+								id={ "kind-" + string(k) }
+								value={ string(k) }
+								checked?={ i == 0 }
+							/>
+							<span>
+								<strong>{ k.Label() }</strong>
+								<small>{ k.Describe() }</small>
+							</span>
+						</label>
+					}
+				</fieldset>
+				<fieldset class="stack payoff-only">
+					<legend>The loan</legend>
+					<label>
+						Loan amount
+						<input type="text" name="loan_amount" inputmode="decimal" placeholder="22000.00"/>
+						<small>Posts once as the opening balance &mdash; the amount the payments draw down.</small>
+					</label>
+					<label>
+						Annual interest rate %
+						<input type="text" name="interest_apr" inputmode="decimal" placeholder="0 for an interest-free loan"/>
+					</label>
+					<label>
+						Number of payments
+						<input type="number" name="loan_term" min="0" max={ strconv.Itoa(schedule.MaxPeriods) } placeholder="e.g. 48 &mdash; blank for open-ended"/>
+					</label>
+					<label>
+						Scheduled payment
+						<input type="text" name="loan_payment" inputmode="decimal" placeholder="What the lender charges each period"/>
+						<small>
+							Enter what your lender actually charges, even if it differs from the figure this works
+							out &mdash; the tab will show both rather than overriding yours.
+						</small>
+					</label>
+				</fieldset>
+				<fieldset class="stack services-only">
 					<legend>Line items</legend>
 					<p class="muted small">
 						Items break down what a charge covers so both people can see which line moved when a cost changes.

@@ -1,5 +1,7 @@
 package views
 
+import "github.com/johnzastrow/bitt/internal/tz"
+
 // Setup is the one-time first-run screen (AUTH-03). It is reachable only while
 // no admin exists; once used, the route returns a redirect forever after.
 templ Setup(p Page, timezone string) {
@@ -27,9 +29,34 @@ templ Setup(p Page, timezone string) {
 				</label>
 				<label>
 					Timezone
-					<input type="text" name="timezone" value={ timezone } required/>
-					<small>Used for every period boundary on this instance.</small>
+					<input
+						type="text"
+						name="timezone"
+						value={ timezone }
+						list="timezone-options"
+						autocomplete="off"
+						spellcheck="false"
+						required
+					/>
+					<small>
+						Start typing a city or region &mdash; "York", "Berlin", "Kolkata". Used for every period
+						boundary on this instance, and it cannot be changed here afterward.
+					</small>
 				</label>
+				// A datalist rather than a select: 400 zones in a native select
+				// is unusable, and its keyboard search matches only the start of
+				// the value, so "York" would never find America/New_York. A
+				// datalist substring-matches and needs no JavaScript, which the
+				// content-security policy would forbid anyway.
+				//
+				// It does not constrain the field, which is deliberate -- a zone
+				// this build's list has not caught up with can still be typed.
+				// The handler validates with time.LoadLocation regardless.
+				<datalist id="timezone-options">
+					for _, zone := range tz.Zones() {
+						<option value={ zone }></option>
+					}
+				</datalist>
 				<button class="primary" type="submit">Create administrator</button>
 			</form>
 		</section>

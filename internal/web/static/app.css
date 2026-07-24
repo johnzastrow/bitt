@@ -311,6 +311,57 @@ tfoot td { font-weight: 650; border-bottom: none; }
 .banner-warn { border-color: var(--sun); background: var(--card-bg); }
 .banner-info { border-color: var(--sky); background: var(--card-bg); }
 
+/* ---------- Kind-scoped form fields ---------- */
+
+/* The create form shows only the fields that belong to the chosen tab kind.
+   :has() on the checked radio does the whole job with no JavaScript, which the
+   content-security policy would forbid inline. Where :has() is unsupported the
+   rules never match and every field stays visible -- the behaviour before this
+   existed, which is a fair place to land rather than a broken form. */
+.kindform:has(#kind-services:checked) .payoff-only,
+.kindform:has(#kind-payoff:checked) .services-only {
+  display: none;
+}
+
+/* The kind choice itself: two stacked options, each a whole clickable row
+   rather than a bare radio and a word. */
+.kindchoice .kindoption {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+  padding: var(--s3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.kindchoice .kindoption:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--chalk-sunk);
+}
+
+/* Keyboard focus has to remain visible: the radio is real and focusable, and
+   the ring belongs on the row a sighted keyboard user is actually on. */
+.kindchoice .kindoption:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.kindchoice .kindoption input {
+  margin-top: 0.2rem;
+  flex: 0 0 auto;
+}
+
+.kindchoice .kindoption span {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+
+.kindchoice .kindoption small {
+  color: var(--fg-muted);
+}
+
 /* ---------- Interval control ---------- */
 
 /* "Repeat every [ 3 ] weeks" reads as one phrase, so the number and its unit

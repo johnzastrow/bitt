@@ -122,7 +122,7 @@ footer and healthz) and a header logo also landed here.
 
 ---
 
-## Phase 5 — Notifications  -- NEXT
+## Phase 5 — Notifications  -- COMPLETE (0.7.0)
 
 **Goal:** payment requests and event notices reach people who do not have the app open.
 
@@ -130,6 +130,12 @@ Not in the original requirement list; added when the user asked for reminders.
 Email and ntfy delivery of: a payment request two weeks before a due date, a
 reminder one week and one day before (all configurable), and notices on a
 payment made and a payment missed, to all parties on a tab.
+
+**Delivered (0.7.0):** email + ntfy reminders at 14/7/1 days before due, driven
+by an authenticated `/internal/tick` cron endpoint (shared secret, constant-time,
+fail-closed, read-only scan), send-then-claim via the `sent_notifications` claim
+table, per-user channel + topic preferences. Built to `docs/SECURITY-PHASE5.md`.
+Follow-up (not core): payment-made/missed event notices, a backlog cap.
 
 **Exit criteria (draft)**
 - Delivery is driven by an external cron hitting an authenticated `/internal/tick`
@@ -144,7 +150,7 @@ balance path entirely -- a failed or double send can never affect a ledger.
 
 ---
 
-## Phase 6 — Ship
+## Phase 6 — Ship  -- NEXT
 
 **Goal:** someone other than the author can deploy it.
 

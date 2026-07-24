@@ -7,6 +7,7 @@ package config
 
 import (
 	"fmt"
+	"net/mail"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -43,7 +44,57 @@ type Config struct {
 	WriteTimeout time.Duration
 	// ShutdownTimeout bounds graceful shutdown.
 	ShutdownTimeout time.Duration
+	// BaseURL is the external origin used to build links in notifications, e.g.
+	// "https://bitt.example.com". It is NOT derived from a request Host header:
+	// the only caller that needs it is the notification sender, which runs off
+	// a cron request whose Host is whatever the cron sent, and a link built from
+	// an attacker-controlled Host is a phishing vector. Empty means links are
+	// omitted from notifications rather than guessed.
+	BaseURL string
+	// Notify holds the notification delivery settings (Phase 5). A zero value
+	// means notifications are configured off, which is a valid way to run.
+	Notify NotifyConfig
 }
+
+// NotifyConfig is the delivery configuration for notifications.
+//
+// Each channel is independent and each is off until configured: email sends
+// only when an SMTP host is set, ntfy only when a base URL is set. The cron
+// endpoint is authenticated only when TickSecret is set, and refuses all
+// requests otherwise (fail closed) -- it is never open.
+type NotifyConfig struct {
+	// TickSecret authenticates the external cron to /internal/tick, presented
+	// as "Authorization: Bearer <secret>". Empty means the endpoint fails closed
+	// and no cron can drive delivery. Supply via BITT_TICK_SECRET, ideally
+	// file:/run/secrets/... in a container.
+	TickSecret string
+
+	// Email (SMTP).
+	SMTPHost     string
+	SMTPPort     int
+	SMTPUsername string
+	SMTPPassword string
+	// EmailFrom is the envelope/header From address. Required when SMTPHost is
+	// set; validated as a real address so it cannot carry a header injection.
+	EmailFrom string
+
+	// NtfyBaseURL is the admin-pinned ntfy server, e.g. "https://ntfy.sh".
+	// Users choose only a topic, never a URL (the SSRF decision, D1). Empty
+	// means ntfy delivery is off.
+	NtfyBaseURL string
+	// NtfyToken is an optional bearer token for a private ntfy server.
+	NtfyToken string
+}
+
+// EmailEnabled reports whether email delivery is configured.
+func (n NotifyConfig) EmailEnabled() bool { return n.SMTPHost != "" }
+
+// NtfyEnabled reports whether ntfy delivery is configured.
+func (n NotifyConfig) NtfyEnabled() bool { return n.NtfyBaseURL != "" }
+
+// TickEnabled reports whether the cron endpoint has a secret and will accept an
+// authenticated request. When false the endpoint fails closed.
+func (n NotifyConfig) TickEnabled() bool { return n.TickSecret != "" }
 
 // Load reads configuration from the environment, applying defaults.
 func Load() (Config, error) {
@@ -57,6 +108,17 @@ func Load() (Config, error) {
 		ReadTimeout:        envDuration("BITT_READ_TIMEOUT", 15*time.Second),
 		WriteTimeout:       envDuration("BITT_WRITE_TIMEOUT", 30*time.Second),
 		ShutdownTimeout:    envDuration("BITT_SHUTDOWN_TIMEOUT", 15*time.Second),
+		BaseURL:            strings.TrimRight(ld.str("BITT_BASE_URL", ""), "/"),
+		Notify: NotifyConfig{
+			TickSecret:   ld.str("BITT_TICK_SECRET", ""),
+			SMTPHost:     ld.str("BITT_SMTP_HOST", ""),
+			SMTPPort:     envInt("BITT_SMTP_PORT", 587),
+			SMTPUsername: ld.str("BITT_SMTP_USERNAME", ""),
+			SMTPPassword: ld.str("BITT_SMTP_PASSWORD", ""),
+			EmailFrom:    ld.str("BITT_EMAIL_FROM", ""),
+			NtfyBaseURL:  strings.TrimRight(ld.str("BITT_NTFY_URL", ""), "/"),
+			NtfyToken:    ld.str("BITT_NTFY_TOKEN", ""),
+		},
 	}
 	// A file: read that fails is a misconfiguration, not a reason to fall back
 	// to a default. Surfacing it here is what makes a secret fail CLOSED: a
@@ -78,7 +140,41 @@ func Load() (Config, error) {
 	if c.DBPath == "" {
 		return Config{}, fmt.Errorf("config: BITT_DB_PATH must not be empty")
 	}
+	if err := c.Notify.validate(); err != nil {
+		return Config{}, err
+	}
+	if c.BaseURL != "" && !strings.HasPrefix(c.BaseURL, "http://") && !strings.HasPrefix(c.BaseURL, "https://") {
+		return Config{}, fmt.Errorf("config: BITT_BASE_URL %q must start with http:// or https://", c.BaseURL)
+	}
 	return c, nil
+}
+
+// validate rejects a partial or unsafe notification configuration at startup,
+// so a misconfiguration fails to boot rather than silently mis-sending.
+func (n NotifyConfig) validate() error {
+	if n.EmailEnabled() {
+		if n.EmailFrom == "" {
+			return fmt.Errorf("config: BITT_SMTP_HOST is set but BITT_EMAIL_FROM is empty")
+		}
+		// The From address becomes a mail header; a control character in it is
+		// header injection. net/mail parses and rejects that.
+		if _, err := mail.ParseAddress(n.EmailFrom); err != nil {
+			return fmt.Errorf("config: BITT_EMAIL_FROM %q is not a valid address: %w", n.EmailFrom, err)
+		}
+		if n.SMTPPort <= 0 || n.SMTPPort > 65535 {
+			return fmt.Errorf("config: BITT_SMTP_PORT %d is out of range", n.SMTPPort)
+		}
+	}
+	if n.NtfyEnabled() {
+		// The pinned ntfy URL must be https: an http endpoint sends the topic
+		// (and any token) in the clear, and https is the first line of the SSRF
+		// guard. Localhost over http is the one exception a dev build might want,
+		// but the safe default refuses it.
+		if !strings.HasPrefix(n.NtfyBaseURL, "https://") {
+			return fmt.Errorf("config: BITT_NTFY_URL %q must be https://", n.NtfyBaseURL)
+		}
+	}
+	return nil
 }
 
 // EnsureDataDir creates the database's parent directory with owner-only
@@ -156,6 +252,18 @@ func envBool(key string, def bool) bool {
 		return def
 	}
 	return b
+}
+
+func envInt(key string, def int) int {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil {
+		return def
+	}
+	return n
 }
 
 func envDuration(key string, def time.Duration) time.Duration {

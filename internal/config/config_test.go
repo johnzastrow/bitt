@@ -79,3 +79,35 @@ func TestLoadRejectsBadTimezone(t *testing.T) {
 		t.Error("an invalid timezone was accepted")
 	}
 }
+
+func TestNotifyConfigValidation(t *testing.T) {
+	// Email needs a valid From.
+	t.Setenv("BITT_SMTP_HOST", "mail.example")
+	t.Setenv("BITT_EMAIL_FROM", "")
+	if _, err := Load(); err == nil {
+		t.Error("SMTP host without a From address was accepted")
+	}
+	t.Setenv("BITT_EMAIL_FROM", "not an address")
+	if _, err := Load(); err == nil {
+		t.Error("an invalid From address was accepted")
+	}
+	t.Setenv("BITT_EMAIL_FROM", "BitTabby <bitt@example.com>")
+	if _, err := Load(); err != nil {
+		t.Errorf("a valid email config was rejected: %v", err)
+	}
+}
+
+func TestNtfyMustBeHTTPS(t *testing.T) {
+	t.Setenv("BITT_NTFY_URL", "http://ntfy.sh")
+	if _, err := Load(); err == nil {
+		t.Error("an http ntfy URL was accepted; https is required")
+	}
+	t.Setenv("BITT_NTFY_URL", "https://ntfy.sh")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("https ntfy URL rejected: %v", err)
+	}
+	if !c.Notify.NtfyEnabled() || c.Notify.TickEnabled() {
+		t.Error("channel-enabled flags are wrong")
+	}
+}

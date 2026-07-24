@@ -215,6 +215,27 @@ func (d *DB) ListTabsForUser(ctx context.Context, userID int64) ([]store.Tab, er
 	return out, translate(rows.Err())
 }
 
+// ListAllTabs returns every tab, for the notification scan. Server-internal use
+// only -- there is no per-user filter, so no handler may reach it directly.
+func (d *DB) ListAllTabs(ctx context.Context) ([]store.Tab, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT `+tabColumns+` FROM tabs ORDER BY id`)
+	if err != nil {
+		return nil, translate(err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []store.Tab
+	for rows.Next() {
+		t, err := scanTab(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, translate(rows.Err())
+}
+
 const itemColumns = `id, tab_id, name, amount_cents, position, created_at, removed_at`
 
 func scanItem(row interface{ Scan(...any) error }) (store.TabItem, error) {

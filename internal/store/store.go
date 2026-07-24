@@ -485,6 +485,10 @@ type TabStore interface {
 	// ListTabsForUser returns only tabs the user participates in. Authorization
 	// is enforced by the query rather than filtered afterward (AUTH-05).
 	ListTabsForUser(ctx context.Context, userID int64) ([]Tab, error)
+	// ListAllTabs returns every tab, for instance-wide scans (the notification
+	// tick). It is not an authorization bypass: only server-internal, non-user
+	// code paths call it.
+	ListAllTabs(ctx context.Context) ([]Tab, error)
 
 	// UpdateTabDetails changes a tab's name, description, and kind.
 	//

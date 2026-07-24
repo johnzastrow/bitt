@@ -25,6 +25,7 @@ import (
 	"github.com/johnzastrow/bitt/internal/auth"
 	"github.com/johnzastrow/bitt/internal/config"
 	"github.com/johnzastrow/bitt/internal/ledger"
+	"github.com/johnzastrow/bitt/internal/notify"
 	"github.com/johnzastrow/bitt/internal/store/sqlite"
 	"github.com/johnzastrow/bitt/internal/version"
 	"github.com/johnzastrow/bitt/internal/web"
@@ -146,6 +147,7 @@ func run() error {
 		db,
 		ledger.New(db),
 		auth.NewManager(db, cfg.SecureCookies),
+		notify.New(cfg.Notify),
 		log,
 	)
 

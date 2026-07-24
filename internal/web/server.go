@@ -16,6 +16,7 @@ import (
 	"github.com/johnzastrow/bitt/internal/auth"
 	"github.com/johnzastrow/bitt/internal/config"
 	"github.com/johnzastrow/bitt/internal/ledger"
+	"github.com/johnzastrow/bitt/internal/notify"
 	"github.com/johnzastrow/bitt/internal/schedule"
 	"github.com/johnzastrow/bitt/internal/store"
 	"github.com/johnzastrow/bitt/internal/version"
@@ -28,6 +29,7 @@ type Server struct {
 	store    store.Store
 	ledger   *ledger.Service
 	sessions *auth.Manager
+	notifier *notify.Notifier
 	log      *slog.Logger
 	// zones caches resolved timezones. time.LoadLocation parses the zoneinfo
 	// database on every call, and the instance timezone is read on every tab
@@ -41,8 +43,8 @@ type Server struct {
 }
 
 // New builds a server.
-func New(cfg config.Config, st store.Store, led *ledger.Service, sessions *auth.Manager, log *slog.Logger) *Server {
-	return &Server{cfg: cfg, store: st, ledger: led, sessions: sessions, log: log}
+func New(cfg config.Config, st store.Store, led *ledger.Service, sessions *auth.Manager, notifier *notify.Notifier, log *slog.Logger) *Server {
+	return &Server{cfg: cfg, store: st, ledger: led, sessions: sessions, notifier: notifier, log: log}
 }
 
 // contextKey is unexported so no other package can collide with it.
@@ -65,6 +67,11 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("ok " + version.Short()))
 	})
+
+	// Notification delivery, driven by an external cron. Deliberately outside
+	// requireAuth (a cron has no session) and behind its own shared-secret
+	// check, which fails closed when no secret is configured.
+	mux.HandleFunc("POST /internal/tick", s.postTick)
 
 	// First-run setup (AUTH-03)
 	mux.HandleFunc("GET /setup", s.getSetup)

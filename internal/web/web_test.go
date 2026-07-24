@@ -15,6 +15,7 @@ import (
 	"github.com/johnzastrow/bitt/internal/auth"
 	"github.com/johnzastrow/bitt/internal/config"
 	"github.com/johnzastrow/bitt/internal/ledger"
+	"github.com/johnzastrow/bitt/internal/notify"
 	"github.com/johnzastrow/bitt/internal/store"
 	"github.com/johnzastrow/bitt/internal/store/sqlite"
 	"github.com/johnzastrow/bitt/internal/tz"
@@ -30,7 +31,14 @@ type harness struct {
 	db     *sqlite.DB
 }
 
-func newHarness(t *testing.T) *harness {
+func newHarness(t *testing.T) *harness { return newHarnessCfg(t, config.NotifyConfig{}) }
+
+// newHarnessWithTick builds a harness whose tick endpoint has a secret.
+func newHarnessWithTick(t *testing.T, secret string) *harness {
+	return newHarnessCfg(t, config.NotifyConfig{TickSecret: secret})
+}
+
+func newHarnessCfg(t *testing.T, nc config.NotifyConfig) *harness {
 	t.Helper()
 
 	db, err := sqlite.Open(sqlite.Options{
@@ -52,10 +60,12 @@ func newHarness(t *testing.T) *harness {
 		// sent back. Production defaults to true.
 		SecureCookies:      false,
 		AppendOnlyTriggers: true,
+		Notify:             nc,
 	}
 
 	srv := New(cfg, db, ledger.New(db),
 		auth.NewManager(db, cfg.SecureCookies),
+		notify.New(cfg.Notify),
 		slog.New(slog.DiscardHandler))
 
 	ts := httptest.NewServer(srv.Handler())
@@ -846,4 +856,23 @@ func TestStylesheetCoversEveryInputTypeInUse(t *testing.T) {
 				"so it renders at browser defaults beside styled fields", typ)
 		}
 	}
+}
+
+// postRaw posts to a path with a given Authorization header and no session,
+// used to exercise the cron tick endpoint.
+func (h *harness) postRaw(t *testing.T, path, authHeader string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, h.server.URL+path, nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
+	}
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		t.Fatalf("post %s: %v", path, err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	return resp
 }

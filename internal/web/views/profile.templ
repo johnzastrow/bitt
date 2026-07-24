@@ -1,0 +1,158 @@
+package views
+
+import (
+	"strconv"
+
+	"github.com/johnzastrow/bitt/internal/store"
+)
+
+// ProfileData is everything the account settings screen renders.
+type ProfileData struct {
+	User store.User
+}
+
+// Profile is the account's own settings (name, email, password, picture).
+//
+// Notification preferences belong here too and are deliberately absent: there
+// is no delivery to configure yet, and a page of switches that do nothing is
+// worse than a page that does not offer them. They land with Phase 5.
+templ Profile(p Page, d ProfileData) {
+	@Layout(p) {
+		<section class="card form">
+			<h1>Your profile</h1>
+			<div class="profilehead">
+				@AvatarImage(d.User, 72)
+				<div>
+					<strong>{ d.User.DisplayName }</strong>
+					<span class="muted small">{ d.User.Email }</span>
+					if d.User.IsAdmin {
+						<span class="pill">Administrator</span>
+					}
+				</div>
+			</div>
+		</section>
+		<section class="card form">
+			<h2>Picture</h2>
+			<form method="post" action="/profile/avatar" enctype="multipart/form-data" class="stack">
+				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+				<label>
+					Choose an image
+					<input type="file" name="avatar" accept="image/png,image/jpeg,image/gif" required/>
+					<small>
+						PNG, JPEG, or GIF, up to 2&nbsp;MB. It is cropped square, scaled down, and saved as a PNG,
+						so what is stored is a fresh copy rather than the file you sent.
+					</small>
+				</label>
+				<button class="primary" type="submit">Upload picture</button>
+			</form>
+			if d.User.HasAvatar() {
+				<form method="post" action="/profile/avatar/remove" class="inline">
+					<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+					<button class="link" type="submit">Remove picture</button>
+				</form>
+			}
+		</section>
+		<section class="card form">
+			<h2>Your details</h2>
+			<form method="post" action="/profile/details" class="stack">
+				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+				<label>
+					Name
+					<input type="text" name="display_name" value={ d.User.DisplayName } required maxlength="80"/>
+				</label>
+				<label>
+					Email
+					<input type="email" name="email" value={ d.User.Email } required autocomplete="username"/>
+					<small>This is what you sign in with.</small>
+				</label>
+				<label>
+					Your current password
+					<input type="password" name="current_password" required autocomplete="current-password"/>
+					<small>
+						Required because the email address is how you sign in. Without it, an unattended session
+						could move the address somewhere else.
+					</small>
+				</label>
+				<button class="primary" type="submit">Save details</button>
+			</form>
+		</section>
+		<section class="card form">
+			<h2>Password</h2>
+			<form method="post" action="/profile/password" class="stack">
+				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+				<label>
+					Current password
+					<input type="password" name="current_password" required autocomplete="current-password"/>
+				</label>
+				<label>
+					New password
+					<input type="password" name="new_password" required minlength="12" autocomplete="new-password"/>
+					<small>At least 12 characters. Length matters more than symbols.</small>
+				</label>
+				<label>
+					New password again
+					<input type="password" name="confirm_password" required minlength="12" autocomplete="new-password"/>
+				</label>
+				<button class="primary" type="submit">Change password</button>
+			</form>
+			<p class="muted small">
+				Changing your password signs out every other device. This one stays signed in.
+			</p>
+		</section>
+	}
+}
+
+// AvatarImage renders an account's picture, or its initials when it has none.
+//
+// The fallback is not decoration: every avatar slot needs to render something,
+// and a broken-image icon or an empty box beside a name reads as a fault. The
+// initials are derived from the name, so they are stable and need no storage.
+templ AvatarImage(u store.User, size int) {
+	if u.HasAvatar() {
+		<img
+			class="avatar"
+			src={ avatarSrc(u) }
+			alt={ u.DisplayName }
+			width={ strconv.Itoa(size) }
+			height={ strconv.Itoa(size) }
+		/>
+	} else {
+		<span class={ "avatar", "avatarfallback", avatarTone(u.ID) } aria-hidden="true">
+			{ initials(u.DisplayName) }
+		</span>
+	}
+}
+
+// avatarSrc points at the account's picture, with the last-updated stamp as a
+// cache-buster. The route already answers conditional requests with a 304, but
+// a changed picture should appear at once rather than after the max-age --
+// the same lesson the stylesheet taught in 0.5.2.
+func avatarSrc(u store.User) string {
+	return "/users/" + strconv.FormatInt(u.ID, 10) + "/avatar?v=" + u.AvatarUpdatedAt
+}
+
+// initials takes at most two letters from a display name.
+func initials(name string) string {
+	var out []rune
+	prev := ' '
+	for _, r := range name {
+		if r != ' ' && prev == ' ' {
+			out = append(out, r)
+			if len(out) == 2 {
+				break
+			}
+		}
+		prev = r
+	}
+	if len(out) == 0 {
+		return "?"
+	}
+	return string(out)
+}
+
+// avatarTone picks one of a few background tints from the account id, so two
+// people in a household are unlikely to share a colour. Derived rather than
+// stored: it must never change for an account, and an id already never does.
+func avatarTone(id int64) string {
+	return "tone-" + strconv.FormatInt(id%5, 10)
+}

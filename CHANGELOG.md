@@ -7,6 +7,58 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [0.6.0] - 2026-07-23 — Account profiles
+
+Click your own name in the header to reach `/profile`.
+
+### Added
+- **Profile settings**: display name, email, password, and a picture, all
+  self-service. Reached by clicking your name in the header, which is where
+  people look for them.
+- **Avatars.** Upload a PNG, JPEG, or GIF up to 2 MB; it is cropped square,
+  scaled to at most 256px, and re-encoded as PNG. **What is stored is never what
+  was uploaded** — decoding and re-encoding strips EXIF and GPS, discards data
+  appended after the image, and means a file crafted to parse as two formats at
+  once survives as neither. The filename is never read or stored, which makes
+  path traversal structurally impossible rather than merely handled.
+  Accounts without a picture get initials on a colour derived from their id, so
+  every avatar slot renders something rather than a broken-image icon.
+- **`internal/avatar`**, the whole upload surface in one package: a byte cap
+  applied while reading, a magic-byte allowlist that ignores the declared
+  content type, and **a pixel-dimension check taken from the header before
+  decoding** — the control a size cap cannot provide, since a 30,000 x 30,000
+  PNG compresses to a few kilobytes and expands to gigabytes.
+- **Rate limiting on the upload route**, the first in the app. Image decoding is
+  the only meaningful CPU work a request can trigger here, and an authenticated
+  user can ask for it in a loop; ten uploads a minute per account, a fixed
+  window rather than a general framework for one endpoint.
+- **Migration 0007** adds `users.avatar_png` and `users.avatar_updated_at`. The
+  timestamp is the ETag on the avatar route, so a browser revalidates cheaply
+  and a changed picture still appears at once.
+
+### Changed
+- **Changing your password now signs out every other device**, keeping the one
+  making the change. That is usually the point of changing it. It requires the
+  current password, refuses a password identical to the current one, and
+  confirms how many devices were signed out.
+- **Changing your email requires your current password**, because the email is
+  the login identity: an unattended session that could silently move the address
+  elsewhere is a full account takeover, since recovery would follow the new
+  address.
+
+### Fixed
+- **`GetSession` did not select `avatar_updated_at`.** It joins `users` with its
+  own hand-written column list rather than reusing `userColumns`, so the
+  authenticated user on every request carried a zero value and the header always
+  fell back to initials even after an upload. Caught by a test; the hazard is now
+  recorded in the data model doc, since any future `User` column has the same
+  trap waiting.
+
+### Deferred
+- **Notification preferences.** They belong on this page but there is no
+  delivery to configure yet, and switches that do nothing are worse than no
+  switches. They land with Phase 5, where the per-event list is already designed.
+
 ## [0.5.2] - 2026-07-23 — Create-form layout, and assets that actually update
 
 ### Fixed

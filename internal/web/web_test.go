@@ -69,6 +69,17 @@ func newHarness(t *testing.T) *harness {
 	return &harness{t: t, server: ts, db: db, client: &http.Client{Jar: jar}}
 }
 
+// newClient returns a second harness against the same server with its own
+// cookie jar, which is how a test represents another signed-in device.
+func (h *harness) newClient() *harness {
+	h.t.Helper()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		h.t.Fatalf("cookie jar: %v", err)
+	}
+	return &harness{t: h.t, server: h.server, db: h.db, client: &http.Client{Jar: jar}}
+}
+
 func (h *harness) get(path string) (*http.Response, string) {
 	h.t.Helper()
 	resp, err := h.client.Get(h.server.URL + path)

@@ -104,6 +104,24 @@ func (m *Manager) Resolve(r *http.Request) (store.User, error) {
 	return user, nil
 }
 
+// RevokeOthers ends every session the user holds except the one making this
+// request, and reports how many were ended.
+//
+// A password change calls this: the usual reason to change a password is to
+// take access away from a device you no longer control, and leaving other
+// sessions alive would defeat that. The current session is identified by the
+// hash of its own cookie rather than by recency, because "the newest session"
+// is not reliably the one asking.
+func (m *Manager) RevokeOthers(ctx context.Context, r *http.Request, userID int64) (int, error) {
+	cookie, err := r.Cookie(SessionCookieName)
+	if err != nil || cookie.Value == "" {
+		// No cookie to preserve. Ending everything is the safe reading: the
+		// caller has already authenticated the change some other way.
+		return m.store.DeleteSessionsForUserExcept(ctx, userID, "")
+	}
+	return m.store.DeleteSessionsForUserExcept(ctx, userID, hashToken(cookie.Value))
+}
+
 // Revoke deletes the session and clears the cookie (AUTH-03 logout).
 func (m *Manager) Revoke(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
 	if cookie, err := r.Cookie(SessionCookieName); err == nil && cookie.Value != "" {

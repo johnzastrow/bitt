@@ -125,7 +125,11 @@ func (d *DB) CreateUser(ctx context.Context, u store.User) (store.User, error) {
 	return insertUser(ctx, d.db, u)
 }
 
-const userColumns = `id, email, display_name, password_hash, is_admin, created_at, deactivated_at`
+// userColumns is deliberately without avatar_png. Session resolution reads a
+// user row on every authenticated request, and pulling an image through that
+// path would be a steady, pointless cost. Only GetAvatar touches the blob.
+const userColumns = `id, email, display_name, password_hash, is_admin, created_at, ` +
+	`deactivated_at, avatar_updated_at`
 
 func scanUser(row interface{ Scan(...any) error }) (store.User, error) {
 	var (
@@ -134,7 +138,8 @@ func scanUser(row interface{ Scan(...any) error }) (store.User, error) {
 		created     string
 		deactivated sql.NullString
 	)
-	if err := row.Scan(&u.ID, &u.Email, &u.DisplayName, &u.PasswordHash, &isAdmin, &created, &deactivated); err != nil {
+	if err := row.Scan(&u.ID, &u.Email, &u.DisplayName, &u.PasswordHash, &isAdmin, &created,
+		&deactivated, &u.AvatarUpdatedAt); err != nil {
 		return store.User{}, translate(err)
 	}
 	u.IsAdmin = isAdmin != 0
@@ -147,6 +152,107 @@ func scanUser(row interface{ Scan(...any) error }) (store.User, error) {
 		return store.User{}, fmt.Errorf("sqlite: parse user deactivated_at: %w", err)
 	}
 	return u, nil
+}
+
+// UpdateProfile changes an account's display name and email.
+//
+// The uniqueness index is on email_folded, so both columns move together or the
+// stored address and the one that can be logged in with drift apart.
+func (d *DB) UpdateProfile(ctx context.Context, id int64, displayName, email string) (store.User, error) {
+	res, err := d.db.ExecContext(ctx,
+		`UPDATE users SET display_name = ?, email = ?, email_folded = ? WHERE id = ?`,
+		displayName, email, foldEmail(email), id)
+	if err != nil {
+		// A duplicate address surfaces as ErrConflict through translate, which
+		// is what lets the handler say something specific rather than 500.
+		return store.User{}, translate(err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return store.User{}, fmt.Errorf("sqlite: update profile: %w", err)
+	}
+	if n == 0 {
+		return store.User{}, store.ErrNotFound
+	}
+	return d.GetUser(ctx, id)
+}
+
+// UpdatePasswordHash stores a new password hash. Verifying the old password and
+// producing the new hash both belong to the caller.
+func (d *DB) UpdatePasswordHash(ctx context.Context, id int64, hash string) error {
+	if hash == "" {
+		return fmt.Errorf("sqlite: refusing to store an empty password hash")
+	}
+	res, err := d.db.ExecContext(ctx,
+		`UPDATE users SET password_hash = ? WHERE id = ?`, hash, id)
+	if err != nil {
+		return translate(err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqlite: update password: %w", err)
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+// SetAvatar stores a processed PNG. The bytes are expected to have come from
+// internal/avatar; nothing here inspects them.
+func (d *DB) SetAvatar(ctx context.Context, id int64, png []byte, at time.Time) error {
+	if len(png) == 0 {
+		return fmt.Errorf("sqlite: refusing to store an empty avatar")
+	}
+	res, err := d.db.ExecContext(ctx,
+		`UPDATE users SET avatar_png = ?, avatar_updated_at = ? WHERE id = ?`,
+		png, toText(at), id)
+	if err != nil {
+		return translate(err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqlite: set avatar: %w", err)
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+// ClearAvatar removes an account's picture. Both columns are cleared together,
+// so HasAvatar and the stored bytes cannot disagree.
+func (d *DB) ClearAvatar(ctx context.Context, id int64) error {
+	res, err := d.db.ExecContext(ctx,
+		`UPDATE users SET avatar_png = NULL, avatar_updated_at = '' WHERE id = ?`, id)
+	if err != nil {
+		return translate(err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqlite: clear avatar: %w", err)
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+// GetAvatar returns the stored PNG and when it was set.
+func (d *DB) GetAvatar(ctx context.Context, id int64) ([]byte, string, error) {
+	var (
+		png []byte
+		at  string
+	)
+	err := d.db.QueryRowContext(ctx,
+		`SELECT avatar_png, avatar_updated_at FROM users WHERE id = ?`, id).Scan(&png, &at)
+	if err != nil {
+		return nil, "", translate(err)
+	}
+	if len(png) == 0 {
+		return nil, "", store.ErrNotFound
+	}
+	return png, at, nil
 }
 
 // GetUser looks up an account by id.
@@ -216,9 +322,15 @@ func (d *DB) GetSession(ctx context.Context, tokenHash string) (store.Session, s
 		uCreated    string
 		deactivated sql.NullString
 	)
+	// This restates the user columns rather than reusing userColumns, because
+	// they need the "u." qualifier for the join. Any column added to a User
+	// must be added here too: the authenticated user on every request comes
+	// from this query, and a field missing here is silently zero everywhere in
+	// the interface. That is exactly how the avatar first failed to appear.
 	err := d.db.QueryRowContext(ctx,
 		`SELECT s.token_hash, s.user_id, s.created_at, s.expires_at, s.last_seen_at,
-                u.id, u.email, u.display_name, u.password_hash, u.is_admin, u.created_at, u.deactivated_at
+                u.id, u.email, u.display_name, u.password_hash, u.is_admin, u.created_at,
+                u.deactivated_at, u.avatar_updated_at
          FROM sessions s
          JOIN users u ON u.id = s.user_id
          WHERE s.token_hash = ?
@@ -226,7 +338,8 @@ func (d *DB) GetSession(ctx context.Context, tokenHash string) (store.Session, s
            AND u.deactivated_at IS NULL`,
 		tokenHash, nowText()).
 		Scan(&s.TokenHash, &s.UserID, &created, &expires, &lastSeen,
-			&u.ID, &u.Email, &u.DisplayName, &u.PasswordHash, &isAdmin, &uCreated, &deactivated)
+			&u.ID, &u.Email, &u.DisplayName, &u.PasswordHash, &isAdmin, &uCreated,
+			&deactivated, &u.AvatarUpdatedAt)
 	if err != nil {
 		return store.Session{}, store.User{}, translate(err)
 	}
@@ -259,6 +372,24 @@ func (d *DB) TouchSession(ctx context.Context, tokenHash string, at time.Time) e
 func (d *DB) DeleteSession(ctx context.Context, tokenHash string) error {
 	_, err := d.db.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash = ?`, tokenHash)
 	return translate(err)
+}
+
+// DeleteSessionsForUserExcept ends every other session a user holds.
+//
+// A password change runs this so a device that is no longer trusted loses its
+// access. The current session is kept by token hash rather than by recency,
+// since "the newest session" is not reliably the one making the request.
+func (d *DB) DeleteSessionsForUserExcept(ctx context.Context, userID int64, keepTokenHash string) (int, error) {
+	res, err := d.db.ExecContext(ctx,
+		`DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?`, userID, keepTokenHash)
+	if err != nil {
+		return 0, translate(err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("sqlite: delete other sessions: %w", err)
+	}
+	return int(n), nil
 }
 
 // DeleteExpiredSessions prunes the table.

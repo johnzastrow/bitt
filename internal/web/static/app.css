@@ -315,6 +315,65 @@ tfoot td { font-weight: 650; border-bottom: none; }
 .banner-warn { border-color: var(--sun); background: var(--card-bg); }
 .banner-info { border-color: var(--sky); background: var(--card-bg); }
 
+/* ---------- Avatars ---------- */
+
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: 0 0 auto;
+  /* An avatar is a picture of a person, and a person's picture should not be
+     the loudest thing on a page of numbers. */
+  border: 1px solid var(--border);
+}
+
+.avatarfallback {
+  font-weight: 600;
+  /* The initials scale with the box, so one class serves the 26px header and
+     the 72px profile header without a second rule per size. */
+  font-size: 0.42em;
+  line-height: 1;
+  color: var(--surface);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
+/* Tints derived from the account id, so two people rarely collide. */
+.tone-0 { background: var(--sky-deep); }
+.tone-1 { background: var(--mint-deep); }
+.tone-2 { background: var(--rose-deep); }
+.tone-3 { background: var(--slate-soft); }
+.tone-4 { background: #7a6a9c; }
+
+/* The header link is the whole name-plus-picture, so the target is easy to hit
+   on a phone rather than being a word of text. */
+a.who {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  color: inherit;
+  text-decoration: none;
+  border-radius: 999px;
+  padding: 2px var(--s2) 2px 2px;
+}
+
+a.who:hover { background: var(--chalk-sunk); }
+
+.profilehead {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+}
+
+.profilehead > div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+
 /* ---------- Kind-scoped form fields ---------- */
 
 /* The create form shows only the fields that belong to the chosen tab kind.

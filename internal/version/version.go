@@ -7,15 +7,15 @@
 //
 // Versioning follows semver. Pre-1.0, the minor tracks the delivered phase:
 // 0.1 walking skeleton, 0.2 the settle loop, 0.3 recurrence, 0.4 payoff tabs
-// and late fees, 0.5 loan terms and scheduled payments. The patch increments
-// for fixes between phases. See CHANGELOG.md.
+// and late fees, 0.5 loan terms and scheduled payments, 0.6 account profiles.
+// The patch increments for fixes between phases. See CHANGELOG.md.
 package version
 
 import "fmt"
 
 // Number is the semantic version. Bump it on every functional change: patch for
 // a fix, minor for a feature, major for a break. This is the value to edit.
-const Number = "0.5.2"
+const Number = "0.6.0"
 
 // Commit and Date are set at build time via -ldflags, e.g.
 //
@@ -25,7 +25,7 @@ var (
 	Date   = "unknown"
 )
 
-// Short is the version as a person cites it: "v0.5.2".
+// Short is the version as a person cites it: "v0.6.0".
 func Short() string { return "v" + Number }
 
 // Full adds the build provenance for logs and diagnostics, degrading gracefully

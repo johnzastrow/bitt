@@ -33,6 +33,11 @@ type Server struct {
 	// database on every call, and the instance timezone is read on every tab
 	// render (SCHED-02).
 	zones sync.Map
+	// avatarRate limits the one route that does real CPU work per request.
+	// Decoding an image is far more expensive than anything else here and an
+	// authenticated user can ask for it in a loop.
+	avatarRate   sync.Map
+	avatarRateMu sync.Mutex
 }
 
 // New builds a server.
@@ -99,6 +104,14 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /tabs/{id}/items", s.requireAuth(http.HandlerFunc(s.postItem)))
 	mux.Handle("POST /tabs/{id}/items/{itemID}", s.requireAuth(http.HandlerFunc(s.postItemUpdate)))
 	mux.Handle("POST /tabs/{id}/items/{itemID}/remove", s.requireAuth(http.HandlerFunc(s.postItemRemove)))
+
+	// Account self-service
+	mux.Handle("GET /profile", s.requireAuth(http.HandlerFunc(s.getProfile)))
+	mux.Handle("POST /profile/details", s.requireAuth(http.HandlerFunc(s.postProfileDetails)))
+	mux.Handle("POST /profile/password", s.requireAuth(http.HandlerFunc(s.postProfilePassword)))
+	mux.Handle("POST /profile/avatar", s.requireAuth(http.HandlerFunc(s.postProfileAvatar)))
+	mux.Handle("POST /profile/avatar/remove", s.requireAuth(http.HandlerFunc(s.postProfileAvatarRemove)))
+	mux.Handle("GET /users/{id}/avatar", s.requireAuth(http.HandlerFunc(s.getAvatar)))
 
 	// Administration (AUTH-04)
 	mux.Handle("GET /admin/users", s.requireAdmin(http.HandlerFunc(s.getAdminUsers)))

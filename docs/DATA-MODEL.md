@@ -1,7 +1,7 @@
 # BitTabby — Physical Data Model and Data Dictionary
 
 The physical schema as SQLite actually holds it, plus the rules that govern each
-field. Generated from a migrated database at schema version `0006_loan_terms`
+field. Generated from a migrated database at schema version `0007_profiles`
 and checked against `internal/store/sqlite/migrations/`.
 
 This describes **what is stored**. For why the application is shaped this way,
@@ -36,6 +36,8 @@ erDiagram
         INTEGER is_admin "0 or 1"
         TEXT created_at
         TEXT deactivated_at "nullable"
+        BLOB avatar_png "nullable"
+        TEXT avatar_updated_at "ETag"
     }
 
     sessions {
@@ -211,6 +213,15 @@ Exactly one row, enforced by `CHECK (id = 1)`.
 | `is_admin` | INTEGER | no | 0/1. Instance-wide role, distinct from a per-tab role. **Deactivating the last active admin is blocked inside the write transaction**, not in the handler — a check-then-act above the transaction lets two concurrent requests lock everyone out. |
 | `created_at` | TEXT | no | |
 | `deactivated_at` | TEXT | yes | `NULL` means active. Deactivation is soft: the account stops authenticating but its ledger entries keep their author. Accounts are never deleted, because `entries.actor_user_id` must stay resolvable forever. |
+| `avatar_png` | BLOB | yes | The account's picture, or `NULL`. **Always PNG produced by `internal/avatar`, never the uploaded bytes** — the upload is decoded, cropped square, downscaled, and re-encoded, which strips EXIF/GPS, discards trailing data, and stops a file crafted to parse as two formats. Stored in the database rather than on disk so the deployment stays one binary and one file (DEPLOY-04), which also keeps backup/restore (DEPLOY-06) a single-file promise. **Deliberately excluded from `userColumns`**: a user row is read on every authenticated request and dragging an image through that path would be a steady, pointless cost. |
+| `avatar_updated_at` | TEXT | no | When the picture last changed, `''` for none. Serves as the ETag on the avatar route and as the `?v=` cache-buster in markup, so a changed picture appears at once instead of after the max-age. It is also the sole source of `User.HasAvatar()`, which is why it is cleared in the same statement as the blob. |
+
+> **Hazard.** `GetSession` joins `users` with its own hand-written column list
+> rather than reusing `userColumns`, because the join needs a `u.` qualifier.
+> Any column added to `User` must be added there as well. The authenticated user
+> on every request comes from that query, so a column missed there is silently
+> zero everywhere in the interface while every direct `GetUser` looks correct.
+> This is exactly how the avatar first failed to appear in the header.
 
 ### 3.3 `sessions` — server-side login records
 
@@ -391,7 +402,7 @@ editing the ledger would.
 
 | Column | Type | Rules |
 |---|---|---|
-| `version` | TEXT | PK. The migration filename stem, e.g. `0006_loan_terms`. |
+| `version` | TEXT | PK. The migration filename stem, e.g. `0007_profiles`. |
 | `applied_at` | TEXT | Migrations are applied in filename order, each inside its own transaction, and recorded here. **Forward-only — there are no down migrations.** |
 
 ---
@@ -417,6 +428,11 @@ if they stop holding.
    exists in the money path.
 9. **Archived tabs do not accrue.**
 10. **Interest never accrues on a fee, and never on unpaid interest** (§5).
+11. **`avatar_png` and `avatar_updated_at` are always consistent** — set together,
+    cleared together. A blob with no timestamp would be invisible to
+    `HasAvatar()`; a timestamp with no blob would render a broken image.
+12. **Stored avatar bytes were produced by this application**, never by an
+    uploader.
 
 ---
 

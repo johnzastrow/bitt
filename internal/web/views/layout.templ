@@ -56,7 +56,10 @@ templ Layout(p Page) {
 						if p.User.IsAdmin {
 							<a class="navlink" href="/admin/users">People</a>
 						}
-						<span class="who">{ p.User.DisplayName }</span>
+						<a class="who" href="/profile" title="Your profile">
+							@AvatarImage(*p.User, 26)
+							<span>{ p.User.DisplayName }</span>
+						</a>
 						<form method="post" action="/logout" class="inline">
 							<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
 							<button class="link" type="submit">Log out</button>

@@ -1,0 +1,39 @@
+-- 0007_profiles: account self-service.
+--
+-- Everything a person can change about their own account. Name, email, and
+-- password already had columns; only the avatar is new.
+--
+-- ---------------------------------------------------------------------------
+-- avatar_png: the stored image, or NULL for an account that has not set one.
+--
+-- A BLOB rather than a path on disk, and that is a deliberate trade. The
+-- alternative -- files under the data directory -- keeps the database small and
+-- serving cheap, but it makes the deployment two things that must stay
+-- consistent with each other. DEPLOY-04 commits to a binary that "runs with no
+-- files beside it other than the database it creates", and backup and restore
+-- (DEPLOY-06, still unbuilt) is a much easier promise to keep when a backup is
+-- one file. An avatar is at most a few tens of kilobytes after processing, and
+-- there is one per account on a household-sized instance.
+--
+-- What is stored is never what was uploaded. internal/avatar decodes the image,
+-- crops it square, downscales it, and re-encodes it as PNG, so these bytes were
+-- produced by this application: EXIF and GPS are gone, trailing payloads are
+-- gone, and a file crafted to parse as two formats at once cannot survive as
+-- either. That is also why the column needs no content-type: it is always PNG.
+--
+-- Deliberately NOT added to the column list the ordinary user queries select.
+-- Session resolution reads a user row on every authenticated request, and
+-- dragging an image through that path would be a steady, pointless cost. The
+-- blob is fetched only by the route that serves it.
+-- ---------------------------------------------------------------------------
+ALTER TABLE users ADD COLUMN avatar_png BLOB;
+
+-- When the avatar last changed, as an ISO-8601 timestamp, or '' for none.
+--
+-- This is what makes the image cacheable. It becomes the ETag on the avatar
+-- route, so a browser revalidates with If-None-Match and gets a 304 until the
+-- picture actually changes -- the same lesson as the stylesheet in 0.5.2, where
+-- a long cache lifetime on a stable URL hid a shipped change for an hour.
+-- Empty rather than NULL, matching how every other optional text column here
+-- behaves, so comparisons need no COALESCE on either backend (DEPLOY-02).
+ALTER TABLE users ADD COLUMN avatar_updated_at TEXT NOT NULL DEFAULT '';

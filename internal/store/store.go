@@ -186,7 +186,15 @@ type User struct {
 	IsAdmin       bool
 	CreatedAt     time.Time
 	DeactivatedAt *time.Time
+	// AvatarUpdatedAt is when the picture last changed, or "" for none. It is
+	// the ETag the avatar route serves, so a browser can revalidate cheaply.
+	AvatarUpdatedAt string
 }
+
+// HasAvatar reports whether the account has an uploaded picture. The image
+// itself is not carried on User: it is read only by the route that serves it,
+// so that resolving a session does not drag a blob through every request.
+func (u User) HasAvatar() bool { return u.AvatarUpdatedAt != "" }
 
 // Active reports whether the account may still authenticate.
 func (u User) Active() bool { return u.DeactivatedAt == nil }
@@ -394,6 +402,31 @@ type UserStore interface {
 	ListUsers(ctx context.Context) ([]User, error)
 	CountUsers(ctx context.Context) (int, error)
 
+	// UpdateProfile changes an account's display name and email.
+	//
+	// The email is the login identity, so callers must have re-authenticated
+	// the account first. Returns ErrConflict if another account already holds
+	// the address, case-insensitively.
+	UpdateProfile(ctx context.Context, id int64, displayName, email string) (User, error)
+
+	// UpdatePasswordHash replaces an account's password hash. The caller
+	// verifies the current password and hashes the new one; this only stores.
+	UpdatePasswordHash(ctx context.Context, id int64, hash string) error
+
+	// SetAvatar stores a processed image, replacing any existing one. The bytes
+	// must already have been through internal/avatar -- nothing here validates
+	// them, and storing an uploader's bytes directly is the mistake this
+	// contract is shaped to prevent.
+	SetAvatar(ctx context.Context, id int64, png []byte, at time.Time) error
+
+	// ClearAvatar removes an account's picture.
+	ClearAvatar(ctx context.Context, id int64) error
+
+	// GetAvatar returns the stored PNG and the timestamp it was set, or
+	// ErrNotFound when the account has none. It is the only read that touches
+	// the image, which is why it is separate from GetUser.
+	GetAvatar(ctx context.Context, id int64) ([]byte, string, error)
+
 	// SetUserActive deactivates or reactivates an account (AUTH-04).
 	//
 	// Deactivating the last active admin must fail with ErrLastAdmin, checked
@@ -412,6 +445,13 @@ type SessionStore interface {
 	GetSession(ctx context.Context, tokenHash string) (Session, User, error)
 	TouchSession(ctx context.Context, tokenHash string, at time.Time) error
 	DeleteSession(ctx context.Context, tokenHash string) error
+	// DeleteSessionsForUserExcept ends every session for a user other than the
+	// one given, and reports how many it ended.
+	//
+	// This is what a password change is usually for: revoking a device that is
+	// no longer trusted. Keeping the current session is what stops the person
+	// making the change from being logged out by their own action.
+	DeleteSessionsForUserExcept(ctx context.Context, userID int64, keepTokenHash string) (int, error)
 	DeleteExpiredSessions(ctx context.Context, now time.Time) (int64, error)
 }
 

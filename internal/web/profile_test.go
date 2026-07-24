@@ -412,3 +412,34 @@ func TestListParticipantsCarriesAvatarTimestamp(t *testing.T) {
 		t.Fatal("the provider is not in the participants list")
 	}
 }
+
+// The profile email edit must reject control characters, not just require an @.
+// The stored email is the login identity and will feed a mail sender's headers
+// in Phase 5, so a CRLF here is header-injection waiting to happen.
+func TestProfileEmailRejectsControlCharacters(t *testing.T) {
+	h := newHarness(t)
+	h.completeSetup()
+
+	for _, bad := range []string{
+		"evil@example.com\r\nBcc: victim@example.com",
+		"evil@example.com\nSubject: spoofed",
+		"no-at-sign",
+		"trailing@space ",
+	} {
+		_, body := h.post("/profile/details", url.Values{
+			"csrf_token":       {h.csrfToken("/profile")},
+			"display_name":     {"Admin"},
+			"email":            {bad},
+			"current_password": {testPassword},
+		})
+		if !strings.Contains(body, "not a valid email") {
+			t.Errorf("accepted a malformed email %q: %s", bad, truncate(body))
+		}
+	}
+
+	// The stored identity is unchanged after all those rejections.
+	u, _ := h.db.GetUser(t.Context(), 1)
+	if strings.ContainsAny(u.Email, "\r\n") {
+		t.Errorf("a control character reached the stored email: %q", u.Email)
+	}
+}

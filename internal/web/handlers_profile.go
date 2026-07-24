@@ -96,7 +96,12 @@ func (s *Server) postProfileDetails(w http.ResponseWriter, r *http.Request) {
 	}
 
 	email := strings.TrimSpace(r.PostFormValue("email"))
-	if email == "" || !strings.Contains(email, "@") {
+	// looksLikeEmail, the same check setup and admin creation use, rejects
+	// control characters including CR/LF. The email is the stored login
+	// identity and will feed a mail sender's headers in Phase 5, so a weaker
+	// "contains an @" check here would let a CRLF-laden address through and set
+	// up header injection downstream.
+	if !looksLikeEmail(email) {
 		redirectWith(w, r, "/profile", "err", "That is not a valid email address.")
 		return
 	}

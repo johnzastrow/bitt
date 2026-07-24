@@ -1,7 +1,7 @@
 # BitTabby — Handoff
 
-**Written:** 2026-07-23. Updated at the end of Phase 4, then again for 0.5.0
-(loan terms, scheduled payments, schedule intervals, U.S. Rule interest).
+**Written:** 2026-07-23. Updated through 0.6.3 and the Phase 5 pre-implementation
+security review (2026-07-24).
 
 This is written to be read cold, by someone (or some session) with no memory of
 the work. It covers what exists, why it is shaped this way, what to do next, and
@@ -70,33 +70,81 @@ theme switching, multi-currency, and **any background scheduler process**.
 
 ## Where things stand
 
-Phases 1 through 4 are complete and verified. 49 of 54 requirements. The
-roadmap is now **six phases**: Phase 5 is notifications (added by user request),
-Phase 6 is ship.
+Phases 1 through 4 are complete and verified, and a run of self-contained 0.5
+and 0.6 improvements has landed on top. **Phase 5 (notifications) has not
+started** — it is gated behind a security design review (see the end of this
+doc). The roadmap is **six phases**: Phase 5 is notifications, Phase 6 is ship.
 
-| Commit | What |
+| Commit / version | What |
 |---|---|
 | `030a84e` | Phase 1 — walking skeleton |
 | `9ef145e` | Phase 2 — the settle loop |
 | `8a6d25e` | Phase 3 — recurrence |
 | `8d3e989` | Phase 4 — payoff tabs, late fees, interest; versioning; logo |
-| `4da3c2d` | UI: tab page grouped into Day-to-day / Setup, notes everywhere |
-| `cb11413` | Payoff: loan amount required so the principal always posts |
-| (0.5.0) | Loan terms, scheduled payments, schedule intervals, U.S. Rule interest |
+| `de8bc11` (0.5.0) | Loan terms, scheduled payments, intervals, U.S. Rule interest, adjustments |
+| `7aff25a` (0.5.1) | Timezone autocomplete, kind-scoped tab fields, `--version` arg handling |
+| `927e66d` (0.5.2) | Create-form layout fix; content-hashed asset URLs |
+| `227ab27` (0.6.0) | Account profiles — name, email, password, avatar |
+| `b20d5b4` (0.6.1) | Settle buttons pay a period, not the whole balance |
+| `c4ae6ab` (0.6.2) | Avatars wherever a person is named |
+| `2917713` (0.6.3) | Avatars in the ledger history |
 
-Full suite green including `-race`. Coverage: fee 96%, money 90%, loan 89%,
-ledger 89%, schedule 87%, sqlite 72%, web 71%, auth 44%.
+Full suite green including `-race`. Coverage: version 100, tz 96, fee 96, money
+90, ledger 89, loan 89, avatar 88, schedule 87, web 72, sqlite 67, auth 42.
+Zero-coverage packages: `config` and `store` (declarations, exercised through
+their users) and `web/views` (templates). Schema is at migration `0007`.
 
-**Running now:** v0.5.0 on `:8080`, against an **empty** database. To restart
-from cold: `make build && BITT_SECURE_COOKIES=false ./bittabby`, then open
-http://localhost:8080 and complete the first-run setup screen.
+**Running now:** v0.6.3 on `:8080` over plain HTTP against `data/bitt.db`, which
+now holds the user's real accounts. To restart from cold:
+`make build && BITT_SECURE_COOKIES=false ./bittabby`. Do NOT point a test run at
+that database or that port — spin a throwaway on another port with its own
+`BITT_DB_PATH` (see "Testing the UI" below).
 
-### There is no demo data any more
+### The 0.5 / 0.6 series in brief
 
-The earlier walkthrough database was deleted at the user's request once 0.5.0
-landed, so `data/bitt.db` is gone and the app opens on first-run setup. Two
-things that were true of it are worth carrying forward, because both describe
-traps rather than data:
+Each of these has its own CHANGELOG entry with the reasoning; the traps worth
+carrying into new work:
+
+- **Loan arithmetic (0.5.0)** — interest is the **U.S. Rule**, on outstanding
+  principal only, and does NOT compound on unpaid interest. `ledger.AllocateLoan`
+  is the single source of truth for the payment/credit split. A **credit is
+  allocated principal-first**, deliberately unlike a payment. The `internal/loan`
+  package is pinned against a real lender's quoted schedule to two cents. See the
+  "0.5.0 landed" section below.
+- **Adjustments (0.5.0)** — `POST /tabs/{id}/adjustments`, Provider-only, is how
+  a balance is corrected without faking a payment. `ledger.Adjustment` had
+  existed unused since Phase 1.
+- **Asset caching (0.5.2)** — `/static/*` URLs carry a content digest
+  (`app.css?v=…` from `web.AssetVersion()`), because a stable URL with a long
+  `max-age` hid a shipped CSS change for an hour. Any new asset reference must go
+  through `Page.asset()` / `AssetURL`, never a bare `/static/` path.
+- **Profiles & avatars (0.6.0–0.6.3)** — `internal/avatar` is the whole upload
+  surface and the ONLY file upload in the app; study it before adding another
+  (magic bytes, header-dimension check before decode, decode-and-re-encode,
+  per-user rate limiter). Avatars render from the `Avatar(id, name, timestamp)`
+  templ component everywhere a person is named.
+- **`--version` / `--help` (0.5.1)** — the binary used to ignore argv and start a
+  server for any flag, which once migrated a live database. `runArgs` now refuses
+  unknown arguments. Configuration is still env-only; there are no real flags.
+- **Timezone picker (0.5.1)** — `internal/tz` holds the embedded IANA list;
+  default seed is `America/New_York`, UTC is the load-failure fallback.
+
+### Testing the UI (standing preference)
+
+Use **Playwright**, never the Chrome extension, and never against `:8080` or the
+real database. Pattern: `BITT_DB_PATH=<scratch>/x.db BITT_ADDR=:8099
+BITT_SECURE_COOKIES=false ./bittabby &`, complete setup over curl or Playwright,
+then drive headless Chromium and assert on `is_visible()` / `bounding_box()`
+plus a screenshot. The `webapp-testing` skill wraps this.
+
+### About `data/bitt.db`
+
+The original walkthrough database was deleted once 0.5.0 landed, and the user
+then set up fresh **real accounts** on the running `:8080` instance. So
+`data/bitt.db` is live user data now — do not test against it, and do not
+migrate it casually (migrations are forward-only). Two traps from the old
+database are still worth carrying forward, because both are about behaviour, not
+that specific data:
 
 - It held two Payoff tabs whose loan amount had been typed into a *line item*
   instead of the loan amount, so neither had a principal charge and both read as
@@ -400,6 +448,35 @@ must stay entirely off the balance path — a failed or double send can never
 touch a ledger. The in-app half already ships (the two-week upcoming-payment
 notice, `Server.upcoming`); Phase 5 is only the pushed-delivery half.
 
+### Do the security design first — it is gated on it
+
+Phase 5 is the app's first outbound side effect and its first reach to external
+hosts, so it changes the threat model rather than extending it. **A security
+design review was run before any code** (multi-agent threat model + adversarial
+verification); its output lives in **[../SECURITY-PHASE5.md](../SECURITY-PHASE5.md)** and must be read
+before writing the phase. The threats that review exists to pin down, so they
+are not forgotten if the doc drifts:
+
+- **SSRF via ntfy delivery.** ntfy sends to a configurable server/topic URL. A
+  user-controlled URL is a straight path to internal metadata endpoints and
+  localhost services. The design needs an explicit allowlist policy, decided up
+  front.
+- **Email injection.** Notification content interpolates tab names, memos, and
+  display names — all user-controlled. CRLF into headers and HTML/links into the
+  body are the classic vectors, and the CSP does not protect email.
+- **`/internal/tick` auth.** It must be exempt from `requireAuth` (an external
+  cron has no session), so it needs its own authentication — a shared secret,
+  constant-time compared, failing CLOSED when unset. And it must not become a
+  balance-path write: if computing "what is due" runs accrual, an outbound-
+  triggered endpoint would post ledger entries. Keep accrual and the send apart.
+- **Send-once ordering.** Claim-then-send loses a notice on a delivery failure;
+  send-then-claim double-sends on a crash between the two. Pick the guarantee
+  deliberately, and keep the claim out of any ledger transaction so a send
+  failure can never roll back a financial entry.
+- **Secrets.** SMTP/ntfy credentials must never reach a log, an error message, a
+  rendered page, or a notification body. Verify the existing "nothing sensitive
+  is logged" claim still holds for new delivery code.
+
 After Phase 5, **Phase 6 — ship**: MariaDB as a second backend (DEPLOY-02 kept
 the repository interface clean for exactly this), Docker as non-root, PWA shell,
 backup/restore. 5 requirements: UI-05, DEPLOY-03/05/06/07.
@@ -409,8 +486,13 @@ backup/restore. 5 requirements: UI-05, DEPLOY-03/05/06/07.
 ## Open items, none blocking
 
 - **License is unset.** README says so. Pick one before publishing.
-- **`internal/config` and `internal/store` have no tests.** Both are largely
-  declarations; the behavior is covered through the packages that use them.
+- **`internal/config`, `internal/store`, and `web/views` have ~no tests.** The
+  first two are largely declarations, covered through their users; views are
+  templates covered through `web`. The one behavioural view helper with a test is
+  `initials` (`web/views/initials_test.go`).
+- **A recurring footgun for the assistant:** `./bittabby -someflag` no longer
+  starts a server (0.5.1 fixed that), but pointing any run at `data/bitt.db`
+  still migrates it forward-only. Always use a scratch DB path for tests.
 - **`auth` coverage is 44%**, mostly because `DummyVerify` and some session
   paths are not directly exercised. The security-relevant paths — hashing,
   salting, malformed-hash rejection, fail-closed sessions — are covered.

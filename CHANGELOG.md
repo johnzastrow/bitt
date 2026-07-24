@@ -7,6 +7,40 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [0.6.4] - 2026-07-24 — Pre-Phase-5 security design and hardening
+
+Phase 5 (notifications) is the app's first outbound side effect and first reach
+to external hosts, so a security design review was run before any code: a
+multi-agent threat model (5 reviewers by lens, every finding adversarially
+verified, then synthesis). 34 findings raised, 15 refuted, 19 survived. Net risk
+is low-to-medium and entirely off the balance path.
+
+### Added
+- **`docs/SECURITY-PHASE5.md`** — the pre-implementation security design the
+  phase is gated on. Captures the must-fix controls (stale-reminder suppression,
+  SSRF containment on ntfy, email/ntfy header injection, `/internal/tick` auth
+  and its balance-path hazard, delivery semantics, secret hygiene) and the three
+  decisions the user must make first: the ntfy SSRF policy, at-most-once vs
+  at-least-once delivery, and the tick-auth mechanism.
+
+### Fixed (in-repo gaps the review confirmed, both correct regardless of Phase 5)
+- **The profile email edit admitted control characters.** It checked only for an
+  `@`, weaker than the `looksLikeEmail` used at setup and admin creation, so a
+  CR/LF could enter the stored login identity — header injection waiting for a
+  mail sender to land. Now uses `looksLikeEmail`.
+- **An unreadable `file:` secret silently fell back to a blank default.**
+  `config` reworked so a `file:`-supplied value that cannot be read fails the
+  load instead of degrading to empty (fail-closed, which the Phase 5 secrets and
+  the tick endpoint's own fail-closed guard depend on). Added a permission
+  warning when a `file:` secret is group/other-readable.
+
+### Tests
+- `internal/config` gains tests (0% -> ~69%): fail-closed on an unreadable
+  secret file, reading a secret file, defaults, and bad-timezone rejection.
+- `internal/auth` session and CSRF managers gain direct unit tests (42% -> ~90%):
+  session round-trip and digest-only storage, fail-closed resolution, expiry,
+  Revoke vs RevokeOthers, CSRF double-submit and its rejections, DummyVerify.
+
 ## [0.6.3] - 2026-07-24 — Avatars in history rows
 
 ### Changed

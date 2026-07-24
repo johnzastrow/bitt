@@ -47,15 +47,26 @@ type Config struct {
 
 // Load reads configuration from the environment, applying defaults.
 func Load() (Config, error) {
+	var ld loader
 	c := Config{
-		Addr:               envString("BITT_ADDR", ":8080"),
-		DBPath:             envString("BITT_DB_PATH", filepath.Join("data", "bitt.db")),
-		DefaultTimezone:    envString("BITT_TIMEZONE", defaultTimezone),
+		Addr:               ld.str("BITT_ADDR", ":8080"),
+		DBPath:             ld.str("BITT_DB_PATH", filepath.Join("data", "bitt.db")),
+		DefaultTimezone:    ld.str("BITT_TIMEZONE", defaultTimezone),
 		SecureCookies:      envBool("BITT_SECURE_COOKIES", true),
 		AppendOnlyTriggers: envBool("BITT_LEDGER_TRIGGERS", true),
 		ReadTimeout:        envDuration("BITT_READ_TIMEOUT", 15*time.Second),
 		WriteTimeout:       envDuration("BITT_WRITE_TIMEOUT", 30*time.Second),
 		ShutdownTimeout:    envDuration("BITT_SHUTDOWN_TIMEOUT", 15*time.Second),
+	}
+	// A file: read that fails is a misconfiguration, not a reason to fall back
+	// to a default. Surfacing it here is what makes a secret fail CLOSED: a
+	// mistyped or unreadable secret path refuses to start rather than starting
+	// with a blank credential that looks like "not configured". This matters
+	// most for the Phase 5 secrets (SMTP, ntfy, the /internal/tick secret),
+	// where a silent empty value would defeat the tick endpoint's own
+	// fail-closed guard.
+	if ld.err != nil {
+		return Config{}, ld.err
 	}
 
 	if _, err := time.LoadLocation(c.DefaultTimezone); err != nil {
@@ -83,22 +94,56 @@ func (c Config) EnsureDataDir() error {
 	return nil
 }
 
-// envString reads a string, falling back to a default. A value of the form
-// "file:/path" reads the contents of that file instead, so secrets can be
-// supplied by mounted file rather than by environment variable (DEPLOY-06).
-func envString(key, def string) string {
+// loader reads string settings, remembering the first error so Load can fail
+// as a whole. It exists so an unreadable file: secret is a hard error rather
+// than a silent fall-back to a default.
+type loader struct {
+	err error
+}
+
+// str reads a string, falling back to a default when the variable is unset. A
+// value of the form "file:/path" reads the contents of that file instead, so
+// secrets can be supplied by a mounted file rather than an environment variable
+// (DEPLOY-06). A file: path that cannot be read records an error: an operator
+// who names a file means that file, and a failure there must fail closed, not
+// degrade to the default.
+func (l *loader) str(key, def string) string {
 	v, ok := os.LookupEnv(key)
 	if !ok || v == "" {
 		return def
 	}
-	if path, found := strings.CutPrefix(v, "file:"); found {
-		b, err := os.ReadFile(path)
-		if err != nil {
-			return def
-		}
-		return strings.TrimSpace(string(b))
+	path, isFile := strings.CutPrefix(v, "file:")
+	if !isFile {
+		return v
 	}
-	return v
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if l.err == nil {
+			l.err = fmt.Errorf("config: %s names file %q, which cannot be read: %w", key, path, err)
+		}
+		return def
+	}
+	warnIfSecretFileLoose(key, path)
+	return strings.TrimSpace(string(b))
+}
+
+// warnIfSecretFileLoose notes a file: secret that is readable beyond its owner.
+//
+// It warns rather than refuses: the documented file:/run/secrets/name
+// convention (Docker, Kubernetes) mounts secret files world-readable inside an
+// isolated namespace, so a hard refusal would break the very deployment the
+// feature exists for. The app reads the file rather than owning it, so a
+// warning plus the 0600 note in .env.example is the right ceiling.
+func warnIfSecretFileLoose(key, path string) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		fmt.Fprintf(os.Stderr,
+			"config: warning: %s secret file %q is readable by group or others (%#o); prefer 0600\n",
+			key, path, info.Mode().Perm())
+	}
 }
 
 func envBool(key string, def bool) bool {

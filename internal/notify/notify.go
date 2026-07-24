@@ -145,6 +145,26 @@ func New(cfg config.NotifyConfig) *Notifier {
 	}
 }
 
+// With returns a Notifier that delivers under cfg, sharing this one's HTTP
+// client and test hook.
+//
+// Delivery settings can now come from the database as well as the environment,
+// and a setting changed through the interface has to take effect without a
+// restart -- so the effective configuration is resolved per use rather than
+// once at startup. Sharing the client is what keeps that from discarding the
+// connection pool (and the SSRF-checking dialer with it) on every call.
+//
+// A nil receiver returns nil, so a server built without notifications stays
+// safe to call through.
+func (n *Notifier) With(cfg config.NotifyConfig) *Notifier {
+	if n == nil {
+		return nil
+	}
+	out := *n
+	out.cfg = cfg
+	return &out
+}
+
 // Enabled reports whether any channel is configured.
 func (n *Notifier) Enabled() bool { return n.cfg.EmailEnabled() || n.cfg.NtfyEnabled() }
 

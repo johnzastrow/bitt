@@ -69,17 +69,6 @@ func (s *Server) postTabReminders(w http.ResponseWriter, r *http.Request) {
 	redirectWith(w, r, tabPath(id), "ok", remindersSetNote(rs))
 }
 
-// defaultReminders is the instance-wide list in the shape the tab page
-// displays, so the form can show what a tab inherits before it is customised.
-// Converting here keeps the view layer clear of the config package.
-func (s *Server) defaultReminders() []store.TabReminder {
-	out := make([]store.TabReminder, 0, len(s.cfg.Reminders))
-	for _, r := range s.cfg.Reminders {
-		out = append(out, store.TabReminder{Days: r.Days, Title: r.Title, Body: r.Body})
-	}
-	return out
-}
-
 // parseTabReminders validates the reminder form into the set to store.
 //
 // An empty days list clears the tab, whatever the templates say -- "remind on

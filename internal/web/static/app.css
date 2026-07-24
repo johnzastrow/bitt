@@ -887,3 +887,24 @@ tr.reversal td { color: var(--fg-muted); }
 .counter { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .counter.warn { color: var(--caution); font-weight: 600; }
 .counter.over { color: var(--owed); font-weight: 700; }
+
+/* ---------- Instance notification settings ---------- */
+
+/* A list of states rather than of things, so it drops the bullets and lets each
+   row read as "pill, what it is, why". */
+.statuslist { list-style: none; margin: var(--s3) 0 0; padding: 0; }
+.statuslist li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s2);
+  padding: var(--s2) 0;
+  border-bottom: 1px solid var(--border);
+}
+.statuslist li:last-child { border-bottom: none; }
+
+/* Ready is the good state and says so; off is neutral, not alarming. An
+   unconfigured channel is a deployment that has not got there yet, and colouring
+   it like a fault would teach an operator to ignore the colour. */
+.pill-ready { color: var(--credit); }
+.pill-notready { color: var(--fg-muted); }

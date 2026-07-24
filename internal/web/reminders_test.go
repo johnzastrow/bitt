@@ -17,13 +17,13 @@ func TestReminderForTabPrefersItsOwn(t *testing.T) {
 	tab := h.makeTab("Rent", "Rent", "400.00")
 	id := tabIDFrom2(t, tab)
 
-	h.srv().cfg.Reminders = []config.Reminder{
+	defaults := []config.Reminder{
 		{Days: 14, Title: "instance 14", Body: "instance body"},
 		{Days: 7, Title: "instance 7", Body: "instance body"},
 	}
 
 	// Uncustomised: the instance defaults apply.
-	if got, ok := h.srv().reminderForTab(t.Context(), id, 14); !ok || got.Title != "instance 14" {
+	if got, ok := h.srv().reminderForTab(t.Context(), id, 14, defaults); !ok || got.Title != "instance 14" {
 		t.Fatalf("uncustomised tab at 14 days = %+v, %v; want the instance default", got, ok)
 	}
 
@@ -34,16 +34,16 @@ func TestReminderForTabPrefersItsOwn(t *testing.T) {
 		t.Fatalf("set: %v", err)
 	}
 
-	if got, ok := h.srv().reminderForTab(t.Context(), id, 14); !ok || got.Title != "tab 14" {
+	if got, ok := h.srv().reminderForTab(t.Context(), id, 14, defaults); !ok || got.Title != "tab 14" {
 		t.Errorf("customised tab at 14 days = %+v, %v; want the tab's own", got, ok)
 	}
 	// A lead time only the tab has still fires.
-	if got, ok := h.srv().reminderForTab(t.Context(), id, 2); !ok || got.Title != "tab 2" {
+	if got, ok := h.srv().reminderForTab(t.Context(), id, 2, defaults); !ok || got.Title != "tab 2" {
 		t.Errorf("tab-only lead time at 2 days = %+v, %v; want the tab's own", got, ok)
 	}
 	// A customised tab does NOT inherit the instance's other lead times --
 	// otherwise dropping the 7-day notice from a tab would be impossible.
-	if got, ok := h.srv().reminderForTab(t.Context(), id, 7); ok {
+	if got, ok := h.srv().reminderForTab(t.Context(), id, 7, defaults); ok {
 		t.Errorf("customised tab still inherited the instance 7-day reminder: %+v", got)
 	}
 
@@ -51,7 +51,7 @@ func TestReminderForTabPrefersItsOwn(t *testing.T) {
 	if err := h.db.SetTabReminders(t.Context(), id, nil); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
-	if got, ok := h.srv().reminderForTab(t.Context(), id, 7); !ok || got.Title != "instance 7" {
+	if got, ok := h.srv().reminderForTab(t.Context(), id, 7, defaults); !ok || got.Title != "instance 7" {
 		t.Errorf("after clearing, 7 days = %+v, %v; want the instance default back", got, ok)
 	}
 }

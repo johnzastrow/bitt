@@ -7,6 +7,46 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [0.7.4] - 2026-07-24 — Notification settings in the app, secrets left out of it
+
+Instance-wide notification config was environment-only, which meant a shell in a
+container to reword a reminder. The non-secret half now has a screen. The secret
+half deliberately does not.
+
+### Added
+- **An admin Notifications screen** at `/admin/notifications`, linked in the top
+  bar for administrators. Three cards: a status readout of what can actually
+  deliver, the delivery settings, and the default reminder set (with the same
+  byte counters as the per-tab card).
+- **Editable in the app:** SMTP server, port, username, from address; the ntfy
+  server URL; and the default reminder days, title, and message. Migration
+  `0010` adds the delivery columns to `instance` and an `instance_reminders`
+  table. Changes take effect on the next tick with no restart — the effective
+  config is resolved per use rather than held from startup.
+
+### Security
+- **Secrets stay in the environment.** `BITT_SMTP_PASSWORD`, `BITT_NTFY_TOKEN`,
+  and `BITT_TICK_SECRET` have no columns, no form fields, and no code path that
+  could store one. The screen reports each as set or not set and never renders a
+  value, not even masked — a masked field still leaks the length. The reasoning
+  is in migration `0010`: a secret in the database has to be encrypted, its key
+  has to come from the environment anyway, so the result is the same number of
+  environment secrets plus a key to manage and re-wrap — and it would put live
+  credentials into every backup taken under DEPLOY-07.
+- **The environment wins over stored delivery settings**, field by field, so a
+  container behaves the same way every time it starts whatever is in its volume.
+  Environment-owned fields render read-only rather than hidden, and saving the
+  form does not capture their values into the database — otherwise they would
+  silently take over the day the variable was unset. Both are pinned by tests.
+- Delivery input is validated to the same rules the environment is held to: a
+  from address parsed by `net/mail` (which refuses a newline, closing the header
+  injection), a hostname that is not a URL, and **https-only for ntfy**, since a
+  plaintext push carries the tab name and the amount owed.
+- Reminders resolve tab → instance → environment; delivery resolves environment
+  → instance. The two run opposite ways on purpose: a message is content, where
+  the most specific author should win, and a delivery setting is deployment,
+  where the thing under version control should win.
+
 ## [0.7.3] - 2026-07-24 — Per-tab reminders, set by the Provider
 
 Completes the notification model Phase 5 set out to deliver. 0.7.0–0.7.1 shipped

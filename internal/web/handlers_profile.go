@@ -70,10 +70,13 @@ func (s *Server) allowAvatarUpload(userID int64) bool {
 // getProfile renders the account's own settings.
 func (s *Server) getProfile(w http.ResponseWriter, r *http.Request) {
 	user := userFrom(r.Context())
+	nc := s.notifyConfig(r.Context())
 	s.render(w, r, http.StatusOK, views.Profile(s.page(w, r, "Your profile"), views.ProfileData{
-		User:         *user,
-		EmailEnabled: s.cfg.Notify.EmailEnabled(),
-		NtfyEnabled:  s.cfg.Notify.NtfyEnabled(),
+		User: *user,
+		// The effective configuration, so a channel an administrator switched on
+		// through the interface shows as available here without a restart.
+		EmailEnabled: nc.EmailEnabled(),
+		NtfyEnabled:  nc.NtfyEnabled(),
 	}))
 }
 

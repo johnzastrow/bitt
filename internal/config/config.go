@@ -62,6 +62,15 @@ type Config struct {
 	// reminders (store.TabReminder, migration 0009) uses those instead, and
 	// ignores this list entirely -- see Server.reminderForTab.
 	Reminders []Reminder
+	// RemindersFromEnv reports whether the environment actually specified the
+	// reminders, as against Reminders holding the built-in default.
+	//
+	// The distinction is load-bearing, and it is the reason this field exists
+	// rather than a len() check: an administrator can also set the defaults
+	// through the interface (migration 0010), and the environment wins. Without
+	// this flag the built-in fallback is indistinguishable from a deliberate
+	// environment setting, and the stored defaults would never be reachable.
+	RemindersFromEnv bool
 }
 
 // Reminder is one payment-reminder rule: how many days before a due date it
@@ -107,6 +116,22 @@ const (
 	defaultReminderBody  = "Your {days}-day reminder: a payment on the tab \"{tab}\" is due {when}, on {due}.\n" +
 		"{amount} is owed.\n{url}"
 )
+
+// DefaultReminders is the built-in reminder set: 14, 7, and 1 days before a due
+// date, all carrying the built-in message.
+//
+// It is what applies when neither the environment nor the database says
+// otherwise, and it is exported so that the resolution order has one definition
+// of "the built-in default" rather than a constant here and a literal wherever
+// the fallback is needed.
+func DefaultReminders() []Reminder {
+	days := []int{14, 7, 1}
+	out := make([]Reminder, 0, len(days))
+	for _, d := range days {
+		out = append(out, Reminder{Days: d, Title: defaultReminderTitle, Body: defaultReminderBody})
+	}
+	return out
+}
 
 // NotifyConfig is the delivery configuration for notifications.
 //
@@ -195,11 +220,11 @@ func Load() (Config, error) {
 	if err := c.Notify.validate(); err != nil {
 		return Config{}, err
 	}
-	rem, err := loadReminders()
+	rem, remFromEnv, err := loadReminders()
 	if err != nil {
 		return Config{}, err
 	}
-	c.Reminders = rem
+	c.Reminders, c.RemindersFromEnv = rem, remFromEnv
 	if c.BaseURL != "" && !strings.HasPrefix(c.BaseURL, "http://") && !strings.HasPrefix(c.BaseURL, "https://") {
 		return Config{}, fmt.Errorf("config: BITT_BASE_URL %q must start with http:// or https://", c.BaseURL)
 	}
@@ -315,7 +340,20 @@ func envBool(key string, def bool) bool {
 // is a comma-separated list of positive day counts (default "14,7,1"); each day
 // may carry its own BITT_REMINDER_TITLE_<d> / BITT_REMINDER_BODY_<d>, falling
 // back to BITT_REMINDER_TITLE / BITT_REMINDER_BODY, then to the built-ins.
-func loadReminders() ([]Reminder, error) {
+// It also reports whether the environment said anything at all, which is what
+// decides the precedence against reminders stored in the database.
+func loadReminders() ([]Reminder, bool, error) {
+	// Any BITT_REMINDER_* with a value counts, per-day overrides included, so
+	// the whole environment is scanned rather than three known names.
+	fromEnv := false
+	for _, kv := range os.Environ() {
+		name, value, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(name, "BITT_REMINDER_") && strings.TrimSpace(value) != "" {
+			fromEnv = true
+			break
+		}
+	}
+
 	days := []int{14, 7, 1}
 	if raw := strings.TrimSpace(os.Getenv("BITT_REMINDER_DAYS")); raw != "" {
 		days = nil
@@ -327,7 +365,7 @@ func loadReminders() ([]Reminder, error) {
 			}
 			n, err := strconv.Atoi(p)
 			if err != nil || n <= 0 || n > 3650 {
-				return nil, fmt.Errorf("config: BITT_REMINDER_DAYS has an invalid day %q (want a positive number of days)", p)
+				return nil, false, fmt.Errorf("config: BITT_REMINDER_DAYS has an invalid day %q (want a positive number of days)", p)
 			}
 			if !seen[n] {
 				seen[n] = true
@@ -335,7 +373,7 @@ func loadReminders() ([]Reminder, error) {
 			}
 		}
 		if len(days) == 0 {
-			return nil, fmt.Errorf("config: BITT_REMINDER_DAYS is set but lists no days")
+			return nil, false, fmt.Errorf("config: BITT_REMINDER_DAYS is set but lists no days")
 		}
 	}
 	defTitle := envOr("BITT_REMINDER_TITLE", defaultReminderTitle)
@@ -348,7 +386,7 @@ func loadReminders() ([]Reminder, error) {
 			Body:  envOr(fmt.Sprintf("BITT_REMINDER_BODY_%d", d), defBody),
 		})
 	}
-	return out, nil
+	return out, fromEnv, nil
 }
 
 // envOr returns the environment value or a default. It is the plain-value

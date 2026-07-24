@@ -487,8 +487,8 @@ func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 		Upcoming:       s.upcoming(tab, acc, itemTotal),
 
 		Reminders:        reminders,
-		DefaultReminders: s.defaultReminders(),
-		NotifyReady:      s.notifier != nil && s.notifier.Enabled(),
+		DefaultReminders: s.defaultReminders(r.Context()),
+		NotifyReady:      s.notifyReady(r.Context()),
 	}
 	if tab.Kind == store.TabPayoff {
 		payoff, err := s.payoffFor(r, tab)

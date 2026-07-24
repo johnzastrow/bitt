@@ -56,6 +56,7 @@ templ Layout(p Page) {
 					<nav>
 						if p.User.IsAdmin {
 							<a class="navlink" href="/admin/users">People</a>
+							<a class="navlink" href="/admin/notifications">Notifications</a>
 						}
 						<a class="who" href="/profile" title="Your profile">
 							@UserAvatar(*p.User, 26)

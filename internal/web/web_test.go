@@ -62,6 +62,9 @@ func newHarnessCfg(t *testing.T, nc config.NotifyConfig) *harness {
 		SecureCookies:      false,
 		AppendOnlyTriggers: true,
 		Notify:             nc,
+		// config.Load always populates these, so a harness that left them nil
+		// would test a state production never reaches.
+		Reminders: config.DefaultReminders(),
 	}
 
 	srv := New(cfg, db, ledger.New(db),

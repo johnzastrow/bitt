@@ -126,6 +126,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /admin/users", s.requireAdmin(http.HandlerFunc(s.getAdminUsers)))
 	mux.Handle("POST /admin/users", s.requireAdmin(http.HandlerFunc(s.postAdminUser)))
 	mux.Handle("POST /admin/users/{id}/active", s.requireAdmin(http.HandlerFunc(s.postAdminUserActive)))
+	mux.Handle("GET /admin/notifications", s.requireAdmin(http.HandlerFunc(s.getAdminNotify)))
+	mux.Handle("POST /admin/notifications/delivery", s.requireAdmin(http.HandlerFunc(s.postAdminDelivery)))
+	mux.Handle("POST /admin/notifications/reminders", s.requireAdmin(http.HandlerFunc(s.postAdminReminders)))
 
 	return s.securityHeaders(s.recoverPanic(mux))
 }

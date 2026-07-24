@@ -171,6 +171,30 @@ type Instance struct {
 	Timezone         string
 	SetupCompletedAt *time.Time
 	CreatedAt        time.Time
+	// Delivery is the notification setup an administrator has entered through
+	// the interface. It is the FALLBACK layer: anything the environment
+	// specifies wins, and these apply only where the environment is silent.
+	//
+	// It holds no secrets. The SMTP password, the ntfy token, and the tick
+	// secret come from the environment or a file and nowhere else -- see
+	// migration 0010 for why that line is drawn here.
+	Delivery Delivery
+}
+
+// Delivery is the non-secret half of notification configuration: where mail
+// goes out through, who it comes from, and which ntfy server is pinned.
+type Delivery struct {
+	SMTPHost     string
+	SMTPPort     int
+	SMTPUsername string
+	EmailFrom    string
+	NtfyBaseURL  string
+}
+
+// Set reports whether any delivery setting has been entered at all.
+func (d Delivery) Set() bool {
+	return d.SMTPHost != "" || d.SMTPPort != 0 || d.SMTPUsername != "" ||
+		d.EmailFrom != "" || d.NtfyBaseURL != ""
 }
 
 // SetupComplete reports whether the first-run screen has already been used
@@ -417,6 +441,20 @@ type InstanceStore interface {
 	// transaction (AUTH-03). It returns ErrConflict if setup already completed,
 	// which is what makes the lock permanent even under a concurrent request.
 	CompleteSetup(ctx context.Context, admin User, timezone string) (User, error)
+
+	// SetDelivery replaces the instance's non-secret notification settings. It
+	// stores no credentials; those come from the environment (migration 0010).
+	SetDelivery(ctx context.Context, d Delivery) error
+
+	// ListInstanceReminders returns the instance-wide default reminders, longest
+	// lead first. Empty means none have been set through the interface, and the
+	// environment's list -- or the built-in one -- applies.
+	ListInstanceReminders(ctx context.Context) ([]TabReminder, error)
+
+	// SetInstanceReminders replaces the instance-wide defaults in one
+	// transaction. An empty set clears them, which returns the instance to the
+	// environment's list or the built-in default.
+	SetInstanceReminders(ctx context.Context, rs []TabReminder) error
 }
 
 // UserStore covers accounts.

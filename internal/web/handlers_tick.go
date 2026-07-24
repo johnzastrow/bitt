@@ -55,14 +55,19 @@ func (s *Server) postTick(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.notifier == nil || !s.notifier.Enabled() {
+	// The effective configuration, which is the environment plus whatever an
+	// administrator has set through the interface -- resolved now rather than at
+	// startup, so a setting changed in the app takes effect on the next tick
+	// without a restart.
+	notifier := s.notifierFor(r.Context())
+	if notifier == nil || !notifier.Enabled() {
 		// Authenticated, but nothing to deliver over. Report success with zero
 		// work so a cron does not treat it as an error.
 		writeTickResult(w, 0, 0)
 		return
 	}
 
-	sent, skipped := s.runNotifications(r.Context())
+	sent, skipped := s.runNotifications(r.Context(), notifier)
 	s.log.Info("tick completed", "sent", sent, "skipped", skipped)
 	writeTickResult(w, sent, skipped)
 }
@@ -77,13 +82,18 @@ func (s *Server) postTick(w http.ResponseWriter, r *http.Request) {
 // lost. Before sending it re-derives live state, so a period paid early or a
 // tab already settled produces no dunning notice (the one confirmed defect the
 // security review named).
-func (s *Server) runNotifications(ctx context.Context) (sent, skipped int) {
+func (s *Server) runNotifications(ctx context.Context, notifier *notify.Notifier) (sent, skipped int) {
 	tabs, err := s.allTabsForNotify(ctx)
 	if err != nil {
 		s.log.Error("tick: list tabs", "error", err)
 		return 0, 0
 	}
 	today := s.today(ctx)
+
+	// The instance-wide defaults, read once for the whole scan: they are the
+	// same for every tab, and a per-tab read would be a query per tab for an
+	// answer that cannot change mid-tick.
+	defaults := s.instanceReminders(ctx)
 
 	for _, tab := range tabs {
 		if tab.ArchivedAt != nil || !tab.Schedule.Set() {
@@ -94,7 +104,7 @@ func (s *Server) runNotifications(ctx context.Context) (sent, skipped int) {
 			continue
 		}
 		lead := daysBetween(today, due)
-		spec, ok := s.reminderForTab(ctx, tab.ID, lead)
+		spec, ok := s.reminderForTab(ctx, tab.ID, lead, defaults)
 		if !ok {
 			continue
 		}
@@ -113,7 +123,7 @@ func (s *Server) runNotifications(ctx context.Context) (sent, skipped int) {
 			if p.Role != store.RolePayee {
 				continue
 			}
-			did := s.notifyParticipant(ctx, tab, p, event, spec, due, lead, balance)
+			did := s.notifyParticipant(ctx, notifier, tab, p, event, spec, due, lead, balance)
 			sent += did
 			if did == 0 {
 				skipped++
@@ -126,7 +136,7 @@ func (s *Server) runNotifications(ctx context.Context) (sent, skipped int) {
 // notifyParticipant delivers one reminder to one payee over each channel they
 // have enabled that has not already sent this event. Returns the number of
 // channels delivered on.
-func (s *Server) notifyParticipant(ctx context.Context, tab store.Tab, p store.Participant, event string, spec config.Reminder, due schedule.Date, lead int, balance money.Cents) int {
+func (s *Server) notifyParticipant(ctx context.Context, notifier *notify.Notifier, tab store.Tab, p store.Participant, event string, spec config.Reminder, due schedule.Date, lead int, balance money.Cents) int {
 	user, err := s.store.GetUser(ctx, p.UserID)
 	if err != nil || !user.Active() {
 		return 0
@@ -135,12 +145,12 @@ func (s *Server) notifyParticipant(ctx context.Context, tab store.Tab, p store.P
 	msg := s.reminderMessage(spec, tab, due, lead, balance)
 
 	var delivered int
-	for _, ch := range channelsFor(user, s.notifier, rcpt) {
+	for _, ch := range channelsFor(user, notifier, rcpt) {
 		already, err := s.store.WasSent(ctx, tab.ID, event, string(ch))
 		if err != nil || already {
 			continue
 		}
-		if err := s.notifier.Deliver(ctx, ch, rcpt, msg); err != nil {
+		if err := notifier.Deliver(ctx, ch, rcpt, msg); err != nil {
 			s.log.Warn("notify send failed", "tab_id", tab.ID, "channel", ch, "error", err)
 			continue // send-then-claim: a failure is retried next tick
 		}
@@ -216,7 +226,7 @@ func leadPhrase(days int) string {
 // is exactly the one the Provider may have deliberately replaced, and the
 // send-then-claim design means a skipped reminder is retried on the next tick
 // rather than lost.
-func (s *Server) reminderForTab(ctx context.Context, tabID int64, days int) (config.Reminder, bool) {
+func (s *Server) reminderForTab(ctx context.Context, tabID int64, days int, defaults []config.Reminder) (config.Reminder, bool) {
 	own, err := s.store.ListTabReminders(ctx, tabID)
 	if err != nil {
 		s.log.Error("tick: list tab reminders", "tab_id", tabID, "error", err)
@@ -230,14 +240,13 @@ func (s *Server) reminderForTab(ctx context.Context, tabID int64, days int) (con
 	if len(own) > 0 {
 		return config.Reminder{}, false
 	}
-	return s.reminderFor(days)
+	return reminderAt(defaults, days)
 }
 
-// reminderFor returns the instance-wide reminder rule whose lead time matches
-// the given days-until-due, if any. It is the fallback for a tab the Provider
-// has not customised.
-func (s *Server) reminderFor(days int) (config.Reminder, bool) {
-	for _, r := range s.cfg.Reminders {
+// reminderAt returns the rule in a set whose lead time matches the given
+// days-until-due, if any.
+func reminderAt(rs []config.Reminder, days int) (config.Reminder, bool) {
+	for _, r := range rs {
 		if r.Days == days {
 			return r, true
 		}

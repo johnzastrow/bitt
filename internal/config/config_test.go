@@ -114,16 +114,20 @@ func TestNtfyMustBeHTTPS(t *testing.T) {
 
 func TestLoadReminders(t *testing.T) {
 	// Default when unset.
-	if r, err := loadReminders(); err != nil || len(r) != 3 || r[0].Days != 14 {
+	if r, fromEnv, err := loadReminders(); err != nil || len(r) != 3 || r[0].Days != 14 || fromEnv {
 		t.Fatalf("default reminders = %+v, %v", r, err)
 	}
 
 	t.Setenv("BITT_REMINDER_DAYS", "30, 7, 7, 1")
 	t.Setenv("BITT_REMINDER_BODY", "Owe {amount} on {tab} by {due}")
 	t.Setenv("BITT_REMINDER_BODY_1", "Last call: {amount} due tomorrow")
-	r, err := loadReminders()
+	r, fromEnv, err := loadReminders()
 	if err != nil {
 		t.Fatalf("loadReminders: %v", err)
+	}
+	// The environment spoke, so it wins over anything stored in the database.
+	if !fromEnv {
+		t.Error("loadReminders did not report the environment as the source")
 	}
 	if len(r) != 3 { // 7 deduped
 		t.Fatalf("got %d reminders, want 3 (7 deduped): %+v", len(r), r)
@@ -139,7 +143,7 @@ func TestLoadReminders(t *testing.T) {
 	}
 
 	t.Setenv("BITT_REMINDER_DAYS", "0,-3")
-	if _, err := loadReminders(); err == nil {
+	if _, _, err := loadReminders(); err == nil {
 		t.Error("a non-positive day count was accepted")
 	}
 }

@@ -114,6 +114,39 @@ ones:
 
 ---
 
+## Where notification config lives, and why (0.7.4)
+
+Three layers, and two different precedence orders. Get this wrong and the
+symptom is subtle -- a setting that appears to save and then does nothing.
+
+| What | Order |
+|---|---|
+| Reminders (days + message) | a tab's own -> instance stored -> environment -> built-in 14/7/1 |
+| Delivery (SMTP, ntfy URL) | environment -> instance stored |
+
+They run opposite ways deliberately. A reminder message is CONTENT, so the most
+specific author wins. A delivery setting is DEPLOYMENT, so the thing under
+version control -- the compose file -- wins over a value typed into a form
+months ago, and a container brought up with the same environment behaves the
+same way whatever is in its volume.
+
+`internal/web/notifyconfig.go` is where all of it resolves. Two traps it already
+handles, both of which cost a test to find:
+
+- **A read-only input still posts its value.** Saving the delivery form must not
+  copy environment-owned values into the database, or they take over silently
+  the day someone unsets the variable. See `postAdminDelivery`'s `pick`.
+- **`config.RemindersFromEnv` exists because the built-in default is
+  indistinguishable from a deliberate setting.** Without the flag, `len()` on
+  `cfg.Reminders` is always 3 and the stored defaults are unreachable.
+
+**Secrets are not in this.** `BITT_SMTP_PASSWORD`, `BITT_NTFY_TOKEN`, and
+`BITT_TICK_SECRET` have no columns and no form fields. If a future change wants
+them in the database, read the header of migration `0010` first -- the argument
+is that a secret there needs a key that has to come from the environment anyway.
+
+---
+
 ## Documented follow-ups (not started, not core)
 
 - **Payment-made / payment-missed event notices.** Only pre-due reminders ship.

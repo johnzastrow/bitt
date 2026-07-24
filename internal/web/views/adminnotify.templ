@@ -1,0 +1,371 @@
+package views
+
+import (
+	"strconv"
+	"strings"
+
+	"github.com/johnzastrow/bitt/internal/notify"
+	"github.com/johnzastrow/bitt/internal/store"
+)
+
+// AdminNotifyData is the instance-wide notification settings screen.
+//
+// Two halves, and the split is the security decision made visible: delivery
+// settings that are ordinary configuration are editable here, and the three
+// that are credentials are reported as configured-or-not and nowhere else. A
+// secret is never rendered back, not even masked at its real length -- a masked
+// field still leaks the length, and a page that displays a credential is one
+// screenshot away from disclosing it.
+type AdminNotifyData struct {
+	// Delivery is what is stored, which is what the form edits.
+	Delivery store.Delivery
+	// Env is which settings the environment has taken over. A setting the
+	// environment specifies is authoritative, and its field is shown read-only
+	// rather than hidden -- an administrator needs to see why their edit would
+	// not take.
+	Env EnvLocks
+	// Reminders is the stored default set, empty when none has been saved.
+	Reminders []store.TabReminder
+	// Effective is the reminder set actually in force, whatever its source.
+	Effective []store.TabReminder
+	// RemindersFromEnv reports that the environment set the reminders, which
+	// makes the whole reminder form read-only.
+	RemindersFromEnv bool
+	// EmailReady and NtfyReady report whether each channel can deliver under
+	// the effective configuration.
+	EmailReady bool
+	NtfyReady  bool
+	// TickReady reports whether the cron endpoint has its secret. It is
+	// environment-only and is never editable here.
+	TickReady bool
+	// SecretsSet reports which credentials are present, without their values.
+	SMTPPasswordSet bool
+	NtfyTokenSet    bool
+}
+
+// EnvLocks marks the settings the environment has taken authority over.
+type EnvLocks struct {
+	SMTPHost     bool
+	SMTPUsername bool
+	EmailFrom    bool
+	NtfyBaseURL  bool
+}
+
+// Locked reports whether anything at all is environment-pinned, which decides
+// whether the explanation is worth showing.
+func (e EnvLocks) Locked() bool {
+	return e.SMTPHost || e.SMTPUsername || e.EmailFrom || e.NtfyBaseURL
+}
+
+// AdminNotify is the instance notification settings screen.
+templ AdminNotify(p Page, d AdminNotifyData) {
+	@Layout(p) {
+		<h1>Notifications</h1>
+		<p class="muted">
+			How this instance delivers payment reminders, and what they say by default. A tab whose provider has set
+			its own reminders uses those instead.
+		</p>
+		<section class="card">
+			<h2>Status</h2>
+			<ul class="statuslist">
+				<li>
+					<span class={ "pill", readyClass(d.EmailReady) }>{ readyLabel(d.EmailReady) }</span>
+					Email delivery
+					if !d.EmailReady {
+						<span class="muted small">
+							Needs an SMTP server and a from address, below. A password, if your server wants one,
+							comes from the environment.
+						</span>
+					}
+				</li>
+				<li>
+					<span class={ "pill", readyClass(d.NtfyReady) }>{ readyLabel(d.NtfyReady) }</span>
+					ntfy push delivery
+					if !d.NtfyReady {
+						<span class="muted small">Needs a server URL.</span>
+					}
+				</li>
+				<li>
+					<span class={ "pill", readyClass(d.TickReady) }>{ readyLabel(d.TickReady) }</span>
+					Cron endpoint
+					<span class="muted small">
+						if d.TickReady {
+							<code>POST /internal/tick</code> accepts the configured secret. Nothing sends until a cron calls it.
+						} else {
+							<code>BITT_TICK_SECRET</code> is unset, so <code>/internal/tick</code> refuses every request and
+							nothing can be delivered. This is deliberate: it fails closed.
+						}
+					</span>
+				</li>
+			</ul>
+		</section>
+		<section class="card">
+			<h2>Credentials</h2>
+			<p class="muted small">
+				These are set in the environment or a file and are never stored in the database, never shown here, and
+				never carried in a backup. A credential in the database would have to be encrypted, the key for that
+				would have to come from the environment anyway, and the result is the same number of environment
+				secrets plus a key to manage.
+			</p>
+			<ul class="statuslist">
+				<li>
+					<span class={ "pill", readyClass(d.SMTPPasswordSet) }>{ setLabel(d.SMTPPasswordSet) }</span>
+					<code>BITT_SMTP_PASSWORD</code>
+				</li>
+				<li>
+					<span class={ "pill", readyClass(d.NtfyTokenSet) }>{ setLabel(d.NtfyTokenSet) }</span>
+					<code>BITT_NTFY_TOKEN</code>
+					<span class="muted small">Only needed for a private ntfy server.</span>
+				</li>
+				<li>
+					<span class={ "pill", readyClass(d.TickReady) }>{ setLabel(d.TickReady) }</span>
+					<code>BITT_TICK_SECRET</code>
+				</li>
+			</ul>
+			<p class="muted small">
+				Each accepts <code>file:/run/secrets/name</code> as well as a plain value, and a file that cannot be
+				read stops the app from starting rather than falling back to blank.
+			</p>
+		</section>
+		<section class="card">
+			<h2>Delivery</h2>
+			if d.Env.Locked() {
+				<p class="banner">
+					Some settings below are fixed by the environment and are shown read-only. The environment wins so
+					that a deployment behaves the same way every time it starts, whatever is in its database. To edit
+					one here, unset its variable and restart.
+				</p>
+			}
+			<form method="post" action="/admin/notifications/delivery" class="stack">
+				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+				<fieldset class="stack">
+					<legend>Email</legend>
+					<label>
+						SMTP server
+						<input
+							type="text"
+							name="smtp_host"
+							value={ d.Delivery.SMTPHost }
+							placeholder="smtp.example.com -- blank turns email off"
+							readonly?={ d.Env.SMTPHost }
+						/>
+						if d.Env.SMTPHost {
+							<small>Fixed by <code>BITT_SMTP_HOST</code>.</small>
+						}
+					</label>
+					<label>
+						Port
+						<input
+							type="number"
+							name="smtp_port"
+							min="0"
+							max="65535"
+							value={ portValue(d.Delivery.SMTPPort) }
+							placeholder="587"
+							readonly?={ d.Env.SMTPHost }
+						/>
+					</label>
+					<label>
+						Username
+						<input
+							type="text"
+							name="smtp_username"
+							value={ d.Delivery.SMTPUsername }
+							placeholder="Optional"
+							autocomplete="off"
+							readonly?={ d.Env.SMTPUsername }
+						/>
+						if d.Env.SMTPUsername {
+							<small>Fixed by <code>BITT_SMTP_USERNAME</code>.</small>
+						}
+					</label>
+					<label>
+						From address
+						<input
+							type="text"
+							name="email_from"
+							value={ d.Delivery.EmailFrom }
+							placeholder="BitTabby &lt;bitt@example.com&gt;"
+							readonly?={ d.Env.EmailFrom }
+						/>
+						<small>
+							Required once a server is set, and validated as a real address so it cannot carry a header
+							injection.
+							if d.Env.EmailFrom {
+								Fixed by <code>BITT_EMAIL_FROM</code>.
+							}
+						</small>
+					</label>
+				</fieldset>
+				<fieldset class="stack">
+					<legend>ntfy</legend>
+					<label>
+						Server URL
+						<input
+							type="text"
+							name="ntfy_url"
+							value={ d.Delivery.NtfyBaseURL }
+							placeholder="https://ntfy.sh -- blank turns ntfy off"
+							readonly?={ d.Env.NtfyBaseURL }
+						/>
+						<small>
+							https only. People choose a topic on their own profile; the server is pinned here so a
+							person cannot aim the app at a host of their choosing.
+							if d.Env.NtfyBaseURL {
+								Fixed by <code>BITT_NTFY_URL</code>.
+							}
+						</small>
+					</label>
+				</fieldset>
+				<button class="primary" type="submit">Save delivery settings</button>
+			</form>
+		</section>
+		<section class="card">
+			<h2>Default reminders</h2>
+			<p class="muted small">
+				{ instanceReminderNote(d) }
+				A provider can override these on any tab, under that tab&#39;s Setup section.
+			</p>
+			if d.RemindersFromEnv {
+				<p class="banner">
+					The reminders are set by <code>BITT_REMINDER_*</code> in the environment, which wins over anything
+					saved here. Unset those variables and restart to edit them in the app.
+				</p>
+			}
+			<form method="post" action="/admin/notifications/reminders" class="stack">
+				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+				<label>
+					Days before each due date
+					<input
+						type="text"
+						name="reminder_days"
+						value={ daysValue(d.Effective) }
+						placeholder="e.g. 14, 7, 1 -- blank for the built-in default"
+						readonly?={ d.RemindersFromEnv }
+					/>
+					<small>A comma-separated list, at most { strconv.Itoa(maxTabRemindersUI) }.</small>
+				</label>
+				<label>
+					Title
+					<input
+						type="text"
+						name="reminder_title"
+						value={ firstTitle(d.Effective) }
+						maxlength={ strconv.Itoa(notify.MaxTitleTemplate) }
+						data-counter="reminder-title-count"
+						data-limit={ strconv.Itoa(notify.MaxTitleTemplate) }
+						data-unit="bytes"
+						readonly?={ d.RemindersFromEnv }
+					/>
+					<small>
+						One line. It becomes the email subject and the push notification&#39;s heading.
+						<span id="reminder-title-count" class={ "counter", sizeClass(firstTitle(d.Effective), notify.MaxTitleTemplate, notify.MaxTitleTemplate) }>
+							{ sizeNote(firstTitle(d.Effective), notify.MaxTitleTemplate) }
+						</span>
+					</small>
+				</label>
+				<label>
+					Message
+					<textarea
+						name="reminder_body"
+						rows="5"
+						maxlength={ strconv.Itoa(notify.MaxBodyTemplate) }
+						data-counter="reminder-body-count"
+						data-limit={ strconv.Itoa(notify.MaxBodyTemplate) }
+						data-warn={ strconv.Itoa(notify.NtfyWarnAt) }
+						data-unit="bytes"
+						readonly?={ d.RemindersFromEnv }
+					>{ firstBody(d.Effective) }</textarea>
+					<small>
+						<span id="reminder-body-count" class={ "counter", sizeClass(firstBody(d.Effective), notify.NtfyWarnAt, notify.MaxBodyTemplate) }>
+							{ sizeNote(firstBody(d.Effective), notify.MaxBodyTemplate) }
+						</span>
+						&mdash; a free ntfy.sh account refuses a message over { groupInt(notify.NtfyMessageLimit) } bytes rather than
+						shortening it, so this is measured in bytes. The variables below count toward it once they are
+						filled in.
+					</small>
+				</label>
+				<p class="muted small">
+					Both fill in these variables when the reminder is sent:
+					<code>{ "{tab}" }</code> the tab name,
+					<code>{ "{amount}" }</code> what is owed,
+					<code>{ "{due}" }</code> the due date,
+					<code>{ "{days}" }</code> the lead time in days,
+					<code>{ "{when}" }</code> that lead time in words, and
+					<code>{ "{url}" }</code> a link to the tab.
+				</p>
+				if !d.RemindersFromEnv {
+					<button class="primary" type="submit">Save default reminders</button>
+				}
+			</form>
+		</section>
+	}
+}
+
+// readyClass and readyLabel report a channel's state as a pill.
+func readyClass(ready bool) string {
+	if ready {
+		return "pill-ready"
+	}
+	return "pill-notready"
+}
+
+func readyLabel(ready bool) string {
+	if ready {
+		return "Ready"
+	}
+	return "Off"
+}
+
+// setLabel reports a credential's presence without its value.
+func setLabel(set bool) string {
+	if set {
+		return "Set"
+	}
+	return "Not set"
+}
+
+// portValue renders a stored port, blank when unset so the placeholder shows.
+func portValue(port int) string {
+	if port <= 0 {
+		return ""
+	}
+	return strconv.Itoa(port)
+}
+
+// daysValue, firstTitle, and firstBody prefill the reminder form from whichever
+// set is in force.
+func daysValue(rs []store.TabReminder) string {
+	parts := make([]string, 0, len(rs))
+	for _, r := range rs {
+		parts = append(parts, strconv.Itoa(r.Days))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func firstTitle(rs []store.TabReminder) string {
+	if len(rs) > 0 {
+		return rs[0].Title
+	}
+	return ""
+}
+
+func firstBody(rs []store.TabReminder) string {
+	if len(rs) > 0 {
+		return rs[0].Body
+	}
+	return ""
+}
+
+// instanceReminderNote says where the reminders in force actually come from,
+// which the form itself cannot show.
+func instanceReminderNote(d AdminNotifyData) string {
+	switch {
+	case d.RemindersFromEnv:
+		return "These come from the environment."
+	case len(d.Reminders) > 0:
+		return "These are saved here and are what every tab uses unless it sets its own."
+	default:
+		return "These are the built-in defaults. Saving them stores them, after which they are what you see here."
+	}
+}

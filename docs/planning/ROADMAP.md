@@ -142,6 +142,12 @@ message text, on a Reminders card in each tab's Setup group (migration `0009`,
 Provider has not customised. This was the phase's stated model; the env-only
 version was the fallback layer, not the end state.
 
+**Completed (0.7.4):** an admin Notifications screen (`/admin/notifications`,
+migration `0010`) for the non-secret instance config -- SMTP server/port/user/
+from, the ntfy URL, and the default reminder set. Secrets stay environment-only
+by design and are reported as set/not-set, never displayed. The environment wins
+over stored delivery settings so a container stays reproducible.
+
 Follow-up (not core): payment-made/missed event notices, a backlog cap.
 
 **Exit criteria (draft)**

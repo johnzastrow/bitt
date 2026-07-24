@@ -29,8 +29,12 @@ func (d *DB) GetInstance(ctx context.Context) (store.Instance, error) {
 		created   string
 	)
 	err := d.db.QueryRowContext(ctx,
-		`SELECT timezone, setup_completed_at, created_at FROM instance WHERE id = 1`).
-		Scan(&inst.Timezone, &completed, &created)
+		`SELECT timezone, setup_completed_at, created_at,
+		        smtp_host, smtp_port, smtp_username, email_from, ntfy_url
+		   FROM instance WHERE id = 1`).
+		Scan(&inst.Timezone, &completed, &created,
+			&inst.Delivery.SMTPHost, &inst.Delivery.SMTPPort, &inst.Delivery.SMTPUsername,
+			&inst.Delivery.EmailFrom, &inst.Delivery.NtfyBaseURL)
 	if err != nil {
 		return store.Instance{}, translate(err)
 	}
@@ -541,4 +545,66 @@ func (d *DB) WasSent(ctx context.Context, tabID int64, eventKey, channel string)
 		return false, translate(err)
 	}
 	return true, nil
+}
+
+// SetDelivery replaces the instance's non-secret notification settings.
+//
+// It stores no credentials, and there is nothing here to guard against one
+// arriving: the columns for a password and a token do not exist (migration
+// 0010). A caller that wants to set a secret has to change the schema first,
+// which is the point at which the reasoning there gets re-read.
+func (d *DB) SetDelivery(ctx context.Context, s store.Delivery) error {
+	_, err := d.db.ExecContext(ctx,
+		`UPDATE instance
+		    SET smtp_host = ?, smtp_port = ?, smtp_username = ?, email_from = ?, ntfy_url = ?
+		  WHERE id = 1`,
+		s.SMTPHost, s.SMTPPort, s.SMTPUsername, s.EmailFrom, s.NtfyBaseURL)
+	return translate(err)
+}
+
+// ListInstanceReminders returns the instance-wide default reminders, longest
+// lead first -- the order they fire in.
+func (d *DB) ListInstanceReminders(ctx context.Context) ([]store.TabReminder, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT days, title, body FROM instance_reminders ORDER BY days DESC`)
+	if err != nil {
+		return nil, translate(err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []store.TabReminder
+	for rows.Next() {
+		var r store.TabReminder
+		if err := rows.Scan(&r.Days, &r.Title, &r.Body); err != nil {
+			return nil, fmt.Errorf("sqlite: scan instance reminder: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, translate(rows.Err())
+}
+
+// SetInstanceReminders replaces the instance-wide defaults in one transaction,
+// for the same reason SetTabReminders does: the set is the unit an
+// administrator edits, and clearing it must actually clear it.
+func (d *DB) SetInstanceReminders(ctx context.Context, rs []store.TabReminder) error {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sqlite: begin set instance reminders: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM instance_reminders`); err != nil {
+		return translate(err)
+	}
+	for _, r := range rs {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO instance_reminders (days, title, body) VALUES (?, ?, ?)`,
+			r.Days, r.Title, r.Body); err != nil {
+			return translate(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlite: commit set instance reminders: %w", err)
+	}
+	return nil
 }

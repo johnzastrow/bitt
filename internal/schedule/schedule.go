@@ -35,6 +35,9 @@ var (
 	ErrBadBilling = errors.New("schedule: unrecognized billing rule")
 	// ErrBadAnchor is returned when the anchor is not a real calendar date.
 	ErrBadAnchor = errors.New("schedule: anchor is not a valid date")
+	// ErrBadInterval is returned when a period would span an implausible or
+	// negative number of units.
+	ErrBadInterval = errors.New("schedule: interval is out of range")
 )
 
 // MaxPeriods bounds how many periods a single call will produce.
@@ -55,14 +58,19 @@ type Kind string
 const (
 	// None means the tab has no schedule and is billed only by hand.
 	None Kind = ""
-	// Weekly repeats every 7 days from the anchor.
+	// Weekly repeats every Interval weeks from the anchor.
 	Weekly Kind = "weekly"
-	// Biweekly repeats every 14 days from the anchor.
+	// Biweekly is the former "every two weeks" kind, retained only so a row
+	// stored before intervals existed still parses. Normalize rewrites it to
+	// Weekly with an interval of 2, which produces identical dates: both are
+	// anchor + 14n. It is not offered in Kinds and nothing should create one.
+	//
+	// Deprecated: use Weekly with Interval 2.
 	Biweekly Kind = "biweekly"
-	// MonthlyDay repeats on the anchor's day of the month, clamped down in
-	// months that are too short (SCHED-02).
+	// MonthlyDay repeats every Interval months on the anchor's day of the
+	// month, clamped down in months that are too short (SCHED-02).
 	MonthlyDay Kind = "monthly_day"
-	// MonthlyLast repeats on the last day of each month, whatever that is.
+	// MonthlyLast repeats on the last day of every Interval months.
 	MonthlyLast Kind = "monthly_last"
 )
 
@@ -76,23 +84,44 @@ func (k Kind) Valid() bool {
 	return false
 }
 
-// Kinds lists the selectable recurrences in display order.
-func Kinds() []Kind { return []Kind{Weekly, Biweekly, MonthlyDay, MonthlyLast} }
+// Kinds lists the selectable recurrences in display order. Biweekly is absent:
+// it is now Weekly with an interval of 2.
+func Kinds() []Kind { return []Kind{Weekly, MonthlyDay, MonthlyLast} }
 
-// PeriodsPerYear is how many times the recurrence repeats in a year, used to
-// turn an annual interest rate into a per-period one. The monthly kinds are 12
-// and the weekly kinds are counted by weeks; none of this needs to be exact to
-// the day, since interest is applied per posted period, not per elapsed second.
-func (k Kind) PeriodsPerYear() int {
+// Unit is the calendar unit a recurrence steps by.
+type Unit string
+
+const (
+	// UnitNone belongs to an unscheduled tab.
+	UnitNone Unit = ""
+	// UnitWeek steps by weeks.
+	UnitWeek Unit = "week"
+	// UnitMonth steps by months.
+	UnitMonth Unit = "month"
+)
+
+// Unit reports the calendar unit the recurrence steps by, which is what an
+// interval counts and what the interest day-count basis keys off.
+func (k Kind) Unit() Unit {
 	switch k {
-	case Weekly:
-		return 52
-	case Biweekly:
-		return 26
+	case Weekly, Biweekly:
+		return UnitWeek
 	case MonthlyDay, MonthlyLast:
-		return 12
+		return UnitMonth
 	}
-	return 0
+	return UnitNone
+}
+
+// Label renders the unit in the plural, for a form that reads "every N weeks".
+func (u Unit) Label() string {
+	switch u {
+	case UnitWeek:
+		return "weeks"
+	case UnitMonth:
+		return "months"
+	default:
+		return ""
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -270,6 +299,25 @@ type Schedule struct {
 	Kind    Kind
 	Anchor  Date
 	Billing Billing
+	// Interval is how many of the kind's units each period spans: 1 is every
+	// week or every month, 3 is every third. Zero means 1; Normalize fills it
+	// in, and every reader should go through Every rather than this field.
+	Interval int
+}
+
+// MaxInterval bounds how many units a single period may span. Two years is
+// past any plausible billing arrangement and keeps period arithmetic inside
+// the range the calendar helpers are tested over.
+const MaxInterval = 104
+
+// Every is the interval to use, treating the zero value as 1 so that a
+// Schedule built before intervals existed -- or in a test that does not care --
+// behaves exactly as it did.
+func (s Schedule) Every() int {
+	if s.Interval < 1 {
+		return 1
+	}
+	return s.Interval
 }
 
 // Set reports whether the tab is scheduled at all.
@@ -289,7 +337,37 @@ func (s Schedule) Validate() error {
 	if !s.Anchor.Valid() {
 		return fmt.Errorf("%w: %s", ErrBadAnchor, s.Anchor)
 	}
+	if s.Interval < 0 || s.Interval > MaxInterval {
+		return fmt.Errorf("%w: %d", ErrBadInterval, s.Interval)
+	}
 	return nil
+}
+
+// RateBasis is the fraction of a year one period covers, as an exact
+// numerator and denominator, for turning an annual rate into a period rate.
+//
+// The basis follows consumer-lending convention rather than a single formula.
+// Month-stepping schedules use months/12, which is the 30/360 basis US
+// mortgages and most installment loans are quoted on -- so a plain monthly
+// loan is APR/12 exactly, the number a borrower can check by hand. Week-
+// stepping schedules use days/365, actual/365, because there is no whole
+// number of weeks in a year and 52 weeks is a day and a quarter short of one.
+//
+// Expressing it as a fraction rather than a periods-per-year count is what
+// lets an arbitrary interval stay exact: every third week is 21/365, not a
+// division by the non-integer 52/3.
+func (s Schedule) RateBasis() (num, den int) {
+	switch s.Kind.Unit() {
+	case UnitWeek:
+		days := 7 * s.Every()
+		if s.Kind == Biweekly {
+			days = 14 // an unnormalized legacy row
+		}
+		return days, 365
+	case UnitMonth:
+		return s.Every(), 12
+	}
+	return 0, 0
 }
 
 // Normalize snaps a schedule onto its own grid so that the stored anchor is
@@ -301,6 +379,15 @@ func (s Schedule) Validate() error {
 func (s Schedule) Normalize() Schedule {
 	if s.Billing == "" {
 		s.Billing = InAdvance
+	}
+	// Biweekly predates intervals. Weekly every two weeks is anchor + 14n and
+	// so is biweekly, so the rewrite cannot move a boundary and cannot make an
+	// already-posted cycle re-post under a new key.
+	if s.Kind == Biweekly {
+		s.Kind, s.Interval = Weekly, 2
+	}
+	if s.Set() && s.Interval < 1 {
+		s.Interval = 1
 	}
 	if s.Kind == MonthlyLast && s.Anchor.Valid() {
 		s.Anchor.Day = daysIn(s.Anchor.Year, s.Anchor.Month)
@@ -314,15 +401,28 @@ func (s Schedule) Describe() string {
 		return "No schedule"
 	}
 	var when string
+	every := s.Every()
 	switch s.Kind {
-	case Weekly:
-		when = "Weekly on " + s.Anchor.Time(time.UTC).Format("Monday") + "s"
-	case Biweekly:
-		when = "Every two weeks on " + s.Anchor.Time(time.UTC).Format("Monday") + "s"
+	case Weekly, Biweekly:
+		weekday := s.Anchor.Time(time.UTC).Format("Monday")
+		switch {
+		case s.Kind == Biweekly || every == 2:
+			when = "Every two weeks on " + weekday + "s"
+		case every == 1:
+			when = "Weekly on " + weekday + "s"
+		default:
+			when = fmt.Sprintf("Every %d weeks on %ss", every, weekday)
+		}
 	case MonthlyDay:
 		when = "Monthly on the " + ordinal(s.Anchor.Day)
+		if every > 1 {
+			when = fmt.Sprintf("Every %d months on the %s", every, ordinal(s.Anchor.Day))
+		}
 	case MonthlyLast:
 		when = "Monthly on the last day"
+		if every > 1 {
+			when = fmt.Sprintf("Every %d months on the last day", every)
+		}
 	default:
 		return "No schedule"
 	}
@@ -339,16 +439,17 @@ func (s Schedule) Describe() string {
 // what makes a day-31 anchor land on February 28th and return to March 31st,
 // instead of sticking at the 28th forever (SCHED-02).
 func (s Schedule) Nth(n int) Date {
+	every := s.Every()
 	switch s.Kind {
 	case Weekly:
-		return s.Anchor.AddDays(7 * n)
+		return s.Anchor.AddDays(7 * every * n)
 	case Biweekly:
 		return s.Anchor.AddDays(14 * n)
 	case MonthlyDay:
-		y, m := addMonths(s.Anchor.Year, s.Anchor.Month, n)
+		y, m := addMonths(s.Anchor.Year, s.Anchor.Month, every*n)
 		return Date{Year: y, Month: m, Day: min(s.Anchor.Day, daysIn(y, m))}
 	case MonthlyLast:
-		y, m := addMonths(s.Anchor.Year, s.Anchor.Month, n)
+		y, m := addMonths(s.Anchor.Year, s.Anchor.Month, every*n)
 		return Date{Year: y, Month: m, Day: daysIn(y, m)}
 	}
 	return Date{}

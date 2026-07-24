@@ -453,3 +453,153 @@ func TestNonParticipantCannotSettle(t *testing.T) {
 }
 
 func itoa64(v int64) string { return strconv.FormatInt(v, 10) }
+
+// ---------------------------------------------------------------------------
+// Adjustments: correcting a balance after reconciliation (CHG-03)
+// ---------------------------------------------------------------------------
+
+// The Provider reduces what is owed without pretending money moved.
+func TestAdjustmentCreditsTheBalance(t *testing.T) {
+	h := newHarness(t)
+	h.completeSetup()
+
+	tab := h.makeTab("Reconciled", "Line", "100.00")
+	h.post(tab+"/charges", url.Values{
+		"csrf_token": {h.csrfToken(tab)},
+		"amount":     {"100.00"},
+		"memo":       {"January"},
+	})
+
+	id := tabIDFrom(t, mustBody(t, h, tab))
+	before, err := h.db.SumEntries(t.Context(), id)
+	if err != nil {
+		t.Fatalf("balance: %v", err)
+	}
+
+	_, body := h.post(tab+"/adjustments", url.Values{
+		"csrf_token": {h.csrfToken(tab)},
+		"direction":  {"credit"},
+		"amount":     {"40.00"},
+		"reason":     {"Reconciliation: double-billed the service fee"},
+	})
+	if !strings.Contains(body, "credited") {
+		t.Errorf("no confirmation of the credit: %s", truncate(body))
+	}
+
+	after, err := h.db.SumEntries(t.Context(), id)
+	if err != nil {
+		t.Fatalf("balance: %v", err)
+	}
+	if after-before != 4_000 {
+		t.Errorf("balance moved by %s, want $40.00 toward zero", (after - before).Display())
+	}
+
+	// It is an adjustment, not a payment: the distinction is the point.
+	entries, err := h.db.ListEntries(t.Context(), id)
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	var found bool
+	for _, e := range entries {
+		if e.Kind == store.KindAdjustment {
+			found = true
+			if e.Amount != 4_000 {
+				t.Errorf("adjustment amount %s, want +$40.00", e.Amount.Display())
+			}
+			if !strings.Contains(e.Memo, "double-billed") {
+				t.Errorf("the reason was not stored: %q", e.Memo)
+			}
+			if e.Method != store.MethodNone {
+				t.Errorf("adjustment carries payment method %q", e.Method)
+			}
+		}
+		if e.Kind == store.KindPayment {
+			t.Error("the credit was recorded as a payment")
+		}
+	}
+	if !found {
+		t.Error("no adjustment entry was written")
+	}
+
+	// History labels it by direction rather than by kind.
+	_, body = h.get(tab)
+	if !strings.Contains(body, "credit") {
+		t.Errorf("history does not label the credit: %s", truncate(body))
+	}
+}
+
+func TestAdjustmentCanIncreaseWhatIsOwed(t *testing.T) {
+	h := newHarness(t)
+	h.completeSetup()
+
+	tab := h.makeTab("Reconciled", "Line", "100.00")
+	id := tabIDFrom(t, mustBody(t, h, tab))
+	before, _ := h.db.SumEntries(t.Context(), id)
+
+	h.post(tab+"/adjustments", url.Values{
+		"csrf_token": {h.csrfToken(tab)},
+		"direction":  {"debit"},
+		"amount":     {"15.00"},
+		"reason":     {"Missed a delivery on the 4th"},
+	})
+
+	after, _ := h.db.SumEntries(t.Context(), id)
+	if before-after != 1_500 {
+		t.Errorf("balance moved by %s, want $15.00 more owed", (before - after).Display())
+	}
+}
+
+func TestAdjustmentValidation(t *testing.T) {
+	h := newHarness(t)
+	h.completeSetup()
+	tab := h.makeTab("Reconciled", "Line", "100.00")
+
+	cases := []struct {
+		name string
+		form url.Values
+		want string
+	}{
+		{"no reason", url.Values{"direction": {"credit"}, "amount": {"10.00"}}, "needs a reason"},
+		{"zero amount", url.Values{"direction": {"credit"}, "amount": {"0"}, "reason": {"x"}}, "greater than zero"},
+		{"negative amount", url.Values{"direction": {"credit"}, "amount": {"-5.00"}, "reason": {"x"}}, "greater than zero"},
+		{"not a number", url.Values{"direction": {"credit"}, "amount": {"abc"}, "reason": {"x"}}, "not a valid dollar figure"},
+		{"unknown direction", url.Values{"direction": {"sideways"}, "amount": {"10.00"}, "reason": {"x"}}, "reduces or increases"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			form := url.Values{"csrf_token": {h.csrfToken(tab)}}
+			for k, v := range tc.form {
+				form[k] = v
+			}
+			_, body := h.post(tab+"/adjustments", form)
+			if !strings.Contains(body, tc.want) {
+				t.Errorf("expected %q in the response: %s", tc.want, truncate(body))
+			}
+		})
+	}
+}
+
+// Only the Provider may adjust. A Payee on the same tab may not.
+func TestAdjustmentIsProviderOnly(t *testing.T) {
+	h := newHarness(t)
+	h.completeSetup()
+
+	sam := h.addUser("sam@example.com", "Sam Payee", false)
+	tab := h.makeTab("Shared", "Line", "100.00")
+	h.post(tab+"/participants", url.Values{
+		"csrf_token": {h.csrfToken(tab)},
+		"user_id":    {strconv.FormatInt(sam.ID, 10)},
+	})
+
+	// Sam joins as the payee, and may record payments but not rewrite the debt.
+	h.loginAs("sam@example.com", "a-long-enough-password")
+	_, body := h.post(tab+"/adjustments", url.Values{
+		"csrf_token": {h.csrfToken(tab)},
+		"direction":  {"credit"},
+		"amount":     {"10.00"},
+		"reason":     {"I would like to owe less"},
+	})
+	if !strings.Contains(body, "Only the provider") {
+		t.Errorf("a payee was allowed to adjust the balance: %s", truncate(body))
+	}
+}

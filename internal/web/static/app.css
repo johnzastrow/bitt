@@ -287,6 +287,12 @@ tfoot td { font-weight: 650; border-bottom: none; }
 .pill-payment { color: var(--credit); }
 .pill-charge, .pill-fee { color: var(--owed); }
 
+/* An adjustment is labelled by what it did rather than by its kind, since the
+   direction is what someone scanning history is looking for. A credit reduces
+   what is owed and reads like a payment; a debit increases it. */
+.pill-credit { color: var(--credit); }
+.pill-debit { color: var(--owed); }
+
 /* ---------- Banners ---------- */
 
 .banner {
@@ -298,6 +304,32 @@ tfoot td { font-weight: 650; border-bottom: none; }
 
 .banner-error { border-color: var(--rose); color: var(--owed); background: var(--card-bg); }
 .banner-ok { border-color: var(--mint); color: var(--credit); background: var(--card-bg); }
+
+/* The loan true-up. A payment that will not clear the loan in time warns; one
+   that finishes early is only information, so it borrows the accent rather
+   than the owed colour -- being ahead is not a problem to solve. */
+.banner-warn { border-color: var(--sun); background: var(--card-bg); }
+.banner-info { border-color: var(--sky); background: var(--card-bg); }
+
+/* ---------- Interval control ---------- */
+
+/* "Repeat every [ 3 ] weeks" reads as one phrase, so the number and its unit
+   sit on a line together rather than stacking like the other fields. */
+.inline-field {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.inline-field .narrow-number {
+  width: 5rem;
+  flex: 0 0 auto;
+}
+
+.inline-field .unit {
+  color: var(--fg-muted);
+  font-size: var(--t-sm);
+}
 
 /* ---------- Wider screens ---------- */
 

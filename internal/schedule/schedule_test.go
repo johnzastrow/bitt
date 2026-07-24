@@ -745,11 +745,49 @@ func TestNormalize(t *testing.T) {
 		t.Errorf("leap February normalized to %s, want 2024-02-29", got.Anchor)
 	}
 
-	// Other kinds keep their anchor exactly.
-	for _, k := range []Kind{Weekly, Biweekly, MonthlyDay} {
+	// Other kinds keep their anchor exactly. Only the interval is filled in,
+	// from the zero value to the every-period default.
+	for _, k := range []Kind{Weekly, MonthlyDay} {
 		in := Schedule{Kind: k, Anchor: d(2026, time.March, 10), Billing: InArrears}
-		if got := in.Normalize(); got != in {
+		got := in.Normalize()
+		if got.Anchor != in.Anchor || got.Kind != in.Kind || got.Billing != in.Billing {
 			t.Errorf("%s normalization changed %+v to %+v", k, in, got)
+		}
+		if got.Interval != 1 {
+			t.Errorf("%s normalized to interval %d, want 1", k, got.Interval)
+		}
+	}
+
+	// An explicit interval survives normalization untouched.
+	in := Schedule{Kind: Weekly, Anchor: d(2026, time.March, 10), Billing: InArrears, Interval: 3}
+	if got := in.Normalize(); got != in {
+		t.Errorf("normalization changed %+v to %+v", in, got)
+	}
+}
+
+// TestNormalizeRewritesBiweekly pins the migration's central claim: biweekly
+// and weekly-every-two-weeks are the same dates, so rewriting one to the other
+// cannot move a period boundary and cannot make a posted cycle re-post under a
+// new key. If this ever fails, the 0006 migration is unsafe.
+func TestNormalizeRewritesBiweekly(t *testing.T) {
+	anchor := d(2026, time.March, 10)
+	legacy := Schedule{Kind: Biweekly, Anchor: anchor, Billing: InArrears}
+
+	got := legacy.Normalize()
+	if got.Kind != Weekly || got.Interval != 2 {
+		t.Fatalf("biweekly normalized to %+v, want weekly interval 2", got)
+	}
+	if got.Anchor != anchor || got.Billing != InArrears {
+		t.Errorf("normalization disturbed the anchor or billing: %+v", got)
+	}
+
+	// Every period, and so every period key, must be identical.
+	for n := range 200 {
+		if a, b := legacy.Nth(n), got.Nth(n); a != b {
+			t.Fatalf("period %d: biweekly %s != weekly-by-2 %s", n, a, b)
+		}
+		if a, b := legacy.Period(n).Key(), got.Period(n).Key(); a != b {
+			t.Fatalf("period %d key: %q != %q", n, a, b)
 		}
 	}
 }
@@ -807,6 +845,162 @@ func TestOrdinal(t *testing.T) {
 	for n, want := range cases {
 		if got := ordinal(n); got != want {
 			t.Errorf("ordinal(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Intervals
+// ---------------------------------------------------------------------------
+
+func TestIntervalSteps(t *testing.T) {
+	cases := []struct {
+		name     string
+		schedule Schedule
+		want     []Date
+	}{
+		{
+			"every week",
+			Schedule{Kind: Weekly, Anchor: d(2026, time.March, 2), Interval: 1},
+			[]Date{d(2026, time.March, 2), d(2026, time.March, 9), d(2026, time.March, 16)},
+		},
+		{
+			"every three weeks",
+			Schedule{Kind: Weekly, Anchor: d(2026, time.March, 2), Interval: 3},
+			[]Date{d(2026, time.March, 2), d(2026, time.March, 23), d(2026, time.April, 13)},
+		},
+		{
+			"every two months on the 15th",
+			Schedule{Kind: MonthlyDay, Anchor: d(2026, time.January, 15), Interval: 2},
+			[]Date{d(2026, time.January, 15), d(2026, time.March, 15), d(2026, time.May, 15)},
+		},
+		{
+			"every quarter on the last day",
+			Schedule{Kind: MonthlyLast, Anchor: d(2026, time.January, 31), Interval: 3},
+			[]Date{d(2026, time.January, 31), d(2026, time.April, 30), d(2026, time.July, 31)},
+		},
+		{
+			"a zero interval behaves as every period",
+			Schedule{Kind: Weekly, Anchor: d(2026, time.March, 2), Interval: 0},
+			[]Date{d(2026, time.March, 2), d(2026, time.March, 9), d(2026, time.March, 16)},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for n, want := range tc.want {
+				if got := tc.schedule.Nth(n); got != want {
+					t.Errorf("period %d = %s, want %s", n, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestIntervalKeepsTheAnchorRule is SCHED-02 under an interval: every period is
+// computed from the anchor, so a day-31 anchor still recovers after a short
+// month rather than decaying permanently.
+func TestIntervalKeepsTheAnchorRule(t *testing.T) {
+	s := Schedule{Kind: MonthlyDay, Anchor: d(2026, time.January, 31), Interval: 1}
+	want := []Date{
+		d(2026, time.January, 31),
+		d(2026, time.February, 28), // clamped
+		d(2026, time.March, 31),    // and back again
+	}
+	for n, w := range want {
+		if got := s.Nth(n); got != w {
+			t.Errorf("period %d = %s, want %s", n, got, w)
+		}
+	}
+
+	// The same under an interval of 2: Jan 31 -> Mar 31 -> May 31, never
+	// clamping because it never lands on a short month.
+	every2 := Schedule{Kind: MonthlyDay, Anchor: d(2026, time.January, 31), Interval: 2}
+	for n, w := range []Date{
+		d(2026, time.January, 31), d(2026, time.March, 31), d(2026, time.May, 31),
+	} {
+		if got := every2.Nth(n); got != w {
+			t.Errorf("every-2 period %d = %s, want %s", n, got, w)
+		}
+	}
+}
+
+func TestIntervalValidation(t *testing.T) {
+	base := Schedule{Kind: Weekly, Anchor: d(2026, time.March, 2), Billing: InAdvance}
+
+	for _, interval := range []int{0, 1, 2, 3, MaxInterval} {
+		s := base
+		s.Interval = interval
+		if err := s.Validate(); err != nil {
+			t.Errorf("interval %d rejected: %v", interval, err)
+		}
+	}
+	for _, interval := range []int{-1, MaxInterval + 1, 10000} {
+		s := base
+		s.Interval = interval
+		if err := s.Validate(); !errors.Is(err, ErrBadInterval) {
+			t.Errorf("interval %d gave %v, want ErrBadInterval", interval, err)
+		}
+	}
+}
+
+// TestRateBasis pins the day-count conventions, which are the numbers a
+// borrower can check against a lender's statement.
+func TestRateBasis(t *testing.T) {
+	cases := []struct {
+		name     string
+		schedule Schedule
+		num, den int
+	}{
+		// Month-stepping schedules are months/12, the 30/360 basis a US
+		// installment loan is quoted on. Plain monthly is exactly APR/12.
+		{"monthly", Schedule{Kind: MonthlyDay, Interval: 1}, 1, 12},
+		{"monthly, last day", Schedule{Kind: MonthlyLast, Interval: 1}, 1, 12},
+		{"every two months", Schedule{Kind: MonthlyDay, Interval: 2}, 2, 12},
+		{"quarterly", Schedule{Kind: MonthlyLast, Interval: 3}, 3, 12},
+		// Week-stepping schedules are days/365, actual/365, because there is
+		// no whole number of weeks in a year.
+		{"weekly", Schedule{Kind: Weekly, Interval: 1}, 7, 365},
+		{"every two weeks", Schedule{Kind: Weekly, Interval: 2}, 14, 365},
+		{"every three weeks", Schedule{Kind: Weekly, Interval: 3}, 21, 365},
+		{"a zero interval is every period", Schedule{Kind: Weekly, Interval: 0}, 7, 365},
+		// A legacy row that never went through Normalize still answers.
+		{"unnormalized biweekly", Schedule{Kind: Biweekly}, 14, 365},
+		// No schedule, no basis.
+		{"unscheduled", Schedule{}, 0, 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			num, den := tc.schedule.RateBasis()
+			if num != tc.num || den != tc.den {
+				t.Errorf("RateBasis() = %d/%d, want %d/%d", num, den, tc.num, tc.den)
+			}
+		})
+	}
+}
+
+func TestDescribeIntervals(t *testing.T) {
+	cases := []struct {
+		schedule Schedule
+		want     string
+	}{
+		{Schedule{Kind: Weekly, Anchor: d(2026, time.March, 2), Interval: 1, Billing: InAdvance},
+			"Weekly on Mondays, billed at period start"},
+		{Schedule{Kind: Weekly, Anchor: d(2026, time.March, 2), Interval: 2, Billing: InAdvance},
+			"Every two weeks on Mondays, billed at period start"},
+		{Schedule{Kind: Weekly, Anchor: d(2026, time.March, 2), Interval: 3, Billing: InAdvance},
+			"Every 3 weeks on Mondays, billed at period start"},
+		{Schedule{Kind: MonthlyDay, Anchor: d(2026, time.March, 15), Interval: 1, Billing: InArrears},
+			"Monthly on the 15th, billed at period end"},
+		{Schedule{Kind: MonthlyDay, Anchor: d(2026, time.March, 15), Interval: 2, Billing: InArrears},
+			"Every 2 months on the 15th, billed at period end"},
+		{Schedule{Kind: MonthlyLast, Anchor: d(2026, time.March, 31), Interval: 3, Billing: InAdvance},
+			"Every 3 months on the last day, billed at period start"},
+	}
+	for _, tc := range cases {
+		if got := tc.schedule.Describe(); got != tc.want {
+			t.Errorf("Describe() = %q, want %q", got, tc.want)
 		}
 	}
 }

@@ -193,18 +193,17 @@ func parseInterestBP(raw string) (int64, error) {
 
 // payoffFor computes a Payoff tab's derived state. It is meaningful only for
 // Payoff tabs; callers guard on kind.
+//
+// The expected payment comes from the tab's own loan_payment field rather than
+// from its line items. Items are a Services tab's period charge; on a Payoff
+// tab the loan amount is a one-off principal charge and the payment is an
+// expectation that posts nothing, and reading one field as both is what let a
+// mis-set loan read as already settled.
 func (s *Server) payoffFor(r *http.Request, tab store.Tab) (ledger.Payoff, error) {
 	entries, err := s.ledger.History(r.Context(), tab.ID)
 	if err != nil {
 		return ledger.Payoff{}, err
 	}
-	items, err := s.store.ListItems(r.Context(), tab.ID)
-	if err != nil {
-		return ledger.Payoff{}, err
-	}
-	installment, ok := money.Sum(itemAmounts(items))
-	if !ok {
-		return ledger.Payoff{}, errors.New("installment total overflow")
-	}
-	return ledger.ComputePayoff(tab, entries, installment, s.today(r.Context())), nil
+	loc := s.location(r.Context())
+	return ledger.ComputePayoff(tab, entries, s.today(r.Context()), loc), nil
 }

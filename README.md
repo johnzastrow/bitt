@@ -32,6 +32,7 @@ is due. Pushed notifications (email/ntfy) and packaging are still to come.
 
 - [docs/PROJECT.md](docs/PROJECT.md) — what this is, what it deliberately is not, and why
 - [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — 54 v1 requirements with stable IDs
+- [docs/DATA-MODEL.md](docs/DATA-MODEL.md) — physical schema, ER diagram, and data dictionary
 - [docs/planning/ROADMAP.md](docs/planning/ROADMAP.md) — five phases with exit criteria
 - [docs/planning/STATE.md](docs/planning/STATE.md) — where things currently stand
 - [docs/planning/HANDOFF.md](docs/planning/HANDOFF.md) — pick the work up cold

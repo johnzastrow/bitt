@@ -276,9 +276,19 @@ templ NewTab(p Page) {
 					Annual interest rate % (Payoff tabs only)
 					<input type="text" name="interest_apr" inputmode="decimal" placeholder="0 for an interest-free loan"/>
 				</label>
+				<label>
+					Number of payments (Payoff tabs only)
+					<input type="number" name="loan_term" min="0" max={ strconv.Itoa(schedule.MaxPeriods) } placeholder="e.g. 48 &mdash; blank for open-ended"/>
+				</label>
+				<label>
+					Scheduled payment (Payoff tabs only)
+					<input type="text" name="loan_payment" inputmode="decimal" placeholder="What the lender charges each period"/>
+				</label>
 				<p class="muted small">
-					On a Payoff tab, the loan amount posts as the opening balance and the line items below are what the
-					Payee is expected to pay each period. On a Services tab, the line items are what is charged each period.
+					On a Payoff tab, the loan amount posts once as the opening balance and the scheduled payment is what
+					the Payee is expected to pay each period &mdash; two different figures. Enter the payment your lender
+					actually charges; once the tab exists it will show the payment its own arithmetic works out, so any
+					disagreement is visible. Leave it blank for an open-ended IOU. Line items below are for Services tabs.
 				</p>
 				<fieldset class="stack">
 					<legend>Line items</legend>
@@ -320,6 +330,20 @@ templ ScheduleFields(current schedule.Schedule) {
 			</select>
 		</label>
 		<label>
+			Repeat every
+			<span class="inline-field">
+				<input
+					type="number"
+					name="schedule_interval"
+					min="1"
+					max={ strconv.Itoa(schedule.MaxInterval) }
+					value={ strconv.Itoa(current.Every()) }
+					class="narrow-number"
+				/>
+				<span class="unit">{ intervalUnitLabel(current) }</span>
+			</span>
+		</label>
+		<label>
 			Starting on
 			<input
 				type="date"
@@ -336,7 +360,8 @@ templ ScheduleFields(current schedule.Schedule) {
 			</select>
 		</label>
 		<p class="muted small">
-			Periods post when someone opens the tab, so a tab left alone catches up the moment it is looked at.
+			Repeat every 1 is every week or every month; 3 is every third. Periods post when someone opens the tab,
+			so a tab left alone catches up the moment it is looked at.
 			A start date on the 29th, 30th, or 31st lands on the last day of any month that is shorter, and returns to
 			the chosen day afterward.
 		</p>
@@ -428,6 +453,10 @@ type TabDetailData struct {
 	JustInterest int
 	// Payoff carries loan progress on a Payoff tab, nil on a Services tab.
 	Payoff *ledger.Payoff
+	// Plan is what the loan's own arithmetic suggests, and how the payment
+	// actually being made compares. Advisory: it posts nothing, and the
+	// Provider's entered payment stays authoritative.
+	Plan ledger.Plan
 	// Upcoming is the next scheduled payment or charge, when it falls within
 	// the notice window.
 	Upcoming Upcoming
@@ -556,7 +585,42 @@ templ TabDetail(p Page, d TabDetailData) {
 					}
 				</p>
 				if d.Tab.Interest() {
-					<p class="muted small">{ fee.PercentString(d.Tab.InterestAPRBp) } annual interest, on the declining balance.</p>
+					<p class="muted small">
+						{ fee.PercentString(d.Tab.InterestAPRBp) } annual interest, on the outstanding principal.
+						Interest left unpaid is owed and is repaid first, but does not itself accrue.
+					</p>
+				}
+				if d.Payoff.TermPeriods > 0 {
+					<p class="muted small">
+						Payment { strconv.Itoa(d.Payoff.PeriodsElapsed) } of { strconv.Itoa(d.Payoff.TermPeriods) }
+						if !d.Payoff.Maturity.IsZero() {
+							&middot; scheduled to finish { d.Payoff.Maturity.Display() }
+						}
+						if d.Payoff.Installment > 0 {
+							&middot; { d.Payoff.Installment.Display() } expected each period
+						}
+					</p>
+				} else if d.Payoff.Installment > 0 {
+					<p class="muted small">
+						{ d.Payoff.Installment.Display() } expected each period &middot; open-ended, with no agreed number of payments.
+					</p>
+				}
+				// The true-up. The Provider's payment is the lender's figure and
+				// stays authoritative; this only reports what it implies.
+				if d.Plan.Drifting() {
+					<p class={ "banner", driftBannerClass(d.Plan) }>
+						if d.Plan.TrueUp.Behind() {
+							At { d.Payoff.Installment.Display() } a period this loan does not finish on time.
+							{ driftProjection(d.Plan) }
+							Paying <strong>{ d.Plan.TrueUp.Suggested.Display() }</strong> would clear it in the
+							{ strconv.Itoa(d.Plan.TrueUp.Remaining) } payments that remain.
+						} else {
+							At { d.Payoff.Installment.Display() } a period this loan finishes ahead of its term.
+							{ driftProjection(d.Plan) }
+							{ d.Plan.TrueUp.Suggested.Display() } a period would land it exactly on the
+							{ strconv.Itoa(d.Plan.TrueUp.Remaining) } payments that remain.
+						}
+					</p>
 				}
 				}
 			</section>
@@ -631,6 +695,31 @@ templ TabDetail(p Page, d TabDetailData) {
 						<p class="muted small">
 							A one-off charge, on top of whatever the schedule posts.
 						</p>
+					</section>
+					<section class="card">
+						<h2>Adjust what is owed</h2>
+						<p class="muted small">
+							A correction, not a payment. Use this after a reconciliation, when the balance itself is
+							wrong &mdash; recording a payment that never happened would say money changed hands, and on
+							a loan it would go to interest before principal.
+						</p>
+						<form method="post" action={ adjustmentAction(d.Tab.ID) } class="inlineform">
+							<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+							<input type="hidden" name="idempotency_key" value={ adjustmentKey(d.IdempotencyKey) }/>
+							<select name="direction" aria-label="Direction">
+								<option value="credit">Reduce what is owed</option>
+								<option value="debit">Increase what is owed</option>
+							</select>
+							<input type="text" name="amount" inputmode="decimal" required placeholder="0.00" aria-label="Adjustment amount"/>
+							<input type="text" name="reason" required placeholder="Why? (required)" aria-label="Reason"/>
+							<button class="primary" type="submit">Post adjustment</button>
+						</form>
+						if d.IsPayoff() {
+							<p class="muted small">
+								On this loan a credit comes off the principal first, so the reduction is permanent and
+								every future interest charge is smaller.
+							</p>
+						}
 					</section>
 				}
 				if len(d.Items) > 0 {
@@ -860,11 +949,64 @@ templ TabDetail(p Page, d TabDetailData) {
 								<button class="primary" type="submit">Save interest</button>
 							</form>
 							<p class="muted small">
-								Interest accrues each period on the loan's current balance, so it falls as the loan is paid down.
-								It is charged on the balance, never on late fees.
+								Interest accrues each period on the outstanding principal, so it falls as the loan is paid down.
+								It is charged on the principal only -- never on late fees, and never on interest that has gone
+								unpaid, which is owed and is repaid first but does not itself accrue.
+							</p>
+						</section>
+						<section class="card">
+							<h2>Loan term and payment</h2>
+							<form method="post" action={ loanAction(d.Tab.ID) } class="stack">
+								<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+								<label>
+									Number of payments
+									<input
+										type="number"
+										name="loan_term"
+										min="0"
+										max={ strconv.Itoa(schedule.MaxPeriods) }
+										value={ termValue(d.Tab.LoanTermPeriods) }
+										placeholder="Blank or 0 for open-ended"
+									/>
+								</label>
+								<label>
+									Payment each period
+									<input
+										type="text"
+										name="loan_payment"
+										inputmode="decimal"
+										value={ paymentValue(d.Tab.LoanPayment) }
+										placeholder="What the lender charges"
+									/>
+								</label>
+								<button class="primary" type="submit">Save loan terms</button>
+							</form>
+							if d.Plan.HasSuggestion {
+								<p class="muted small">
+									For { d.Payoff.Principal.Display() } over { strconv.Itoa(d.Tab.LoanTermPeriods) } payments
+									if d.Tab.Interest() {
+										at { fee.PercentString(d.Tab.InterestAPRBp) },
+									} else {
+										with no interest,
+									}
+									this works out to <strong>{ d.Plan.Suggested.Display() }</strong> a period,
+									with a final payment of { d.Plan.Final.Display() }
+									if d.Plan.TotalInterest > 0 {
+										and { d.Plan.TotalInterest.Display() } of interest over the life of the loan.
+									} else {
+										.
+									}
+								</p>
+							}
+							<p class="muted small">
+								Enter the payment your lender actually charges, even when it differs from the figure above.
+								The lender's number is the one that has to be paid; this tab reports the difference rather
+								than overriding it. Saving a corrected payment changes what is expected from here on and
+								never rewrites interest or fees already charged.
 							</p>
 						</section>
 					}
+					if !d.IsPayoff() {
 					<section class="card">
 						<h2>Line items</h2>
 						<p class="muted small">
@@ -892,6 +1034,22 @@ templ TabDetail(p Page, d TabDetailData) {
 							<button type="submit">Add item</button>
 						</form>
 					</section>
+					} else if len(d.Items) > 0 {
+						// Items a Payoff tab carried before the payment became a
+						// field of its own. They are the Provider's data, so they
+						// are shown rather than discarded, but nothing reads them.
+						<section class="card">
+							<h2>Old line items</h2>
+							<p class="muted small">
+								This tab was set up when a Payoff tab's expected payment came from its line items. The
+								payment is now its own field above, and these are no longer used for anything. They are
+								kept here rather than deleted because they are yours.
+							</p>
+							for _, it := range d.Items {
+								<p class="muted small">{ it.Name } &middot; { it.Amount.Display() }</p>
+							}
+						</section>
+					}
 				</div>
 			</details>
 		}
@@ -927,6 +1085,10 @@ func settleCustomPath(id int64) string {
 
 func chargeAction(id int64) templ.SafeURL {
 	return templ.SafeURL("/tabs/" + strconv.FormatInt(id, 10) + "/charges")
+}
+
+func adjustmentAction(id int64) templ.SafeURL {
+	return templ.SafeURL("/tabs/" + strconv.FormatInt(id, 10) + "/adjustments")
 }
 
 func paymentAction(id int64) templ.SafeURL {
@@ -967,6 +1129,27 @@ func interestAction(id int64) templ.SafeURL {
 	return templ.SafeURL("/tabs/" + strconv.FormatInt(id, 10) + "/interest")
 }
 
+func loanAction(id int64) templ.SafeURL {
+	return templ.SafeURL("/tabs/" + strconv.FormatInt(id, 10) + "/loan")
+}
+
+// termValue renders a loan term for the form; blank for an open-ended loan, so
+// the placeholder explains what blank means rather than showing a bare 0.
+func termValue(periods int) string {
+	if periods <= 0 {
+		return ""
+	}
+	return strconv.Itoa(periods)
+}
+
+// paymentValue renders a scheduled payment for the form; blank when unset.
+func paymentValue(c money.Cents) string {
+	if c <= 0 {
+		return ""
+	}
+	return c.String()
+}
+
 // interestValue renders an APR in basis points as a percentage for the form,
 // without a trailing sign; blank when there is no interest.
 func interestValue(bp int64) string {
@@ -990,12 +1173,27 @@ func entryKindLabel(e store.Entry) string {
 	if e.Category == store.CategoryInterest {
 		return "interest"
 	}
+	// An adjustment reads as what it did, since the direction is the thing a
+	// person is trying to work out when scanning history. The sign carries it:
+	// positive reduces what is owed.
+	if e.Kind == store.KindAdjustment {
+		if e.Amount > 0 {
+			return "credit"
+		}
+		return "debit"
+	}
 	return string(e.Kind)
 }
 
 func entryKindClass(e store.Entry) string {
 	if e.Category == store.CategoryInterest {
 		return "interest"
+	}
+	if e.Kind == store.KindAdjustment {
+		if e.Amount > 0 {
+			return "credit"
+		}
+		return "debit"
 	}
 	return string(e.Kind)
 }
@@ -1101,19 +1299,47 @@ func itemRemoveAction(tabID, itemID int64) templ.SafeURL {
 }
 
 // kindLabel names a recurrence in the words the form asks its question in.
+// The count beside it in the form supplies "how many", so these name the unit.
 func kindLabel(k schedule.Kind) string {
 	switch k {
 	case schedule.Weekly:
-		return "Every week"
-	case schedule.Biweekly:
-		return "Every two weeks"
+		return "Weeks"
 	case schedule.MonthlyDay:
-		return "Every month, on the start date's day"
+		return "Months, on the start date's day"
 	case schedule.MonthlyLast:
-		return "Every month, on the last day"
+		return "Months, on the last day"
 	default:
 		return string(k)
 	}
+}
+
+// intervalUnitLabel names what the interval counts, for the text beside the
+// number input. An unscheduled tab has no unit yet, so it reads generically.
+func intervalUnitLabel(s schedule.Schedule) string {
+	if u := s.Kind.Unit().Label(); u != "" {
+		return u
+	}
+	return "periods"
+}
+
+// driftBannerClass colours the true-up notice. Falling short of the term is a
+// warning; finishing early is merely information.
+func driftBannerClass(p ledger.Plan) string {
+	if p.TrueUp.Behind() {
+		return "banner-warn"
+	}
+	return "banner-info"
+}
+
+// driftProjection states what the current payment actually does, in the one
+// sentence a person needs: when it finishes, or that it never does.
+func driftProjection(p ledger.Plan) string {
+	o := p.TrueUp.Projected
+	if !o.Retires {
+		return "At that rate the balance never clears, because the payment does not cover the interest."
+	}
+	return "It would take " + strconv.Itoa(o.Periods) + " more payments rather than " +
+		strconv.Itoa(p.TrueUp.Remaining) + "."
 }
 
 // anchorValue fills the date input. A tab with no schedule yet leaves it blank
@@ -1240,3 +1466,7 @@ func prefill(amount money.Cents) string {
 // chargeKey derives a distinct key for the charge form on a page that also
 // carries a payment form, so the two cannot collide on one idempotency key.
 func chargeKey(base string) string { return base + "-charge" }
+
+// adjustmentKey derives the adjustment form's idempotency key from the page's,
+// so a double-tapped correction posts once (LEDGER-07).
+func adjustmentKey(base string) string { return base + "-adjustment" }

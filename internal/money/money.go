@@ -9,6 +9,7 @@ package money
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -250,19 +251,72 @@ func Percent(base Cents, basisPoints int64) (Cents, bool) {
 // Rounding once, on the final product, is deliberate: dividing the rate first
 // and rounding twice would drift. The boolean reports overflow.
 func InterestOn(balance Cents, annualBasisPoints int64, periodsPerYear int) (Cents, bool) {
-	if balance < 0 || annualBasisPoints < 0 || periodsPerYear <= 0 {
+	return InterestFor(balance, annualBasisPoints, 1, periodsPerYear)
+}
+
+// InterestFor applies an annual rate, given in basis points, to a balance for
+// a period covering num/den of a year.
+//
+// The fraction is the day-count basis, and it is a fraction rather than a
+// period count so that any interval stays exact. A monthly loan is 1/12 -- the
+// 30/360 basis consumer installment loans are quoted on, and the APR/12 a
+// borrower can check by hand. A three-week period is 21/365 on an actual/365
+// basis, which no periods-per-year integer can express.
+//
+// The whole product is formed before the single division, so the rate is never
+// rounded before it is applied; rounding twice would drift. Rounding is half
+// up on the final cent, which is what a lender's schedule does per line before
+// splitting the payment. The boolean reports overflow.
+func InterestFor(balance Cents, annualBasisPoints int64, num, den int) (Cents, bool) {
+	if balance < 0 || annualBasisPoints < 0 || num <= 0 || den <= 0 {
 		return 0, false
 	}
 	if annualBasisPoints == 0 {
 		return 0, true
 	}
-	if int64(balance) > (1<<62)/annualBasisPoints {
+	denom, ok := mul(10000, int64(den))
+	if !ok {
 		return 0, false
 	}
-	denom := int64(10000) * int64(periodsPerYear)
-	product := int64(balance) * annualBasisPoints
-	// Round half up.
-	return Cents((product + denom/2) / denom), true
+	product, ok := mul(int64(balance), annualBasisPoints)
+	if !ok {
+		return 0, false
+	}
+	product, ok = mul(product, int64(num))
+	if !ok {
+		return 0, false
+	}
+	half := denom / 2
+	if product > math.MaxInt64-half {
+		return 0, false
+	}
+	return Cents((product + half) / denom), true
+}
+
+// Mul multiplies an amount by a whole count, reporting whether the result fits
+// in int64 cents. It is the guarded form of a bare multiplication, for the
+// places that scale an installment by a number of periods.
+func Mul(amount Cents, count int64) (Cents, bool) {
+	if amount < 0 || count < 0 {
+		return 0, false
+	}
+	r, ok := mul(int64(amount), count)
+	if !ok {
+		return 0, false
+	}
+	return Cents(r), true
+}
+
+// mul multiplies two non-negative int64s, reporting whether the result fits.
+func mul(a, b int64) (int64, bool) {
+	if a == 0 || b == 0 {
+		return 0, true
+	}
+	r := a * b
+	if r/b != a {
+		return 0, false
+	}
+	return r, true
 }
 
 // Neg returns the additive inverse, used when writing reversing entries.

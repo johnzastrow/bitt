@@ -220,10 +220,34 @@ type Tab struct {
 	// InterestAPRBp is the annual interest rate in basis points on a Payoff
 	// loan (100 bp = 1%). Zero means no interest, matching an interest-free IOU.
 	InterestAPRBp int64
+	// LoanTermPeriods is how many schedule periods a Payoff loan is meant to
+	// run for. Zero means open-ended, which is what a plain IOU with no agreed
+	// end is, and is the default.
+	LoanTermPeriods int
+	// LoanPayment is the payment expected each period on a Payoff loan.
+	//
+	// The Provider enters this rather than the app deriving it, because it
+	// comes off the lender's paperwork and that is the figure that actually has
+	// to be paid. The app computes a suggestion beside it from the loan amount,
+	// rate, term, and schedule, and reports the drift between the two -- which
+	// is the honest arrangement, since a lender accruing per diem splits a
+	// payment by the days between deposits and no period-based model can match
+	// that to the cent.
+	//
+	// On a Services tab this is unused; that tab's period charge is the sum of
+	// its line items. Keeping them separate is deliberate: on a Payoff tab the
+	// loan amount is a charge that posts the principal once, while this is an
+	// expectation that posts nothing, and one field meaning both is what made
+	// a mis-set loan read as already settled.
+	LoanPayment money.Cents
 }
 
 // Interest reports whether the tab carries loan interest.
 func (t Tab) Interest() bool { return t.InterestAPRBp > 0 }
+
+// Termed reports whether a Payoff loan has an agreed number of periods, which
+// is what makes a suggested payment and a maturity date computable.
+func (t Tab) Termed() bool { return t.Kind == TabPayoff && t.LoanTermPeriods > 0 }
 
 // PostedFee records that one overdue date has been assessed a late fee, and
 // points at the entry that charged it. It is the claim that makes fee
@@ -428,6 +452,17 @@ type TabStore interface {
 	// points. Zero clears it. It never touches posted interest, so changing the
 	// rate affects future periods only.
 	SetInterestRate(ctx context.Context, tabID int64, annualBasisPoints int64) error
+
+	// SetLoanTerms replaces a Payoff loan's term and scheduled payment. A term
+	// of zero returns the loan to open-ended; a payment of zero clears the
+	// expectation, which stops payoff status and late fees from judging it.
+	//
+	// Like the other setters here it touches no claim table, so a Provider
+	// truing the payment up to what the bank actually charges reaches future
+	// periods only. Interest and fees already posted stand as recorded --
+	// re-deriving them from a corrected payment would rewrite history the
+	// ledger deliberately makes immutable.
+	SetLoanTerms(ctx context.Context, tabID int64, termPeriods int, payment money.Cents) error
 
 	ListItems(ctx context.Context, tabID int64) ([]TabItem, error)
 	// ListItemHistory returns every item the tab has ever carried, superseded

@@ -495,3 +495,128 @@ func (s *Server) postParticipantRemove(w http.ResponseWriter, r *http.Request) {
 		"by_user_id", user.ID, "as_admin", access.Admin)
 	redirectWith(w, r, tabPath(id), "ok", "Removed from this tab. Their entries stay in the history.")
 }
+
+// ---------------------------------------------------------------------------
+// Adjustments (CHG-03)
+// ---------------------------------------------------------------------------
+
+// adjustmentReasonMax bounds the stored reason. It matches the memo limit used
+// by charges and payments.
+const adjustmentReasonMax = 300
+
+// postAdjustment records a correction to what is owed, in either direction.
+//
+// This is the honest way to reduce a balance after a reconciliation. The
+// alternative people reach for -- recording a payment that never happened --
+// misstates three things at once: it claims money changed hands, it satisfies
+// the period's late-fee window, and on a Payoff tab it is allocated to interest
+// before principal, so a credit meant to shrink the debt quietly pays interest
+// instead. An adjustment is its own entry kind and says what it is.
+//
+// The form asks for a direction and a positive amount rather than a signed
+// figure. A minus sign is easy to omit and impossible to see afterward, and the
+// two directions are not equally common; making the choice explicit means a
+// slip produces a validation error rather than a correction that runs backward.
+//
+// Provider only, like posting a charge: deciding that part of a debt should not
+// exist is the same authority as deciding it should.
+func (s *Server) postAdjustment(w http.ResponseWriter, r *http.Request) {
+	user := userFrom(r.Context())
+
+	id, ok := pathID(r, "id")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		redirectWith(w, r, tabPath(id), "err", "Could not read that form.")
+		return
+	}
+	if !auth.CheckCSRF(r) {
+		redirectWith(w, r, tabPath(id), "err", "Your session expired. Please try again.")
+		return
+	}
+
+	acc, err := s.authorizeTab(r, id, user)
+	if err != nil {
+		s.denyTab(w, r, err)
+		return
+	}
+	tab := acc.Tab
+
+	// Membership, and the Provider role within it. An administrator reaching a
+	// tab they are not party to must not move what two other people owe each
+	// other, which is why this checks the participant role rather than
+	// stopping at authorizeTab.
+	role, err := s.store.ParticipantRole(r.Context(), tab.ID, user.ID)
+	if err != nil || role != store.RoleProvider {
+		s.log.Warn("adjustment denied", "tab_id", tab.ID, "user_id", user.ID, "role", role)
+		redirectWith(w, r, tabPath(id), "err", "Only the provider can adjust what is owed on this tab.")
+		return
+	}
+
+	amount, err := money.Parse(r.PostFormValue("amount"))
+	if err != nil {
+		redirectWith(w, r, tabPath(id), "err", "That amount is not a valid dollar figure.")
+		return
+	}
+	if amount <= 0 {
+		redirectWith(w, r, tabPath(id), "err", "An adjustment must be greater than zero. Choose a direction below to say which way it goes.")
+		return
+	}
+
+	// A reason is required. An unexplained correction to a shared balance is
+	// the thing both parties will be trying to reconstruct months later, and
+	// this is the only record of why it happened.
+	reason := strings.TrimSpace(r.PostFormValue("reason"))
+	if reason == "" {
+		redirectWith(w, r, tabPath(id), "err", "An adjustment needs a reason. Both people will want to know why the balance moved.")
+		return
+	}
+	if len(reason) > adjustmentReasonMax {
+		reason = reason[:adjustmentReasonMax]
+	}
+
+	// Direction. A credit reduces what is owed, which is a positive amount in
+	// the ledger's sign convention; a debit increases it.
+	signed := amount
+	direction := strings.TrimSpace(r.PostFormValue("direction"))
+	switch direction {
+	case "", "credit":
+		direction = "credit"
+	case "debit":
+		signed = amount.Neg()
+	default:
+		redirectWith(w, r, tabPath(id), "err", "Choose whether this reduces or increases what is owed.")
+		return
+	}
+
+	key := strings.TrimSpace(r.PostFormValue("idempotency_key"))
+
+	entry, replayed, err := s.ledger.Adjustment(r.Context(), ledger.Post{
+		TabID:          tab.ID,
+		Amount:         signed,
+		Memo:           reason,
+		ActorUserID:    user.ID,
+		IdempotencyKey: key,
+		Method:         store.MethodNone,
+	})
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	if replayed {
+		redirectWith(w, r, tabPath(tab.ID), "ok", "That adjustment was already recorded.")
+		return
+	}
+
+	s.log.Info("adjustment posted", "tab_id", tab.ID, "user_id", user.ID,
+		"seq", entry.Seq, "direction", direction, "amount", int64(signed))
+
+	if direction == "credit" {
+		redirectWith(w, r, tabPath(tab.ID), "ok", amount.Display()+" credited. The balance is lower by that much.")
+		return
+	}
+	redirectWith(w, r, tabPath(tab.ID), "ok", amount.Display()+" added to what is owed.")
+}

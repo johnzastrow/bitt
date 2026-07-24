@@ -14,13 +14,15 @@ import (
 
 const (
 	tabColumns = `id, name, kind, description, created_by, created_at, archived_at, ` +
-		`schedule_kind, schedule_anchor, schedule_billing, ` +
-		`fee_kind, fee_fixed_cents, fee_percent_bp, fee_grace_days, fee_cap_cents, interest_apr_bp`
+		`schedule_kind, schedule_anchor, schedule_billing, schedule_interval, ` +
+		`fee_kind, fee_fixed_cents, fee_percent_bp, fee_grace_days, fee_cap_cents, ` +
+		`interest_apr_bp, loan_term_periods, loan_payment_cents`
 	// same list qualified for joins; kept literal rather than derived, since a
 	// helper that rewrites SQL strings is more machinery than two constants.
 	tabColumnsT = `t.id, t.name, t.kind, t.description, t.created_by, t.created_at, t.archived_at, ` +
-		`t.schedule_kind, t.schedule_anchor, t.schedule_billing, ` +
-		`t.fee_kind, t.fee_fixed_cents, t.fee_percent_bp, t.fee_grace_days, t.fee_cap_cents, t.interest_apr_bp`
+		`t.schedule_kind, t.schedule_anchor, t.schedule_billing, t.schedule_interval, ` +
+		`t.fee_kind, t.fee_fixed_cents, t.fee_percent_bp, t.fee_grace_days, t.fee_cap_cents, ` +
+		`t.interest_apr_bp, t.loan_term_periods, t.loan_payment_cents`
 )
 
 func scanTab(row interface{ Scan(...any) error }) (store.Tab, error) {
@@ -38,10 +40,14 @@ func scanTab(row interface{ Scan(...any) error }) (store.Tab, error) {
 		feeGrace   int
 		feeCap     int64
 		interestBP int64
+		schedEvery int
+		term       int
+		payment    int64
 	)
 	if err := row.Scan(&t.ID, &t.Name, &kind, &t.Description, &t.CreatedBy, &created, &archived,
-		&schedKind, &anchor, &billing,
-		&feeKind, &feeFixed, &feePercent, &feeGrace, &feeCap, &interestBP); err != nil {
+		&schedKind, &anchor, &billing, &schedEvery,
+		&feeKind, &feeFixed, &feePercent, &feeGrace, &feeCap,
+		&interestBP, &term, &payment); err != nil {
 		return store.Tab{}, translate(err)
 	}
 	t.Kind = store.TabKind(kind)
@@ -53,7 +59,7 @@ func scanTab(row interface{ Scan(...any) error }) (store.Tab, error) {
 	if t.ArchivedAt, err = fromNullText(archived); err != nil {
 		return store.Tab{}, fmt.Errorf("sqlite: parse tab archived_at: %w", err)
 	}
-	if t.Schedule, err = scheduleFrom(schedKind, anchor, billing); err != nil {
+	if t.Schedule, err = scheduleFrom(schedKind, anchor, billing, schedEvery); err != nil {
 		return store.Tab{}, fmt.Errorf("sqlite: parse tab schedule: %w", err)
 	}
 	t.Fee = fee.Policy{
@@ -64,6 +70,8 @@ func scanTab(row interface{ Scan(...any) error }) (store.Tab, error) {
 		Cap:       money.Cents(feeCap),
 	}
 	t.InterestAPRBp = interestBP
+	t.LoanTermPeriods = term
+	t.LoanPayment = money.Cents(payment)
 	return t, nil
 }
 
@@ -78,13 +86,14 @@ func feePolicyCols(p fee.Policy) (kind string, fixed, percent int64, grace int, 
 
 // scheduleFrom rebuilds a schedule from its three stored columns. All three are
 // empty for a tab that is billed by hand, which is not an error.
-func scheduleFrom(kind, anchor, billing string) (schedule.Schedule, error) {
+func scheduleFrom(kind, anchor, billing string, interval int) (schedule.Schedule, error) {
 	if kind == "" && anchor == "" && billing == "" {
 		return schedule.Schedule{}, nil
 	}
 	s := schedule.Schedule{
-		Kind:    schedule.Kind(kind),
-		Billing: schedule.Billing(billing),
+		Kind:     schedule.Kind(kind),
+		Billing:  schedule.Billing(billing),
+		Interval: interval,
 	}
 	if anchor != "" {
 		d, err := schedule.ParseDate(anchor)
@@ -93,19 +102,26 @@ func scheduleFrom(kind, anchor, billing string) (schedule.Schedule, error) {
 		}
 		s.Anchor = d
 	}
-	return s, nil
+	// Normalize on the way out so a row written before intervals existed --
+	// interval 0, or the retired 'biweekly' kind that migration 0006 should
+	// have rewritten -- behaves as the equivalent modern schedule. The rewrite
+	// is date-identical, so nothing re-bills.
+	return s.Normalize(), nil
 }
 
 // scheduleText flattens a schedule into its stored columns. An unset schedule
 // writes three empty strings rather than nulls (DEPLOY-02).
-func scheduleText(s schedule.Schedule) (kind, anchor, billing string) {
+func scheduleText(s schedule.Schedule) (kind, anchor, billing string, interval int) {
 	if !s.Set() {
-		return "", "", ""
+		// An unset schedule still stores interval 1 rather than 0, so the
+		// column's NOT NULL DEFAULT and its stored value agree.
+		return "", "", "", 1
 	}
+	s = s.Normalize()
 	if !s.Anchor.IsZero() {
 		anchor = s.Anchor.String()
 	}
-	return string(s.Kind), anchor, string(s.Billing)
+	return string(s.Kind), anchor, string(s.Billing), s.Every()
 }
 
 // CreateTab inserts a tab, its items, and its creating Provider atomically.
@@ -125,18 +141,18 @@ func (d *DB) CreateTab(ctx context.Context, t store.Tab, items []store.TabItem) 
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	schedKind, anchor, billing := scheduleText(t.Schedule)
+	schedKind, anchor, billing, interval := scheduleText(t.Schedule)
 	feeKind, feeFixed, feePercent, feeGrace, feeCap := feePolicyCols(t.Fee)
 	res, err := tx.ExecContext(ctx,
 		`INSERT INTO tabs (name, kind, description, created_by, created_at, archived_at,
-                           schedule_kind, schedule_anchor, schedule_billing,
+                           schedule_kind, schedule_anchor, schedule_billing, schedule_interval,
                            fee_kind, fee_fixed_cents, fee_percent_bp, fee_grace_days, fee_cap_cents,
-                           interest_apr_bp)
-         VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                           interest_apr_bp, loan_term_periods, loan_payment_cents)
+         VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.Name, string(t.Kind), t.Description, t.CreatedBy, toText(t.CreatedAt),
-		schedKind, anchor, billing,
+		schedKind, anchor, billing, interval,
 		feeKind, feeFixed, feePercent, feeGrace, feeCap,
-		t.InterestAPRBp)
+		t.InterestAPRBp, t.LoanTermPeriods, int64(t.LoanPayment))
 	if err != nil {
 		return store.Tab{}, translate(err)
 	}
@@ -334,11 +350,12 @@ func (d *DB) SetSchedule(ctx context.Context, tabID int64, s schedule.Schedule) 
 			return fmt.Errorf("sqlite: %w", err)
 		}
 	}
-	kind, anchor, billing := scheduleText(s)
+	kind, anchor, billing, interval := scheduleText(s)
 
 	res, err := d.db.ExecContext(ctx,
-		`UPDATE tabs SET schedule_kind = ?, schedule_anchor = ?, schedule_billing = ? WHERE id = ?`,
-		kind, anchor, billing, tabID)
+		`UPDATE tabs SET schedule_kind = ?, schedule_anchor = ?, schedule_billing = ?,
+                        schedule_interval = ? WHERE id = ?`,
+		kind, anchor, billing, interval, tabID)
 	if err != nil {
 		return translate(err)
 	}
@@ -374,6 +391,36 @@ func (d *DB) SetFeePolicy(ctx context.Context, tabID int64, p fee.Policy) error 
 	n, err := res.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("sqlite: set fee policy: %w", err)
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+// SetLoanTerms replaces a Payoff loan's term and scheduled payment.
+//
+// Nothing here touches posted_interest, posted_fees, or posted_periods, so a
+// Provider truing the payment up to the bank's figure reaches future periods
+// only. That is the point of the true-up being a setting rather than a
+// recomputation: the ledger is append-only, and interest already charged was
+// charged on the balance that stood at the time.
+func (d *DB) SetLoanTerms(ctx context.Context, tabID int64, termPeriods int, payment money.Cents) error {
+	if termPeriods < 0 {
+		return fmt.Errorf("sqlite: loan term cannot be negative")
+	}
+	if payment < 0 {
+		return fmt.Errorf("sqlite: loan payment cannot be negative")
+	}
+	res, err := d.db.ExecContext(ctx,
+		`UPDATE tabs SET loan_term_periods = ?, loan_payment_cents = ? WHERE id = ?`,
+		termPeriods, int64(payment), tabID)
+	if err != nil {
+		return translate(err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqlite: set loan terms: %w", err)
 	}
 	if n == 0 {
 		return store.ErrNotFound

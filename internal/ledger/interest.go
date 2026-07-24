@@ -15,14 +15,27 @@ import (
 //
 // It runs lazily in the read path like charges and fees, and claims each period
 // through PostInterestEntry so interest is charged at most once per period
-// however many readers pass over it at once. Each period's interest is computed
-// on the loan's outstanding balance as of that period's date, so as the loan is
-// paid down the interest falls; unpaid interest is part of that balance, so it
-// compounds -- which is how a loan is meant to behave, and is exactly the thing
-// a late fee must never do.
+// however many readers pass over it at once.
+//
+// Each period's interest is computed on the outstanding *principal* as of that
+// period's date, and on nothing else. As the loan is paid down the interest
+// falls. Interest that a short payment did not cover does not join that base:
+// it sits in the unpaid-interest bucket AllocateLoan maintains, where it is
+// owed and is repaid before principal, but never itself accrues.
+//
+// That is the U.S. Rule, which Regulation Z permits for closed-end credit and
+// which consumer lenders run. It matters here for a practical reason rather
+// than a legal one: a borrower who misses a payment and then catches up must
+// end up where their bank says they are. Capitalizing the missed interest into
+// principal would compound it, and the two figures would separate permanently
+// after the first missed payment, with no way back.
 func (s *Service) accrueInterest(ctx context.Context, tab store.Tab, loc *time.Location) ([]store.Entry, error) {
-	ppy := tab.Schedule.Kind.PeriodsPerYear()
-	if ppy <= 0 {
+	// The fraction of a year one period covers. Monthly is 1/12, the APR/12 a
+	// borrower can check by hand; a three-week cycle is 21/365. A fraction
+	// rather than a periods-per-year count is what lets an arbitrary interval
+	// stay exact.
+	rateNum, rateDen := tab.Schedule.RateBasis()
+	if rateNum <= 0 || rateDen <= 0 {
 		return nil, nil
 	}
 
@@ -52,16 +65,16 @@ func (s *Service) accrueInterest(ctx context.Context, tab store.Tab, loc *time.L
 			continue
 		}
 
-		// The loan balance as of this period: principal plus interest already
-		// charged, less payments made by now, excluding late fees. Interest is
-		// on the loan, not on penalties.
-		base := loanBalanceThrough(entries, due, loc)
+		// The base is the outstanding principal as of this period and nothing
+		// else: not the unpaid interest, which never accrues, and not late
+		// fees, which are a penalty rather than part of the loan.
+		base := AllocateLoan(entries, due, loc).Principal
 		if base <= 0 {
-			// Nothing owed on the loan this period, so no interest. Do not claim
+			// No principal outstanding this period, so no interest. Do not claim
 			// the period: a later charge could legitimately make it owe again.
 			continue
 		}
-		amount, ok := money.InterestOn(base, tab.InterestAPRBp, ppy)
+		amount, ok := money.InterestFor(base, tab.InterestAPRBp, rateNum, rateDen)
 		if !ok {
 			return posted, ErrOverflow
 		}
@@ -115,34 +128,4 @@ func InterestIdempotencyKey(tabID int64, periodKey string) string {
 // InterestMemo describes the period a charge accrued interest for.
 func InterestMemo(due schedule.Date) string {
 	return "Interest for the period ending " + due.Display()
-}
-
-// loanBalanceThrough is the loan's outstanding balance as of a date: principal
-// and interest charged, less payments, all effective on or before the date, and
-// excluding late fees. Floored at zero.
-//
-// It is what the next slice of interest is computed on, so it deliberately omits
-// fees (interest never accrues on a penalty) and includes prior interest (a loan
-// compounds on unpaid interest).
-func loanBalanceThrough(entries []store.Entry, asOf schedule.Date, loc *time.Location) money.Cents {
-	reversed := ReversedSeqs(entries)
-	var owed money.Cents
-	for _, e := range entries {
-		if reversed[e.Seq] {
-			continue
-		}
-		if schedule.DateOf(e.EffectiveAt.In(loc)).After(asOf) {
-			continue
-		}
-		switch {
-		case e.Kind == store.KindCharge:
-			owed += e.Amount.Neg() // principal and prior interest are both charges
-		case e.Kind == store.KindPayment:
-			owed -= e.Amount
-		}
-	}
-	if owed < 0 {
-		return 0
-	}
-	return owed
 }

@@ -181,7 +181,9 @@ func TestComputePayoffWithInterest(t *testing.T) {
 		{Seq: interestSeq, Kind: store.KindCharge, Category: store.CategoryInterest, Amount: -1000},
 		paymentEntry(3, 11000, 2026, time.January, 15),
 	}
-	p := ComputePayoff(tab, entries, 10000, schedule.NewDate(2026, time.January, 20))
+	tab.LoanPayment = 10000
+
+	p := ComputePayoff(tab, entries, schedule.NewDate(2026, time.January, 20), time.UTC)
 
 	if p.Principal != 100000 {
 		t.Errorf("principal %s, want $1,000 (interest is not principal)", p.Principal)
@@ -200,7 +202,9 @@ func TestComputePayoffWithInterest(t *testing.T) {
 	// A waived interest charge stops counting.
 	waived := int64(2)
 	entries = append(entries, store.Entry{Seq: 4, Kind: store.KindReversal, Amount: 1000, ReversesSeq: &waived})
-	p = ComputePayoff(tab, entries, 10000, schedule.NewDate(2026, time.January, 20))
+	tab.LoanPayment = 10000
+
+	p = ComputePayoff(tab, entries, schedule.NewDate(2026, time.January, 20), time.UTC)
 	if p.Interest != 0 {
 		t.Errorf("waived interest still counts: %s", p.Interest)
 	}

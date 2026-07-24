@@ -124,7 +124,7 @@ func (s *Service) assessFees(ctx context.Context, tab store.Tab, history []store
 func (s *Service) expectedSchedule(ctx context.Context, tab store.Tab, history []store.TabItem, entries []store.Entry, loc *time.Location) ([]expectedPoint, error) {
 	today := schedule.DateOf(s.now().In(loc))
 	if tab.Kind == store.TabPayoff {
-		return payoffExpectations(tab, history, entries, today), nil
+		return payoffExpectations(tab, entries, today), nil
 	}
 	return s.servicesExpectations(ctx, tab, entries)
 }
@@ -161,16 +161,24 @@ func (s *Service) servicesExpectations(ctx context.Context, tab store.Tab, entri
 	return points, nil
 }
 
-// payoffExpectations derives expectations from the schedule and the expected
-// installment, capped at the loan principal.
+// payoffExpectations derives expectations from the schedule and the loan's
+// scheduled payment, bounded by its term.
 //
-// The installment is the sum of the tab's current items -- the same field a
-// Services tab uses for its period charge, meaning here "what the Payee is
-// expected to pay each period". The principal is what has actually been charged,
-// so expectations stop once the scheduled payments would cover the loan.
-func payoffExpectations(tab store.Tab, history []store.TabItem, entries []store.Entry, today schedule.Date) []expectedPoint {
-	installment, ok := SumItems(ItemsFrom(activeItems(history)))
-	if !ok || installment <= 0 {
+// The payment comes from the tab's own field, which is the figure the Provider
+// took off the lender's paperwork. It used to be the sum of the tab's line
+// items -- the same field a Services tab bills from -- and one field meaning
+// both "what is charged" and "what is expected" is what made a mis-set loan
+// read as settled.
+//
+// The bound is the term. It used to be the principal, which stopped expecting
+// payments once they added up to the loan amount; on an interest-bearing loan
+// that is sooner than the loan can actually be repaid, so a borrower paying
+// exactly on time would stop being judged part-way through and the last months
+// of the schedule went unfined. With no term the loan is open-ended and the
+// principal remains the only honest bound available.
+func payoffExpectations(tab store.Tab, entries []store.Entry, today schedule.Date) []expectedPoint {
+	installment := tab.LoanPayment
+	if installment <= 0 {
 		return nil
 	}
 	principal := chargedPrincipal(entries)
@@ -183,14 +191,26 @@ func payoffExpectations(tab store.Tab, history []store.TabItem, entries []store.
 		cum    money.Cents
 	)
 	for n := 0; n < schedule.MaxPeriods; n++ {
+		if tab.LoanTermPeriods > 0 && n >= tab.LoanTermPeriods {
+			break
+		}
 		due := tab.Schedule.Period(n).Due
 		if due.After(today) {
 			break
 		}
+		base := installment
+		if tab.LoanTermPeriods > 0 {
+			// A termed loan expects a full installment every period of its
+			// term. The last one is smaller in practice, but the fee is judged
+			// on what was asked for, and the schedule asks for the installment.
+			points = append(points, expectedPoint{Date: due, Base: base})
+			continue
+		}
+		// Open-ended: expectations stop once the scheduled payments would have
+		// covered the principal, since nothing states how long the loan runs.
 		if cum >= principal {
 			break
 		}
-		base := installment
 		if cum+base > principal {
 			base = principal - cum // the final, partial installment
 		}

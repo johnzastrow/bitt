@@ -7,6 +7,97 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [0.5.0] - 2026-07-23 — Loan terms, scheduled payments, and schedule intervals
+
+A Payoff loan can now state how long it runs and what it costs per period, and
+the app works out that payment itself so a lender's figure can be checked
+against it. Verified against an issued amortization schedule: $21,852.48 at
+5.24% over 48 monthly payments, quoted at $505.65 and computed here at $505.63 —
+a two-cent difference that is the lender's own rounding.
+
+### Added
+- **Loan term and scheduled payment** on Payoff tabs, each in its own field. The
+  Provider enters the payment the lender actually charges, because that is the
+  figure that has to be paid; the app computes what the terms imply and shows
+  the two side by side rather than overriding one with the other.
+- **A suggested payment**, derived by simulating the same arithmetic the ledger
+  posts — the same per-period rounding, the same allocation — rather than by the
+  closed-form annuity formula. The closed form needs a float, which is forbidden
+  in the money path, and disagrees with integer per-period rounding by a few
+  cents over a long term. The simulation cannot: it is the same arithmetic.
+  Reports the final payment (smaller, as lenders adjust it) and lifetime interest.
+- **A true-up**, recasting the required payment against the balance and the
+  payments still remaining, and saying when the current payment will not clear
+  the loan in time or will clear it early. Differences within five cents are not
+  flagged, since that is a lender's rounding rather than a disagreement.
+- **`internal/loan`**, a fourth pure package beside money, schedule, and fee.
+  No I/O, no clock. Pinned by tests against both the closed-form annuity value
+  and an issued lender amortization schedule.
+- **Arbitrary schedule intervals** — every N weeks, every N months. "Every three
+  weeks" was previously unrepresentable.
+- **Maturity date and payment count** on the loan progress panel.
+- **Adjustments in the interface** (CHG-03). The Provider can correct what is
+  owed in either direction, with a required reason, from Day to day → "Adjust
+  what is owed". `ledger.Adjustment` had existed since Phase 1 and was reachable
+  from no route, which left a reconciliation with no honest home: the only way
+  to reduce a balance was to record a payment that never happened, which claims
+  money changed hands, satisfies the period's late-fee window, and on a loan is
+  allocated to interest before principal. **A credit is allocated
+  principal-first**, deliberately unlike a payment — a payment settles the
+  oldest thing owed, while a credit is the Provider deciding part of the debt
+  should not exist, and taking it off principal makes the reduction permanent
+  and every later interest charge smaller. Credits count toward meeting the
+  schedule, so forgiving what was expected clears "Behind"; they are excluded
+  from payment totals, since an adjustment is not money.
+- **`docs/DATA-MODEL.md`** — the physical schema with a mermaid ER diagram, a
+  per-column data dictionary with rules, the database invariants, and the loan
+  arithmetic conventions in one place.
+
+### Changed
+- **Interest no longer compounds on unpaid interest.** Interest now accrues on
+  outstanding principal only; interest a short payment did not cover is owed,
+  and is repaid before principal, but does not itself accrue. This is the U.S.
+  Rule, which Regulation Z permits for closed-end credit and which consumer
+  lenders run. The previous behaviour capitalized it, which meant a borrower who
+  missed a payment and caught up would separate permanently from what their bank
+  said — with no way back. The old rule was documented but never tested; it is
+  now tested in both `internal/loan` and `internal/ledger`.
+- **The per-period interest rate is now an exact fraction of a year** rather than
+  APR divided by a periods-per-year count, which had no answer for an interval
+  like three weeks (52/3 is not an integer). Month-stepping schedules use
+  months/12, the 30/360 basis a US installment loan is quoted on, so a plain
+  monthly loan is still exactly APR/12. Week-stepping schedules use days/365,
+  actual/365. **Weekly and biweekly tabs carrying interest will see a very
+  slightly different figure on future periods** (APR × 7/365 rather than APR/52);
+  interest already posted is immutable and stands.
+- **A Payoff tab's expected payment comes from its own field, not its line
+  items.** Items are a Services tab's period charge. One field meaning both "what
+  is charged" and "what is expected" is what let a mis-configured loan read as
+  already settled. Payoff tabs no longer offer the line-item editor; existing
+  items are shown, read-only, rather than deleted.
+- **`biweekly` is now `weekly` with an interval of 2.** Both compute period n as
+  anchor + 14n, so the rewrite is date-identical: no period key moves and no
+  posted cycle can re-bill. Verified against the demo database.
+
+### Fixed
+- **The true-up flagged harmless overpayments.** Paying more than the term
+  strictly requires is now only reported when it actually shortens the loan.
+  A small credit, or a lender's payment rounded up, previously produced a notice
+  reading "48 payments rather than 48".
+- **Payoff progress and late fees stopped short on an interest-bearing loan.**
+  Both capped expectations at the principal, which is less than the loan costs
+  once interest is charged — so the schedule stopped expecting payments partway
+  through, a borrower paying exactly on time could read as behind, and the last
+  months of a term went unfined. Expectations now span the term.
+
+### Migration
+`0006_loan_terms` adds `schedule_interval`, `loan_term_periods`, and
+`loan_payment_cents`; rewrites `biweekly` schedules; and backfills each Payoff
+tab's payment from the sum of its active line items — exactly what the old code
+read, so no tab's expectations change on upgrade. **A Payoff tab that was set up
+with the loan amount in a line item will backfill that amount as its payment**
+and should be corrected in Setup → Loan term and payment.
+
 ## [0.4.0] - 2026-07-23 — Payoff tabs and late fees
 
 ### Added

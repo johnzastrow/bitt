@@ -64,8 +64,17 @@ func TestScheduleRoundTrips(t *testing.T) {
 			if err != nil {
 				t.Fatalf("get tab: %v", err)
 			}
-			if got.Schedule != want {
-				t.Errorf("schedule round-tripped as %+v, want %+v", got.Schedule, want)
+			// The round trip normalizes: an unset interval fills in to 1, and
+			// the retired biweekly kind becomes weekly every two weeks. Both
+			// are date-identical rewrites, so the comparison is against the
+			// normal form rather than the literal input.
+			if got.Schedule != want.Normalize() {
+				t.Errorf("schedule round-tripped as %+v, want %+v", got.Schedule, want.Normalize())
+			}
+			for n := range 30 {
+				if a, b := got.Schedule.Nth(n), want.Nth(n); a != b {
+					t.Fatalf("period %d moved across the round trip: %s != %s", n, a, b)
+				}
 			}
 		})
 	}
@@ -115,8 +124,8 @@ func TestSetSchedule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get tab: %v", err)
 	}
-	if got.Schedule != want {
-		t.Errorf("schedule is %+v, want %+v", got.Schedule, want)
+	if got.Schedule != want.Normalize() {
+		t.Errorf("schedule is %+v, want %+v", got.Schedule, want.Normalize())
 	}
 
 	// Clearing returns the tab to manual billing.
@@ -526,5 +535,150 @@ func TestListPostedPeriodsOnAnUnscheduledTab(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("an unscheduled tab reported %d claims", len(got))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Migration 0006: intervals, loan terms, and the biweekly rewrite
+// ---------------------------------------------------------------------------
+
+// TestIntervalRoundTrips covers the new column end to end.
+func TestIntervalRoundTrips(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	user := mustUser(t, db, "a@example.com")
+
+	for _, want := range []schedule.Schedule{
+		{Kind: schedule.Weekly, Anchor: day(2026, time.March, 2), Billing: schedule.InAdvance, Interval: 3},
+		{Kind: schedule.MonthlyDay, Anchor: day(2026, time.January, 15), Billing: schedule.InArrears, Interval: 2},
+		{Kind: schedule.MonthlyLast, Anchor: day(2026, time.January, 31), Billing: schedule.InAdvance, Interval: 6},
+	} {
+		tab, err := db.CreateTab(ctx, store.Tab{
+			Name: "Interval", Kind: store.TabServices, CreatedBy: user.ID, Schedule: want,
+		}, nil)
+		if err != nil {
+			t.Fatalf("create tab: %v", err)
+		}
+		got, err := db.GetTab(ctx, tab.ID)
+		if err != nil {
+			t.Fatalf("get tab: %v", err)
+		}
+		if got.Schedule.Interval != want.Interval {
+			t.Errorf("interval round-tripped as %d, want %d", got.Schedule.Interval, want.Interval)
+		}
+		if got.Schedule != want.Normalize() {
+			t.Errorf("schedule round-tripped as %+v, want %+v", got.Schedule, want.Normalize())
+		}
+	}
+}
+
+// TestMigrationRewritesBiweekly writes a pre-0006 row directly and checks the
+// migration's two claims: the kind becomes weekly-every-two-weeks, and every
+// period it computes is unchanged, so no posted cycle can re-post.
+func TestMigrationRewritesBiweekly(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	user := mustUser(t, db, "a@example.com")
+
+	tab, err := db.CreateTab(ctx, store.Tab{
+		Name: "Legacy", Kind: store.TabServices, CreatedBy: user.ID,
+		Schedule: schedule.Schedule{
+			Kind: schedule.Weekly, Anchor: day(2026, time.February, 2), Billing: schedule.InArrears, Interval: 2,
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("create tab: %v", err)
+	}
+
+	// Force the row back to how 0005 would have stored it: the retired kind,
+	// and the interval column at its pre-migration default.
+	// The test lives in this package, so it can reach the handle directly.
+	if _, err := db.db.ExecContext(ctx,
+		`UPDATE tabs SET schedule_kind = 'biweekly', schedule_interval = 1 WHERE id = ?`, tab.ID); err != nil {
+		t.Fatalf("downgrade row: %v", err)
+	}
+
+	got, err := db.GetTab(ctx, tab.ID)
+	if err != nil {
+		t.Fatalf("get tab: %v", err)
+	}
+	if got.Schedule.Kind != schedule.Weekly || got.Schedule.Interval != 2 {
+		t.Fatalf("legacy row read back as %+v, want weekly interval 2", got.Schedule)
+	}
+
+	// The dates are the point: a rewrite that moved a boundary would orphan
+	// every posted_periods claim and re-bill the tab.
+	legacy := schedule.Schedule{
+		Kind: schedule.Biweekly, Anchor: day(2026, time.February, 2), Billing: schedule.InArrears,
+	}
+	for n := range 100 {
+		if a, b := legacy.Period(n).Key(), got.Schedule.Period(n).Key(); a != b {
+			t.Fatalf("period %d key moved: %q != %q", n, a, b)
+		}
+	}
+}
+
+// TestLoanTermsRoundTrip covers the term and payment columns and their setter.
+func TestLoanTermsRoundTrip(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	user := mustUser(t, db, "a@example.com")
+
+	tab, err := db.CreateTab(ctx, store.Tab{
+		Name: "Car loan", Kind: store.TabPayoff, CreatedBy: user.ID,
+		Schedule: schedule.Schedule{
+			Kind: schedule.MonthlyDay, Anchor: day(2026, time.January, 15), Billing: schedule.InAdvance,
+		},
+		InterestAPRBp:   524,
+		LoanTermPeriods: 48,
+		LoanPayment:     50_565,
+	}, nil)
+	if err != nil {
+		t.Fatalf("create tab: %v", err)
+	}
+
+	got, err := db.GetTab(ctx, tab.ID)
+	if err != nil {
+		t.Fatalf("get tab: %v", err)
+	}
+	if got.LoanTermPeriods != 48 {
+		t.Errorf("term = %d, want 48", got.LoanTermPeriods)
+	}
+	if got.LoanPayment != 50_565 {
+		t.Errorf("payment = %s, want $505.65", got.LoanPayment.Display())
+	}
+	if !got.Termed() {
+		t.Error("a loan with a term does not report as termed")
+	}
+
+	// The true-up: correcting the payment to what the bank actually charges.
+	if err := db.SetLoanTerms(ctx, tab.ID, 48, 51_000); err != nil {
+		t.Fatalf("set loan terms: %v", err)
+	}
+	got, err = db.GetTab(ctx, tab.ID)
+	if err != nil {
+		t.Fatalf("get tab: %v", err)
+	}
+	if got.LoanPayment != 51_000 {
+		t.Errorf("payment after true-up = %s, want $510.00", got.LoanPayment.Display())
+	}
+
+	// Clearing returns the loan to open-ended.
+	if err := db.SetLoanTerms(ctx, tab.ID, 0, 0); err != nil {
+		t.Fatalf("clear loan terms: %v", err)
+	}
+	got, _ = db.GetTab(ctx, tab.ID)
+	if got.Termed() || got.LoanPayment != 0 {
+		t.Errorf("clearing left term %d payment %s", got.LoanTermPeriods, got.LoanPayment.Display())
+	}
+
+	if err := db.SetLoanTerms(ctx, tab.ID, -1, 0); err == nil {
+		t.Error("a negative term was accepted")
+	}
+	if err := db.SetLoanTerms(ctx, tab.ID, 12, -1); err == nil {
+		t.Error("a negative payment was accepted")
+	}
+	if err := db.SetLoanTerms(ctx, 999999, 12, 100); err == nil {
+		t.Error("setting terms on a missing tab was accepted")
 	}
 }

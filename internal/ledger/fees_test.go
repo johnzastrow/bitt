@@ -36,14 +36,27 @@ func newFeeFixture(t *testing.T, kind store.TabKind, sched schedule.Schedule, po
 	if err != nil {
 		t.Fatalf("user: %v", err)
 	}
-	tab, err := db.CreateTab(ctx, store.Tab{
+	// On a Payoff tab the expected payment is its own field. These fixtures
+	// state it as items because that is what a Services tab bills from and the
+	// two used to share the field; translating it here is the same move
+	// migration 0006 makes for existing tabs.
+	newTab := store.Tab{
 		Name:      "Loan",
 		Kind:      kind,
 		CreatedBy: user.ID,
 		Schedule:  sched.Normalize(),
 		Fee:       policy,
 		CreatedAt: time.Date(2025, time.December, 1, 0, 0, 0, 0, time.UTC),
-	}, items)
+	}
+	if kind == store.TabPayoff {
+		var payment money.Cents
+		for _, it := range items {
+			payment += it.Amount
+		}
+		newTab.LoanPayment = payment
+	}
+
+	tab, err := db.CreateTab(ctx, newTab, items)
 	if err != nil {
 		t.Fatalf("tab: %v", err)
 	}

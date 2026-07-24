@@ -2,7 +2,9 @@ package web
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -84,6 +86,20 @@ func parseSchedule(r *http.Request, loc *time.Location) (schedule.Schedule, erro
 		return schedule.Schedule{}, errors.New("Pick a start date within about five years of today.")
 	}
 
+	// How many weeks or months one period spans. Absent or blank means every
+	// period, which is what every schedule meant before intervals existed.
+	interval := 1
+	if raw := strings.TrimSpace(r.PostFormValue("schedule_interval")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			return schedule.Schedule{}, errors.New("Repeat every must be a whole number of periods, 1 or more.")
+		}
+		if n > schedule.MaxInterval {
+			return schedule.Schedule{}, fmt.Errorf("Repeat every must be %d or fewer.", schedule.MaxInterval)
+		}
+		interval = n
+	}
+
 	billing := schedule.Billing(strings.TrimSpace(r.PostFormValue("schedule_billing")))
 	if billing == "" {
 		billing = schedule.InAdvance
@@ -92,7 +108,9 @@ func parseSchedule(r *http.Request, loc *time.Location) (schedule.Schedule, erro
 		return schedule.Schedule{}, errors.New("Choose whether the charge lands at the start or the end of each period.")
 	}
 
-	sched := schedule.Schedule{Kind: kind, Anchor: anchor, Billing: billing}.Normalize()
+	sched := schedule.Schedule{
+		Kind: kind, Anchor: anchor, Billing: billing, Interval: interval,
+	}.Normalize()
 	if err := sched.Validate(); err != nil {
 		return schedule.Schedule{}, errors.New("That schedule is not usable.")
 	}
@@ -281,4 +299,81 @@ func (s *Server) authorizeItem(w http.ResponseWriter, r *http.Request, user *sto
 		return store.Tab{}, store.TabItem{}, false
 	}
 	return tab, item, true
+}
+
+// ---------------------------------------------------------------------------
+// Loan terms (Payoff tabs)
+// ---------------------------------------------------------------------------
+
+// parseLoanTerms reads a Payoff loan's term and scheduled payment from a form.
+//
+// Both are optional and both default to zero, which is an open-ended loan with
+// no expectation -- a plain IOU, which stays a legitimate way to run a Payoff
+// tab and is what every tab created before this feature is.
+//
+// The payment is taken as the Provider typed it and is never silently replaced
+// by the computed suggestion. It comes off a lender's paperwork, and the
+// lender's figure is the one that has to be paid; the suggestion is shown
+// beside it so a disagreement is visible rather than resolved behind the
+// Provider's back.
+func parseLoanTerms(r *http.Request) (termPeriods int, payment money.Cents, err error) {
+	if raw := strings.TrimSpace(r.PostFormValue("loan_term")); raw != "" {
+		n, convErr := strconv.Atoi(raw)
+		if convErr != nil || n < 0 {
+			return 0, 0, errors.New("The loan term must be a whole number of payments.")
+		}
+		if n > schedule.MaxPeriods {
+			return 0, 0, fmt.Errorf("The loan term must be %d payments or fewer.", schedule.MaxPeriods)
+		}
+		termPeriods = n
+	}
+
+	if raw := strings.TrimSpace(r.PostFormValue("loan_payment")); raw != "" {
+		p, parseErr := money.Parse(raw)
+		if parseErr != nil || p < 0 {
+			return 0, 0, errors.New("The scheduled payment must be a dollar figure of zero or more.")
+		}
+		payment = p
+	}
+	return termPeriods, payment, nil
+}
+
+// postLoanTerms updates a Payoff loan's term and scheduled payment.
+//
+// This is the true-up: when the bank's payment and the app's drift apart, the
+// Provider enters the bank's figure here and the app re-derives its suggestion
+// from the balance and the periods that remain. Nothing recomputes history --
+// no claim table is touched, so interest and fees already charged stand as
+// posted, which is what an append-only ledger requires.
+func (s *Server) postLoanTerms(w http.ResponseWriter, r *http.Request) {
+	user := userFrom(r.Context())
+
+	id, ok := pathID(r, "id")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	access, ok := s.requireTabManager(w, r, id, user, "Only the provider can change this loan's terms.")
+	if !ok {
+		return
+	}
+	if access.Tab.Kind != store.TabPayoff {
+		redirectWith(w, r, tabPath(id), "err", "Loan terms apply to Payoff tabs only.")
+		return
+	}
+
+	term, payment, err := parseLoanTerms(r)
+	if err != nil {
+		redirectWith(w, r, tabPath(id), "err", err.Error())
+		return
+	}
+
+	if err := s.store.SetLoanTerms(r.Context(), access.Tab.ID, term, payment); err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+
+	s.log.Info("loan terms set", "tab_id", access.Tab.ID, "user_id", user.ID,
+		"as_admin", access.Admin, "term_periods", term, "payment", int64(payment))
+	redirectWith(w, r, tabPath(access.Tab.ID), "ok", "Loan terms saved.")
 }

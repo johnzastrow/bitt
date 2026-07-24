@@ -14,6 +14,12 @@ import (
 
 // createPayoffTab makes a Payoff tab with a loan amount, an expected monthly
 // installment, a schedule, and a late fee, all in one create.
+// createPayoffTab builds a Payoff tab through the create form.
+//
+// The scheduled payment goes in loan_payment, its own field. It used to be
+// submitted as a line item, which is exactly the conflation this feature
+// removed: on a Payoff tab the loan amount is a one-off principal charge and
+// the payment is a per-period expectation, and one field cannot mean both.
 func (h *harness) createPayoffTab(loan, installment string, anchor schedule.Date, feeForm url.Values) (int64, string) {
 	h.t.Helper()
 	form := url.Values{
@@ -21,8 +27,7 @@ func (h *harness) createPayoffTab(loan, installment string, anchor schedule.Date
 		"name":            {"Truck loan"},
 		"kind":            {string(store.TabPayoff)},
 		"loan_amount":     {loan},
-		"item_name":       {"Repayment"},
-		"item_amount":     {installment},
+		"loan_payment":    {installment},
 		"schedule_kind":   {string(schedule.MonthlyDay)},
 		"schedule_anchor": {anchor.String()},
 	}
@@ -447,5 +452,135 @@ func TestPayoffInterestEndToEnd(t *testing.T) {
 	}
 	if got, _ := h.db.GetTab(t.Context(), tabID); got.Interest() {
 		t.Errorf("interest still set after clearing: %d bp", got.InterestAPRBp)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Loan term, scheduled payment, and the true-up
+// ---------------------------------------------------------------------------
+
+// A Payoff loan with a term shows the payment its own arithmetic works out, and
+// says so when the payment being made will not clear the loan in time.
+func TestLoanTermSuggestionAndDrift(t *testing.T) {
+	h := newHarness(t)
+	h.completeSetup()
+
+	today := instanceToday(t)
+	// The quoted schedule the loan package is pinned against: $21,852.48 at
+	// 5.24% over 48 monthly payments, quoted at $505.65.
+	tabID, _ := h.createPayoffTab("21852.48", "505.65", today.AddDays(-1), nil)
+
+	h.post(tabPath(tabID)+"/interest", url.Values{
+		"csrf_token":   {h.csrfToken(tabPath(tabID))},
+		"interest_apr": {"5.24"},
+	})
+	resp, body := h.post(tabPath(tabID)+"/loan", url.Values{
+		"csrf_token":   {h.csrfToken(tabPath(tabID))},
+		"loan_term":    {"48"},
+		"loan_payment": {"505.65"},
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("saving loan terms returned %d: %s", resp.StatusCode, truncate(body))
+	}
+
+	_, body = h.get(tabPath(tabID))
+
+	// The computed payment lands within the lender's own rounding of $505.65.
+	if !strings.Contains(body, "$505.6") {
+		t.Errorf("no suggested payment near the lender's $505.65: %s", truncate(body))
+	}
+	// The term is reported.
+	if !strings.Contains(body, "of 48") {
+		t.Errorf("the term is not shown: %s", truncate(body))
+	}
+	// Two cents above the computed minimum is not drift worth flagging.
+	if strings.Contains(body, "does not finish on time") {
+		t.Errorf("the lender's own payment was flagged as drifting: %s", truncate(body))
+	}
+
+	// Now true the payment down to something that cannot clear the loan.
+	if _, _ = h.post(tabPath(tabID)+"/loan", url.Values{
+		"csrf_token":   {h.csrfToken(tabPath(tabID))},
+		"loan_term":    {"48"},
+		"loan_payment": {"400.00"},
+	}); true {
+		_, body = h.get(tabPath(tabID))
+	}
+	if !strings.Contains(body, "does not finish on time") {
+		t.Errorf("an underfunded payment is not flagged: %s", truncate(body))
+	}
+
+	// The tab must still report the payment the Provider entered, not the
+	// suggestion -- the lender's figure stays authoritative.
+	if !strings.Contains(body, "$400.00") {
+		t.Errorf("the entered payment was not preserved: %s", truncate(body))
+	}
+}
+
+// A Payoff tab offers the loan term form; a Services tab does not, and its line
+// item editor stays where it was.
+func TestLoanTermFormIsPayoffOnly(t *testing.T) {
+	h := newHarness(t)
+	h.completeSetup()
+
+	services := h.makeTab("Phone plan", "Line", "40.00")
+	_, body := h.get(services)
+	if strings.Contains(body, "Loan term and payment") {
+		t.Error("a Services tab offers a loan term form")
+	}
+	if !strings.Contains(body, "Line items") {
+		t.Error("a Services tab lost its line item editor")
+	}
+
+	today := instanceToday(t)
+	tabID, _ := h.createPayoffTab("5000.00", "250.00", today.AddDays(-1), nil)
+	_, body = h.get(tabPath(tabID))
+	if !strings.Contains(body, "Loan term and payment") {
+		t.Errorf("a Payoff tab has no loan term form: %s", truncate(body))
+	}
+
+	// Posting loan terms to a Services tab is refused. The message rides the
+	// redirect, so it is the POST's own final body that carries it.
+	resp, body := h.post(services+"/loan", url.Values{
+		"csrf_token":   {h.csrfToken(services)},
+		"loan_term":    {"12"},
+		"loan_payment": {"100.00"},
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected status %d", resp.StatusCode)
+	}
+	if !strings.Contains(body, "Payoff tabs only") {
+		t.Errorf("setting loan terms on a Services tab was not refused: %s", truncate(body))
+	}
+}
+
+// An arbitrary interval survives the schedule form and reaches the tab.
+func TestScheduleIntervalThroughTheForm(t *testing.T) {
+	h := newHarness(t)
+	h.completeSetup()
+
+	tab := h.makeTab("Every third week", "Cleaning", "60.00")
+	today := instanceToday(t)
+	h.post(tab+"/schedule", url.Values{
+		"csrf_token":        {h.csrfToken(tab)},
+		"schedule_kind":     {string(schedule.Weekly)},
+		"schedule_interval": {"3"},
+		"schedule_anchor":   {today.String()},
+	})
+
+	_, body := h.get(tab)
+	if !strings.Contains(body, "Every 3 weeks") {
+		t.Errorf("the interval did not reach the tab: %s", truncate(body))
+	}
+
+	// A nonsense interval is refused rather than silently clamped.
+	_, body = h.post(tab+"/schedule", url.Values{
+		"csrf_token":        {h.csrfToken(tab)},
+		"schedule_kind":     {string(schedule.Weekly)},
+		"schedule_interval": {"0"},
+		"schedule_anchor":   {today.String()},
+	})
+	if !strings.Contains(body, "whole number") {
+		t.Errorf("a zero interval was not refused: %s", truncate(body))
 	}
 }

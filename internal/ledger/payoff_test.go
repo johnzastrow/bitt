@@ -149,7 +149,9 @@ func TestComputePayoffProgress(t *testing.T) {
 		paymentEntry(3, 25000, 2026, time.February, 3),
 	}
 	// As of mid-February: two installments expected, two paid -> on track.
-	p := ComputePayoff(tab, entries, 25000, schedule.NewDate(2026, time.February, 15))
+	tab.LoanPayment = 25000
+
+	p := ComputePayoff(tab, entries, schedule.NewDate(2026, time.February, 15), time.UTC)
 
 	if p.Principal != 500000 {
 		t.Errorf("principal %s, want $5,000", p.Principal)
@@ -186,7 +188,9 @@ func TestComputePayoffStatuses(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			entries := []store.Entry{principal, paymentEntry(2, tc.paid, 2026, time.January, 3)}
-			p := ComputePayoff(tab, entries, 25000, today)
+			tab.LoanPayment = 25000
+
+			p := ComputePayoff(tab, entries, today, time.UTC)
 			if p.Status != tc.want {
 				t.Errorf("paid %s -> status %q, want %q (expected by now %s)", tc.paid, p.Status, tc.want, p.ExpectedByNow)
 			}
@@ -203,13 +207,17 @@ func TestComputePayoffSettledIncludesFees(t *testing.T) {
 		{Seq: 2, Kind: store.KindFee, Amount: -2500},
 		paymentEntry(3, 100000, 2026, time.January, 3),
 	}
-	p := ComputePayoff(tab, entries, 10000, schedule.NewDate(2026, time.June, 1))
+	tab.LoanPayment = 10000
+
+	p := ComputePayoff(tab, entries, schedule.NewDate(2026, time.June, 1), time.UTC)
 	if p.Settled() {
 		t.Errorf("a loan with an unpaid fee reads as settled; balance %s", p.Balance)
 	}
 
 	entries = append(entries, paymentEntry(4, 2500, 2026, time.January, 4))
-	p = ComputePayoff(tab, entries, 10000, schedule.NewDate(2026, time.June, 1))
+	tab.LoanPayment = 10000
+
+	p = ComputePayoff(tab, entries, schedule.NewDate(2026, time.June, 1), time.UTC)
 	if !p.Settled() {
 		t.Errorf("a fully paid loan and fee does not read as settled; balance %s", p.Balance)
 	}
@@ -228,7 +236,9 @@ func TestComputePayoffIgnoresWaivedFees(t *testing.T) {
 		{Seq: 3, Kind: store.KindReversal, Amount: 2500, ReversesSeq: &waived},
 		paymentEntry(4, 100000, 2026, time.January, 3),
 	}
-	p := ComputePayoff(tab, entries, 10000, schedule.NewDate(2026, time.June, 1))
+	tab.LoanPayment = 10000
+
+	p := ComputePayoff(tab, entries, schedule.NewDate(2026, time.June, 1), time.UTC)
 	if p.Fees != 0 {
 		t.Errorf("waived fee still counts: fees %s", p.Fees)
 	}

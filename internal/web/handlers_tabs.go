@@ -161,23 +161,41 @@ func (s *Server) postTab(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Interest applies to Payoff loans only. Ignore it on a Services tab.
-	var interestBP int64
+	// Interest, term, and the scheduled payment apply to Payoff loans only.
+	// Ignore them on a Services tab, whose period charge is its line items.
+	var (
+		interestBP  int64
+		loanTerm    int
+		loanPayment money.Cents
+	)
 	if kind == store.TabPayoff {
 		if interestBP, err = parseInterestBP(r.PostFormValue("interest_apr")); err != nil {
 			redirectWith(w, r, "/tabs/new", "err", err.Error())
 			return
 		}
+		if loanTerm, loanPayment, err = parseLoanTerms(r); err != nil {
+			redirectWith(w, r, "/tabs/new", "err", err.Error())
+			return
+		}
+	}
+
+	// A Payoff tab carries no line items: its loan amount posts as a charge and
+	// its payment is the expectation. Items would be a second, silent source of
+	// truth for the same figure.
+	if kind == store.TabPayoff {
+		items = nil
 	}
 
 	tab, err := s.store.CreateTab(r.Context(), store.Tab{
-		Name:          name,
-		Kind:          kind,
-		Description:   description,
-		CreatedBy:     user.ID,
-		Schedule:      sched,
-		Fee:           policy,
-		InterestAPRBp: interestBP,
+		Name:            name,
+		Kind:            kind,
+		Description:     description,
+		CreatedBy:       user.ID,
+		Schedule:        sched,
+		Fee:             policy,
+		InterestAPRBp:   interestBP,
+		LoanTermPeriods: loanTerm,
+		LoanPayment:     loanPayment,
 	}, items)
 	if err != nil {
 		s.serverError(w, r, err)
@@ -202,7 +220,8 @@ func (s *Server) postTab(w http.ResponseWriter, r *http.Request) {
 
 	s.log.Info("tab created", "tab_id", tab.ID, "user_id", user.ID,
 		"kind", string(kind), "items", len(items), "schedule", string(sched.Kind),
-		"fee", string(policy.Kind), "principal", int64(principal))
+		"interval", sched.Every(), "fee", string(policy.Kind), "principal", int64(principal),
+		"loan_term", loanTerm, "loan_payment", int64(loanPayment))
 	redirectWith(w, r, tabPath(tab.ID), "ok", "Tab created.")
 }
 
@@ -445,6 +464,9 @@ func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		data.Payoff = &payoff
+		// Advisory only: the suggested payment and the true-up against it.
+		// Nothing here posts, and the Provider's entered payment is unchanged.
+		data.Plan = ledger.ComputePlan(tab, payoff)
 	}
 
 	s.render(w, r, http.StatusOK, views.TabDetail(s.page(w, r, tab.Name), data))
@@ -461,7 +483,14 @@ const noticeWindowDays = 14
 // later phase; this half is pure computation on the read path and needs no new
 // machinery, so it ships now.
 func (s *Server) upcoming(tab store.Tab, acc ledger.Accrual, itemTotal money.Cents) views.Upcoming {
-	if !acc.Scheduled || tab.ArchivedAt != nil || itemTotal <= 0 {
+	// What is coming differs by kind: a Services tab is about to be charged the
+	// sum of its items, while a Payoff tab expects the loan's scheduled
+	// payment, which posts nothing and lives in its own field.
+	amount := itemTotal
+	if tab.Kind == store.TabPayoff {
+		amount = tab.LoanPayment
+	}
+	if !acc.Scheduled || tab.ArchivedAt != nil || amount <= 0 {
 		return views.Upcoming{}
 	}
 	due := acc.Next.Due
@@ -475,7 +504,7 @@ func (s *Server) upcoming(tab store.Tab, acc ledger.Accrual, itemTotal money.Cen
 	}
 	return views.Upcoming{
 		Due:       due,
-		Amount:    itemTotal,
+		Amount:    amount,
 		DaysUntil: days,
 		// On a Payoff tab the schedule describes an expected payment; on a
 		// Services tab it is the charge that is about to post.

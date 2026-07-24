@@ -1,7 +1,7 @@
 # BitTabby — Handoff
 
-**Written:** 2026-07-23. Updated at the end of Phase 4 (plus a UI reorganization,
-versioning, and a logo).
+**Written:** 2026-07-23. Updated at the end of Phase 4, then again for 0.5.0
+(loan terms, scheduled payments, schedule intervals, U.S. Rule interest).
 
 This is written to be read cold, by someone (or some session) with no memory of
 the work. It covers what exists, why it is shaped this way, what to do next, and
@@ -44,6 +44,8 @@ negotiable. That single commitment drives most of the architecture.
 Read [../PROJECT.md](../PROJECT.md) for the full reasoning and
 [../REQUIREMENTS.md](../REQUIREMENTS.md) for the 54 v1 requirements with stable
 IDs. [ROADMAP.md](ROADMAP.md) has per-phase goals and exit criteria.
+[../DATA-MODEL.md](../DATA-MODEL.md) is the physical schema with an ER diagram,
+a per-column data dictionary, the invariants, and the loan arithmetic rules.
 
 ---
 
@@ -80,6 +82,7 @@ Phase 6 is ship.
 | `8d3e989` | Phase 4 — payoff tabs, late fees, interest; versioning; logo |
 | `4da3c2d` | UI: tab page grouped into Day-to-day / Setup, notes everywhere |
 | `cb11413` | Payoff: loan amount required so the principal always posts |
+| (0.5.0) | Loan terms, scheduled payments, schedule intervals, U.S. Rule interest |
 
 Full suite green including `-race`. Coverage: fee 96%, money 96%, ledger ~90%,
 schedule 87%, sqlite ~73%, web ~71%, auth 44%.
@@ -89,15 +92,23 @@ restart from cold: `make build && BITT_SECURE_COOKIES=false ./bittabby`.
 
 ### The one live-data gotcha to know about
 
-The demo database has a "Car Loan" Payoff tab that is **set up wrong**, on
-purpose-as-a-lesson: its $22,000 went into a *line item* ("Evergreen Payment")
-instead of the loan amount, so it has no principal charge and reads as paid off.
-This is exactly the confusion `cb11413` closes. If the user asks about it: the
-fix is to post $22,000 as a charge (Day to day → Post a charge) and change the
-$22,000 line item to the real monthly payment. Do NOT edit their ledger directly
-— it is append-only and theirs. On a Payoff tab, the **loan amount is a charge
-(the principal); line items are the expected payment per period** — two
-different things, and conflating them is the trap.
+The demo database has two Payoff tabs, "Car Loan" and "Car Loan 2", that are
+**set up wrong**: their $22,000 went into a *line item* instead of the loan
+amount, so neither has a principal charge and both read as paid off.
+
+0.5.0 removes the trap that caused this — a Payoff tab's expected payment is now
+its own field, and line items belong to Services tabs only. Migration 0006
+backfills the payment from the sum of active items, which is exactly what the
+old code read, so **those two tabs migrate with a $22,000 "payment"**. That is
+faithful to what they meant before and is still wrong. The fix is to post
+$22,000 as a charge (Day to day → Post a charge) and set the real monthly
+payment under Setup → Loan term and payment. Do NOT edit their ledger directly
+— it is append-only and theirs.
+
+**The demo database has not been migrated.** It was still at schema 0005 when
+0.5.0 was built, and the running instance on `:8080` is the old binary. The
+migration was verified against a *copy* of it. Running the new binary against
+`data/bitt.db` will migrate it, forward-only.
 
 ---
 
@@ -109,6 +120,7 @@ internal/version/      the version constant; ldflags inject commit/date
 internal/money/        Cents (int64). No float anywhere in the money path
 internal/schedule/     pure period arithmetic. No database, no clock, no I/O
 internal/fee/          pure late-fee sizing (fixed/percent, cap, rounding)
+internal/loan/         pure amortization: suggested payment, projection, drift
 internal/store/        persistence CONTRACT (interfaces only, no SQL)
 internal/store/sqlite/ the only implementation, plus embedded migrations
 internal/ledger/       the ONLY write boundary for financial entries. accrual.go
@@ -118,7 +130,7 @@ internal/auth/         Argon2id, sessions, CSRF
 internal/web/          routes, handlers, templ views, embedded static assets
 ```
 
-The three pure packages (`money`, `schedule`, `fee`) have no I/O and are tested
+The four pure packages (`money`, `schedule`, `fee`, `loan`) have no I/O and are tested
 exhaustively on their own — that is where the awkward arithmetic (DST, month-end,
 rounding, caps) is pinned before any wiring. Every accrual type — period charges,
 late fees, interest — follows one pattern: a claim table with a `(tab, period)`
@@ -330,6 +342,21 @@ interest.** `loanBalanceThrough` is deliberately fees-excluded. Compounding is
 correct for a loan and is exactly what a fee must never do — the two are
 different on purpose.
 
+> **Superseded in 0.5.0.** The compounding half of that paragraph is no longer
+> true, and `loanBalanceThrough` is gone. Interest now accrues on outstanding
+> **principal** only; interest a short payment did not cover sits in its own
+> bucket where it is owed, is repaid before principal, and never accrues. That
+> is the U.S. Rule, which Regulation Z permits for closed-end credit and which
+> consumer lenders run. `ledger.AllocateLoan` is the single source of truth for
+> the split and is shared by interest accrual, payoff progress, and fees.
+>
+> The old reasoning — "a loan compounds" — is true of a bond or a revolving line
+> and false of a US consumer installment loan. The practical consequence is what
+> mattered: under the old rule a borrower who missed a payment and caught up
+> separated permanently from their bank's figure, with no way back. The rule was
+> documented and never tested, which is why inverting it broke no test. It is
+> now pinned in both `internal/loan` and `internal/ledger`.
+
 **Version lives in `internal/version`** (a constant `Number`, ldflags inject
 commit/date). Shown in the footer and healthz. Bump `Number` on every functional
 change per semver; add a CHANGELOG entry. The Makefile injects provenance only.
@@ -392,3 +419,61 @@ backup/restore. 5 requirements: UI-05, DEPLOY-03/05/06/07.
   these. Moving them is a `git mv` plus link fixes.
 - **The demo runs used `BITT_SECURE_COOKIES=false`** for plain HTTP. Production
   defaults to `true`; the server logs a warning when it is off.
+
+---
+
+## 0.5.0 landed: loan terms, scheduled payments, intervals
+
+Added after Phase 4, at the user's request, when it became clear a Payoff tab
+could not say how long it ran or what it cost per period.
+
+**The lender's number wins, always.** The Provider enters the payment their bank
+charges; the app computes what the terms imply and shows both. It never
+overwrites the entered figure. This is not politeness -- many auto lenders accrue
+per diem on actual/365, where the split depends on the days between deposits, and
+no period-based model can match that to the cent. Showing the disagreement is
+honest; resolving it silently would not be.
+
+**The suggestion is simulated, not solved.** `loan.SuggestPayment` binary-searches
+the payment and runs each candidate through the same arithmetic the ledger posts
+-- same per-period rounding, same U.S. Rule allocation. The closed-form annuity
+formula needs a float (forbidden in the money path) and disagrees with integer
+per-period rounding by a few cents over a long term. The simulation cannot,
+because it is the same arithmetic. Do not "simplify" this to the formula.
+
+**It is pinned against an issued schedule, not a formula.** `TestAgainstAQuotedSchedule`
+carries a lender's own amortization schedule: $21,852.48 at 5.24% over 48 monthly
+payments, quoted at $505.65, computed here at $505.63. The two-cent tolerance is
+deliberately tight -- widen it and the test stops being able to detect a
+convention change. A day-count disagreement would show up as dollars over 48
+months, not cents.
+
+**The rate basis is a fraction of a year, not a period count.** `Schedule.RateBasis`
+returns months/12 for month-stepping schedules (30/360, so plain monthly is
+exactly the APR/12 a borrower can check by hand) and days/365 for week-stepping
+ones (actual/365, because there is no whole number of weeks in a year). This is
+what makes "every three weeks" expressible at all: 21/365, where 52/3 is not an
+integer. Weekly and biweekly tabs carrying interest see a slightly different
+figure on future periods than they did in 0.4.0.
+
+**`biweekly` is gone as a kind**, rewritten to `weekly` with interval 2. Both
+compute period n as anchor + 14n, so the rewrite is date-identical and no period
+key moves -- that equivalence is what makes migration 0006 safe, and
+`TestNormalizeRewritesBiweekly` pins it. The constant is retained as deprecated
+and `Normalize` still rewrites it, so a row that escapes the migration behaves.
+
+**Two shipped bugs fell out of adding the term.** Both payoff progress and the
+late-fee expectations capped the expected cumulative at the *principal*, which on
+an interest-bearing loan is less than the loan costs -- so the schedule stopped
+expecting payments partway through, a borrower paying exactly on time could read
+as behind, and the last months of a term went unfined.
+
+**The true-up recasts on payments made, not calendar periods elapsed.**
+`Payoff.RemainingPeriods` counts scheduled payments not yet made. The calendar
+answer is wrong in the ordinary case: a tab created today has one period already
+due and nothing paid, and dividing the whole principal over the remaining
+calendar periods reports every correctly-configured new loan as underfunded.
+This was caught by a test during the build; do not "fix" it back.
+
+**Drift under five cents is not reported.** That is a lender rounding its annuity
+result up. Flag it and the Provider learns to ignore the notice.

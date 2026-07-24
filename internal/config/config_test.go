@@ -111,3 +111,35 @@ func TestNtfyMustBeHTTPS(t *testing.T) {
 		t.Error("channel-enabled flags are wrong")
 	}
 }
+
+func TestLoadReminders(t *testing.T) {
+	// Default when unset.
+	if r, err := loadReminders(); err != nil || len(r) != 3 || r[0].Days != 14 {
+		t.Fatalf("default reminders = %+v, %v", r, err)
+	}
+
+	t.Setenv("BITT_REMINDER_DAYS", "30, 7, 7, 1")
+	t.Setenv("BITT_REMINDER_BODY", "Owe {amount} on {tab} by {due}")
+	t.Setenv("BITT_REMINDER_BODY_1", "Last call: {amount} due tomorrow")
+	r, err := loadReminders()
+	if err != nil {
+		t.Fatalf("loadReminders: %v", err)
+	}
+	if len(r) != 3 { // 7 deduped
+		t.Fatalf("got %d reminders, want 3 (7 deduped): %+v", len(r), r)
+	}
+	if r[0].Days != 30 || r[2].Days != 1 {
+		t.Errorf("days = %d,%d,%d", r[0].Days, r[1].Days, r[2].Days)
+	}
+	if r[0].Body != "Owe {amount} on {tab} by {due}" {
+		t.Errorf("default body override not applied: %q", r[0].Body)
+	}
+	if r[2].Body != "Last call: {amount} due tomorrow" {
+		t.Errorf("per-day body override not applied: %q", r[2].Body)
+	}
+
+	t.Setenv("BITT_REMINDER_DAYS", "0,-3")
+	if _, err := loadReminders(); err == nil {
+		t.Error("a non-positive day count was accepted")
+	}
+}

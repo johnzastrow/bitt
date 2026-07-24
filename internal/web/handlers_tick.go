@@ -7,16 +7,12 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/johnzastrow/bitt/internal/config"
 	"github.com/johnzastrow/bitt/internal/money"
 	"github.com/johnzastrow/bitt/internal/notify"
 	"github.com/johnzastrow/bitt/internal/schedule"
 	"github.com/johnzastrow/bitt/internal/store"
 )
-
-// reminderDays are the lead times, in days before a due date, at which a
-// payment reminder goes out. The two-week entry doubles as the initial payment
-// request. Sorted descending only for readability.
-var reminderDays = []int{14, 7, 1}
 
 // postTick is the cron-driven delivery entry point.
 //
@@ -98,7 +94,8 @@ func (s *Server) runNotifications(ctx context.Context) (sent, skipped int) {
 			continue
 		}
 		lead := daysBetween(today, due)
-		if !isReminderLead(lead) {
+		spec, ok := s.reminderFor(lead)
+		if !ok {
 			continue
 		}
 		// Re-derive: nothing is owed means nothing to remind about.
@@ -116,7 +113,7 @@ func (s *Server) runNotifications(ctx context.Context) (sent, skipped int) {
 			if p.Role != store.RolePayee {
 				continue
 			}
-			did := s.notifyParticipant(ctx, tab, p, event, due, lead, balance)
+			did := s.notifyParticipant(ctx, tab, p, event, spec, due, lead, balance)
 			sent += did
 			if did == 0 {
 				skipped++
@@ -129,13 +126,13 @@ func (s *Server) runNotifications(ctx context.Context) (sent, skipped int) {
 // notifyParticipant delivers one reminder to one payee over each channel they
 // have enabled that has not already sent this event. Returns the number of
 // channels delivered on.
-func (s *Server) notifyParticipant(ctx context.Context, tab store.Tab, p store.Participant, event string, due schedule.Date, lead int, balance money.Cents) int {
+func (s *Server) notifyParticipant(ctx context.Context, tab store.Tab, p store.Participant, event string, spec config.Reminder, due schedule.Date, lead int, balance money.Cents) int {
 	user, err := s.store.GetUser(ctx, p.UserID)
 	if err != nil || !user.Active() {
 		return 0
 	}
 	rcpt := notify.Recipient{Email: user.Email, Topic: user.NtfyTopic}
-	msg := reminderMessage(tab, due, lead, balance)
+	msg := s.reminderMessage(spec, tab, due, lead, balance)
 
 	var delivered int
 	for _, ch := range channelsFor(user, s.notifier, rcpt) {
@@ -168,26 +165,53 @@ func channelsFor(u store.User, n *notify.Notifier, r notify.Recipient) []notify.
 	return out
 }
 
-// reminderMessage composes the notice. All user text (the tab name) goes only
-// into the body via the message builder; the title is app-authored.
-func reminderMessage(tab store.Tab, due schedule.Date, lead int, balance money.Cents) notify.Message {
-	owed := balance.Neg()
-	when := "soon"
-	switch lead {
-	case 14:
-		when = "in two weeks"
-	case 7:
-		when = "in one week"
-	case 1:
-		when = "tomorrow"
+// reminderMessage renders a reminder's admin-configured templates with the
+// per-send variables. A control character that reaches the title via the {tab}
+// variable is caught by the sender's header check, which fails the send closed.
+func (s *Server) reminderMessage(spec config.Reminder, tab store.Tab, due schedule.Date, lead int, balance money.Cents) notify.Message {
+	url := ""
+	if s.cfg.BaseURL != "" {
+		url = s.cfg.BaseURL + tabPath(tab.ID)
 	}
-	var b strings.Builder
-	b.WriteString("A payment on the tab \"" + tab.Name + "\" is due " + when + ", on " + due.Display() + ".\n")
-	b.WriteString(owed.Display() + " is owed.")
+	rep := strings.NewReplacer(
+		"{tab}", tab.Name,
+		"{amount}", balance.Neg().Display(),
+		"{due}", due.Display(),
+		"{days}", strconv.Itoa(lead),
+		"{when}", leadPhrase(lead),
+		"{url}", url,
+	)
 	return notify.Message{
-		Title: "Payment due " + when,
-		Body:  b.String(),
+		Title: strings.TrimSpace(rep.Replace(spec.Title)),
+		Body:  strings.TrimRight(rep.Replace(spec.Body), "\n "),
 	}
+}
+
+// leadPhrase renders a lead time as a human phrase for {when}.
+func leadPhrase(days int) string {
+	switch days {
+	case 0:
+		return "today"
+	case 1:
+		return "tomorrow"
+	case 7:
+		return "in one week"
+	case 14:
+		return "in two weeks"
+	default:
+		return "in " + strconv.Itoa(days) + " days"
+	}
+}
+
+// reminderFor returns the configured reminder rule whose lead time matches the
+// given days-until-due, if any.
+func (s *Server) reminderFor(days int) (config.Reminder, bool) {
+	for _, r := range s.cfg.Reminders {
+		if r.Days == days {
+			return r, true
+		}
+	}
+	return config.Reminder{}, false
 }
 
 // nextUnpaidDue returns the earliest scheduled due date that has not passed,
@@ -207,15 +231,6 @@ func (s *Server) nextUnpaidDue(ctx context.Context, tab store.Tab, today schedul
 // future store can index it; today it reuses the admin listing path.
 func (s *Server) allTabsForNotify(ctx context.Context) ([]store.Tab, error) {
 	return s.store.ListAllTabs(ctx)
-}
-
-func isReminderLead(days int) bool {
-	for _, d := range reminderDays {
-		if d == days {
-			return true
-		}
-	}
-	return false
 }
 
 // bearerToken extracts the token from an "Authorization: Bearer <token>" header.

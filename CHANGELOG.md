@@ -7,6 +7,23 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [0.7.1] - 2026-07-24 — Configurable reminder days and messages
+
+### Added
+- **Reminder lead times are configurable** via `BITT_REMINDER_DAYS` (e.g.
+  "14,7,1"), defaulting to the built-in 14/7/1. Deduped and validated.
+- **Reminder messages are configurable templates** with variables filled per
+  send: `{tab}`, `{amount}`, `{due}`, `{days}`, `{when}`, `{url}` (a link to the
+  tab's payment page, from `BITT_BASE_URL`). Set a default via
+  `BITT_REMINDER_TITLE` / `BITT_REMINDER_BODY`, or override one lead time with
+  `BITT_REMINDER_TITLE_<d>` / `BITT_REMINDER_BODY_<d>`. Templates are admin
+  (env) text; a `{tab}` value with a control character still fails the send
+  closed via the sender's header check.
+
+### Note
+- These are INSTANCE-WIDE defaults. Per-tab, provider-set reminders are the
+  intended next step (see HANDOFF.md) and will override these defaults.
+
 ## [0.7.0] - 2026-07-24 — Phase 5: notifications
 
 Payment reminders reach people who do not have the app open, over email and

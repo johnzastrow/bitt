@@ -54,7 +54,38 @@ type Config struct {
 	// Notify holds the notification delivery settings (Phase 5). A zero value
 	// means notifications are configured off, which is a valid way to run.
 	Notify NotifyConfig
+	// Reminders are the payment-reminder lead times and their message
+	// templates, in send order. Defaults to 14/7/1 days before the due date
+	// with a built-in message; each is overridable.
+	Reminders []Reminder
 }
+
+// Reminder is one payment-reminder rule: how many days before a due date it
+// fires, and the title and body templates for its message.
+//
+// Templates are ADMIN-configured (from the environment), so they are trusted
+// text. They interpolate a small set of {variables} filled per send:
+//
+//	{tab}     the tab name
+//	{amount}  the amount owed, e.g. "$505.65"
+//	{due}     the due date, e.g. "Aug 1, 2026"
+//	{days}    the lead time in days, e.g. "7"
+//	{when}    a phrase for the lead time, e.g. "in one week" / "tomorrow"
+//	{url}     a link to the tab's payment page (empty if BITT_BASE_URL is unset)
+//
+// A tab name substituted into a title is still run through the sender's header
+// check, so a control character in it fails the send closed rather than
+// injecting a header.
+type Reminder struct {
+	Days  int
+	Title string
+	Body  string
+}
+
+const (
+	defaultReminderTitle = "Payment due {when}"
+	defaultReminderBody  = "A payment on the tab \"{tab}\" is due {when}, on {due}.\n{amount} is owed.\n{url}"
+)
 
 // NotifyConfig is the delivery configuration for notifications.
 //
@@ -143,6 +174,11 @@ func Load() (Config, error) {
 	if err := c.Notify.validate(); err != nil {
 		return Config{}, err
 	}
+	rem, err := loadReminders()
+	if err != nil {
+		return Config{}, err
+	}
+	c.Reminders = rem
 	if c.BaseURL != "" && !strings.HasPrefix(c.BaseURL, "http://") && !strings.HasPrefix(c.BaseURL, "https://") {
 		return Config{}, fmt.Errorf("config: BITT_BASE_URL %q must start with http:// or https://", c.BaseURL)
 	}
@@ -252,6 +288,55 @@ func envBool(key string, def bool) bool {
 		return def
 	}
 	return b
+}
+
+// loadReminders builds the reminder rules from the environment. BITT_REMINDER_DAYS
+// is a comma-separated list of positive day counts (default "14,7,1"); each day
+// may carry its own BITT_REMINDER_TITLE_<d> / BITT_REMINDER_BODY_<d>, falling
+// back to BITT_REMINDER_TITLE / BITT_REMINDER_BODY, then to the built-ins.
+func loadReminders() ([]Reminder, error) {
+	days := []int{14, 7, 1}
+	if raw := strings.TrimSpace(os.Getenv("BITT_REMINDER_DAYS")); raw != "" {
+		days = nil
+		seen := map[int]bool{}
+		for _, part := range strings.Split(raw, ",") {
+			p := strings.TrimSpace(part)
+			if p == "" {
+				continue
+			}
+			n, err := strconv.Atoi(p)
+			if err != nil || n <= 0 || n > 3650 {
+				return nil, fmt.Errorf("config: BITT_REMINDER_DAYS has an invalid day %q (want a positive number of days)", p)
+			}
+			if !seen[n] {
+				seen[n] = true
+				days = append(days, n)
+			}
+		}
+		if len(days) == 0 {
+			return nil, fmt.Errorf("config: BITT_REMINDER_DAYS is set but lists no days")
+		}
+	}
+	defTitle := envOr("BITT_REMINDER_TITLE", defaultReminderTitle)
+	defBody := envOr("BITT_REMINDER_BODY", defaultReminderBody)
+	out := make([]Reminder, 0, len(days))
+	for _, d := range days {
+		out = append(out, Reminder{
+			Days:  d,
+			Title: envOr(fmt.Sprintf("BITT_REMINDER_TITLE_%d", d), defTitle),
+			Body:  envOr(fmt.Sprintf("BITT_REMINDER_BODY_%d", d), defBody),
+		})
+	}
+	return out, nil
+}
+
+// envOr returns the environment value or a default. It is the plain-value
+// sibling of loader.str, for non-secret settings that never use file:.
+func envOr(key, def string) string {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		return v
+	}
+	return def
 }
 
 func envInt(key string, def int) int {

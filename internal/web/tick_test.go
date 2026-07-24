@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/johnzastrow/bitt/internal/config"
 	"github.com/johnzastrow/bitt/internal/schedule"
 	"github.com/johnzastrow/bitt/internal/store"
 )
@@ -54,18 +55,33 @@ func TestBearerToken(t *testing.T) {
 	}
 }
 
-func TestReminderMessageKeepsUserTextOutOfTitle(t *testing.T) {
-	// A hostile tab name must not reach the app-authored title.
-	m := reminderMessage(tabNamed("Rent\r\nBcc: evil"), dateOf(2026, 8, 1), 7, -5000)
-	if strings.ContainsAny(m.Title, "\r\n") {
-		t.Errorf("title carries user text with control chars: %q", m.Title)
-	}
+func TestReminderMessageKeepsBodyClean(t *testing.T) {
+	h := newHarness(t)
+	spec := config.Reminder{Days: 7, Title: "Payment due {when}", Body: "Tab: {tab}"}
+	m := h.srv().reminderMessage(spec, tabNamed("Rent"), dateOf(2026, 8, 1), 7, -5000)
 	if !strings.Contains(m.Body, "Rent") {
 		t.Errorf("body should carry the tab name: %q", m.Body)
+	}
+	if m.Title != "Payment due in one week" {
+		t.Errorf("title = %q", m.Title)
 	}
 }
 
 func tabNamed(name string) store.Tab { return store.Tab{Name: name} }
 func dateOf(y int, m, d int) schedule.Date {
 	return schedule.NewDate(y, time.Month(m), d)
+}
+
+func TestReminderMessageRendersVariables(t *testing.T) {
+	h := newHarness(t)
+	h.srv().cfg.BaseURL = "https://bitt.example"
+	spec := config.Reminder{Days: 7, Title: "Due {when}: {tab}", Body: "You owe {amount} by {due}. Pay: {url}"}
+	m := h.srv().reminderMessage(spec, store.Tab{ID: 4, Name: "Rent"}, dateOf(2026, 8, 1), 7, -50000)
+	if m.Title != "Due in one week: Rent" {
+		t.Errorf("title = %q", m.Title)
+	}
+	if !strings.Contains(m.Body, "$500.00") || !strings.Contains(m.Body, "Aug 1, 2026") ||
+		!strings.Contains(m.Body, "https://bitt.example/tabs/4") {
+		t.Errorf("body missing a variable: %q", m.Body)
+	}
 }

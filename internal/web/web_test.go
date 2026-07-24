@@ -25,10 +25,11 @@ import (
 // harness is a running server plus a cookie-carrying client, so tests exercise
 // the same path a browser takes.
 type harness struct {
-	t      *testing.T
-	server *httptest.Server
-	client *http.Client
-	db     *sqlite.DB
+	server0 *Server
+	t       *testing.T
+	server  *httptest.Server
+	client  *http.Client
+	db      *sqlite.DB
 }
 
 func newHarness(t *testing.T) *harness { return newHarnessCfg(t, config.NotifyConfig{}) }
@@ -69,6 +70,7 @@ func newHarnessCfg(t *testing.T, nc config.NotifyConfig) *harness {
 		slog.New(slog.DiscardHandler))
 
 	ts := httptest.NewServer(srv.Handler())
+	_ = srv
 	t.Cleanup(ts.Close)
 
 	jar, err := cookiejar.New(nil)
@@ -76,7 +78,7 @@ func newHarnessCfg(t *testing.T, nc config.NotifyConfig) *harness {
 		t.Fatalf("cookie jar: %v", err)
 	}
 
-	return &harness{t: t, server: ts, db: db, client: &http.Client{Jar: jar}}
+	return &harness{t: t, server0: srv, server: ts, db: db, client: &http.Client{Jar: jar}}
 }
 
 // newClient returns a second harness against the same server with its own
@@ -876,3 +878,6 @@ func (h *harness) postRaw(t *testing.T, path, authHeader string) *http.Response 
 	t.Cleanup(func() { _ = resp.Body.Close() })
 	return resp
 }
+
+// srv returns the underlying Server for white-box tests.
+func (h *harness) srv() *Server { return h.server0 }

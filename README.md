@@ -10,7 +10,8 @@ Built for personal, self-hosted home use: family phone plans, shared insurance, 
 
 ## Status
 
-**Usable.** Phases 1-4 of 6 complete — 49 of 54 v1 requirements.
+**Feature-complete.** All six phases done — 54 of 54 v1 requirements. What
+remains is release polish (a milestone audit, then tag `v1.0.0`).
 
 ```
 make build && ./bittabby     # http://localhost:8080
@@ -28,7 +29,9 @@ be archived, which stops it billing without touching its history. Payoff loans
 track remaining balance, progress, and on-track/behind status; charge late fees
 (fixed or percentage, with grace and a cap) and declining-balance interest, both
 accruing lazily on read; and a payment request appears in-app two weeks before it
-is due. Pushed notifications (email/ntfy) and packaging are still to come.
+is due. Payment reminders are pushed by email and ntfy, the app ships as a
+non-root container on SQLite or MariaDB, and it installs to a phone home screen
+as a PWA that opens to a cached shell.
 
 - [docs/PROJECT.md](docs/PROJECT.md) — what this is, what it deliberately is not, and why
 - [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — 54 v1 requirements with stable IDs

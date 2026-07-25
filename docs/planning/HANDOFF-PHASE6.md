@@ -1,3 +1,16 @@
+# Handoff — Phase 6 (ship), complete, at 0.8.2
+
+> **Update (0.8.2):** Phase 6 is done. UI-05, the PWA, landed — manifest,
+> home-screen icons, a root-scoped service worker (network-first navigations,
+> a styled offline page, cache versioned off the asset digest), verified
+> headless including the offline path. **v1 is feature-complete, 54/54.** The
+> "next task" section below is kept for the record but is no longer outstanding.
+> What remains: deploy to `btabby.fluidgrid.site` (see
+> [DEPLOY-FLUIDGRID.md](DEPLOY-FLUIDGRID.md)) and release polish, then tag
+> `v1.0.0`.
+
+---
+
 # Handoff — Phase 6 (ship), 4 of 5 done, at 0.8.1
 
 Written 2026-07-24, to be read cold. Covers what shipped in Phase 6 so far, the

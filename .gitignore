@@ -4,6 +4,10 @@
 !.env.example
 *.pem
 *.key
+# The compose stacks read file-based secrets from ./secrets (tick secret, the
+# MariaDB DSN with its password, an SMTP password). None of it may ever be
+# committed -- ignore the whole directory.
+/secrets/
 
 # Data — never commit the financial store
 data/

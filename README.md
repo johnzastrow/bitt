@@ -71,4 +71,4 @@ This rewrite inverts the ordering. A usable application exists after Phase 1, an
 
 ## License
 
-Not yet chosen.
+[MIT](LICENSE).

@@ -1,98 +1,90 @@
 # BitTabby on recipe.fluidgrid.site, served at btabby.fluidgrid.site.
 #
-# This is the deployment described in docs/planning/DEPLOY-FLUIDGRID.md. It
-# differs from the general-purpose compose.yaml in three ways, each because this
-# host already provides a piece:
+# This matches the pattern the other sites on that host already use (actalog,
+# mealie): the container runs with network_mode: host, so it binds a loopback
+# port directly and reaches the host's MariaDB at 127.0.0.1:3306, and the host's
+# apt-installed Caddy reverse-proxies to that port. Full runbook and reasoning:
+# docs/planning/DEPLOY-FLUIDGRID.md.
 #
-#   1. The database is the host's MariaDB, not SQLite in a volume. With MariaDB
-#      as the backend every byte of state -- including avatars, which are BLOBs --
-#      lives in the database, so this container keeps NO data volume and runs
-#      with a read-only root filesystem.
-#   2. TLS is terminated by the host's Caddy, which already fronts the other
-#      sites. This app publishes only to loopback; Caddy reverse-proxies to it.
-#      Because it is reached over HTTPS, secure cookies and HSTS are on.
-#   3. It reaches the host's MariaDB over the Docker bridge via
-#      host.docker.internal, mapped to the host gateway.
+# Why this shape here (vs. the general-purpose compose.yaml):
+#   1. Database is the host's MariaDB, not SQLite in a volume. With MariaDB as
+#      the backend every byte of state -- avatars included, they are BLOBs --
+#      lives in the database, so this stack keeps NO data volume.
+#   2. TLS terminates at the host's Caddy; the app is reached only over HTTPS, so
+#      secure cookies and HSTS are on.
+#   3. network_mode: host -- the established pattern on this box -- so 127.0.0.1
+#      reaches the host MariaDB and the app binds :8091 on the host for Caddy.
 #
-# Bring it up (full runbook in docs/planning/DEPLOY-FLUIDGRID.md):
-#
+# Bring it up (from ~/bittdocker on the host):
 #   mkdir -p secrets
 #   head -c 32 /dev/urandom | base64 > secrets/tick_secret
-#   printf 'bitt:THEPASSWORD@tcp(host.docker.internal:3306)/btabby' > secrets/db_dsn
+#   printf 'btabby:THE_DB_PASSWORD@tcp(127.0.0.1:3306)/btabby' > secrets/db_dsn
 #   sudo chown 65532 secrets/tick_secret secrets/db_dsn
 #   chmod 600 secrets/tick_secret secrets/db_dsn
 #   docker compose -f compose.fluidgrid.yaml up -d
 #
-# The chown to 65532 is the one surprising step and it matters: Docker mounts a
-# secret file with the host's ownership unchanged, both containers run as uid
-# 65532, and the app refuses to start rather than run with a secret it cannot
-# read. Handing the files to 65532 is what makes mode 0600 work end to end.
+# The chown to 65532 is the one surprising step: Docker mounts a secret file with
+# the host's ownership unchanged, both containers run as uid 65532, and the app
+# fails closed rather than run with a secret it cannot read.
 
 services:
   bittabby:
-    # Pin a released tag in production rather than :latest, so a redeploy is a
-    # deliberate version change. Publish v1.0.0 via the release workflow first.
-    image: ghcr.io/johnzastrow/bitt:latest
+    # Pin a released tag in production so a redeploy is a deliberate version bump.
+    image: ghcr.io/johnzastrow/bitt:1.0.0
+    container_name: bittabby
     restart: unless-stopped
 
-    # Loopback only. The host's Caddy proxies to 127.0.0.1:8087; nothing on the
-    # network reaches the app except through Caddy and its TLS. If Caddy runs in
-    # a container instead, drop this block and join Caddy's network (see the
-    # deploy doc, "If Caddy runs in a container").
-    ports:
-      - "127.0.0.1:8087:8080"
-
-    # The host's MariaDB listens on the host, not in this compose project, so the
-    # app reaches it through the Docker bridge gateway under this name.
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    # The established pattern on this host: share the host network, so the app
+    # reaches the host MariaDB at 127.0.0.1 and binds its port on the host for
+    # Caddy. With network_mode: host, BITT_ADDR is the host bind; there is no
+    # separate published-ports mapping (and none is allowed).
+    network_mode: host
 
     environment:
-      # Reached over HTTPS through Caddy, so cookies carry Secure and the app
-      # emits HSTS. Never set this false on anything network-reachable.
+      # actalog holds :8080; btabby takes :8091. Caddy proxies localhost:8091.
+      BITT_ADDR: "127.0.0.1:8091"
+
+      # Reached over HTTPS through Caddy, so cookies carry Secure and HSTS is on.
       BITT_SECURE_COOKIES: "true"
 
-      # Every period boundary on this instance is computed in this zone. It seeds
-      # the first-run screen; after setup the stored value is authoritative.
+      # Every period boundary on this instance is computed in this zone; it seeds
+      # first-run, after which the stored value is authoritative.
       BITT_TIMEZONE: America/New_York
 
-      # The external origin, used to build the link in a reminder. It is not
-      # taken from a request Host header on purpose -- the only caller that needs
-      # it arrives on a cron request whose Host is attacker-influenced, and a
-      # link built from that is a phishing vector.
+      # The external origin, used to build the link in a reminder. Not taken from
+      # a request Host header on purpose -- a cron request's Host is
+      # attacker-influenced and a link built from it is a phishing vector.
       BITT_BASE_URL: https://btabby.fluidgrid.site
 
-      # The host's MariaDB. The DSN carries the password, so it comes from a
-      # file, never inline and never in a log. The app pins utf8mb4_bin and
-      # STRICT_ALL_TABLES on the connection itself, so the DSN only needs
-      # user:pass@tcp(host:port)/dbname.
+      # The host's MariaDB at 127.0.0.1 (reachable because of network_mode:host).
+      # The DSN carries the password, so it comes from a file, never inline and
+      # never in a log. The app pins utf8mb4_bin and STRICT_ALL_TABLES itself, so
+      # the DSN only needs user:pass@tcp(host:port)/dbname.
       BITT_DB_DRIVER: mariadb
       BITT_DB_DSN: file:/run/secrets/db_dsn
 
       # Authenticates the hourly reminder caller to /internal/tick. Unset means
-      # the endpoint refuses every request (fail closed), so reminders need it.
+      # the endpoint refuses every request (fail closed).
       BITT_TICK_SECRET: file:/run/secrets/tick_secret
 
-      # Notification delivery. Set here, or in the app under Notifications -- but
-      # an environment value WINS over one set there, so leave unset anything you
-      # want to manage in the app. The password, if any, is a file secret.
-      # BITT_SMTP_HOST: smtp.example.com
-      # BITT_SMTP_PORT: "587"
+      # Notification delivery -- the host uses smtp2go for actalog. Set here, or
+      # in the app under Notifications; an environment value WINS over the app, so
+      # leave unset anything you want to manage in the app. Password is a secret.
+      # BITT_SMTP_HOST: mail.smtp2go.com
+      # BITT_SMTP_PORT: "2525"
       # BITT_SMTP_USERNAME: bitt@fluidgrid.site
       # BITT_SMTP_PASSWORD: file:/run/secrets/smtp_password
       # BITT_EMAIL_FROM: BitTabby <bitt@fluidgrid.site>
-      # BITT_NTFY_URL: https://ntfy.sh
 
     secrets:
       - tick_secret
       - db_dsn
       # - smtp_password
 
-    # No data volume: with MariaDB the container holds no state. That also lets
-    # the root filesystem be read-only; the app writes nothing to disk, and the
-    # small tmpfs covers anything transient. If the app ever fails to start with
-    # a read-only-filesystem error, flip read_only to false and open an issue --
-    # it would mean something started writing locally that should not.
+    # No data volume: with MariaDB the container holds no state, which also lets
+    # the root filesystem be read-only. If it ever fails to start with a
+    # read-only-filesystem error, flip read_only to false and report it -- it
+    # would mean something began writing locally that should not.
     read_only: true
     tmpfs:
       - /tmp
@@ -101,16 +93,16 @@ services:
     cap_drop:
       - ALL
 
-  # The external caller that drives reminders. There is no timer inside the
-  # server by design. This posts hourly with the shared secret over the internal
-  # compose network, so it does not depend on the published loopback port.
-  # Sending is idempotent per (tab, event, channel): an hour that fires twice
-  # sends nothing twice, a missed hour sends late rather than never. A host
-  # crontab or systemd timer hitting https://btabby.fluidgrid.site/internal/tick
-  # works just as well -- see the deploy doc.
+  # The external caller that drives reminders -- there is no timer inside the
+  # server by design. It posts hourly with the shared secret. Sending is
+  # idempotent per (tab, event, channel): a doubled hour sends nothing twice, a
+  # missed hour sends late rather than never. On host networking it reaches the
+  # app at 127.0.0.1:8091. A host crontab or systemd timer works instead.
   reminders:
     image: curlimages/curl:latest
+    container_name: bittabby-reminders
     restart: unless-stopped
+    network_mode: host
     user: "65532:65532"
     depends_on:
       - bittabby
@@ -124,7 +116,7 @@ services:
           sleep 3600
           curl -fsS -X POST \
             -H "Authorization: Bearer $$(cat /run/secrets/tick_secret)" \
-            http://bittabby:8080/internal/tick || true
+            http://127.0.0.1:8091/internal/tick || true
         done
     read_only: true
     security_opt:

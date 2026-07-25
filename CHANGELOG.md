@@ -7,6 +7,42 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [1.0.0] - 2026-07-25 — v1
+
+All 54 v1 requirements are delivered, verified, and in use. This is the first
+tagged release and the first published image. Nothing in the app changed between
+0.8.2 and this tag — 1.0.0 marks the milestone, not new code.
+
+The version convention changes here. Up to now the minor tracked the delivered
+phase (pre-1.0). From 1.0.0 on it is ordinary semver: patch for a fix, minor for
+a backward-compatible feature, major for a break.
+
+### Added
+- **An MIT license.** The README's long-standing "license unset" item is closed.
+- **First release.** Tagging `v1.0.0` publishes `ghcr.io/johnzastrow/bitt` for
+  linux/amd64 and linux/arm64 with a provenance attestation, via the existing
+  release workflow.
+
+### What v1 is
+- One authoritative running balance per tab, always derived by summing an
+  append-only ledger — never a cached column. Integer USD cents, no float in the
+  money path.
+- Services and Payoff tabs; recurrence that posts lazily on read with no
+  background scheduler; late fees and declining-balance interest under the U.S.
+  Rule; corrections as reversing entries; per-period statements.
+- Email/ntfy payment reminders, driven by an external `/internal/tick` caller
+  that fails closed, kept entirely off the ledger path.
+- Argon2id auth with per-tab authorization on every request; a distroless,
+  non-root container on SQLite or MariaDB; file-based secrets; and an installable
+  shell-only PWA.
+
+### Deployment
+- First production deployment target documented and built:
+  **`btabby.fluidgrid.site`** on the `recipe.fluidgrid.site` host, on the host's
+  MariaDB behind its apt-installed Caddy, matching the pattern of the other sites
+  there (`network_mode: host`, Caddy reverse-proxying a loopback port). See
+  [docs/planning/DEPLOY-FLUIDGRID.md](docs/planning/DEPLOY-FLUIDGRID.md).
+
 ## [0.8.2] - 2026-07-25 — Installable as a PWA (UI-05)
 
 UI-05, the last of the 54 v1 requirements. The app now installs to a phone home

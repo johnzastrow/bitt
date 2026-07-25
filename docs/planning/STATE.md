@@ -85,6 +85,11 @@ service worker that caches the app shell, and home-screen icons, so the app
 installs to a phone and opens to a cached shell (data operations still require a
 connection). Self-contained; no backend risk.
 
+**Start from [HANDOFF-PHASE6.md](HANDOFF-PHASE6.md)** — it leads with UI-05, the
+concrete steps, and the app-specific traps (CSP, SW scope, cache versioning off
+the existing `AssetVersion` digest, and the shell-only-not-offline-data
+constraint).
+
 After that, v1 is feature-complete and the work is release polish: a milestone
 audit, a tagged `v1.0.0`, and the first published image via the release workflow.
 

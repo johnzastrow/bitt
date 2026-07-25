@@ -94,24 +94,29 @@ grants will fail loudly until you restore them.
 
 ---
 
-## Step 2 — Deploy dir and secrets
+## Step 2 — Deploy dir and .env
+
+The two secret values live in a `chmod 600` `.env` beside the compose file — the
+same way actalog carries its DB password on this host. That is what compose
+interpolates `${BITT_DB_DSN}` and `${BITT_TICK_SECRET}` from; it never reaches
+git (the repo's `.gitignore` covers `.env`) or a log (the app logs neither).
+This avoids the file-based-Docker-secret dance the general `compose.yaml` uses,
+which needs a `sudo chown 65532` the host's unprivileged deploy user cannot do.
 
 ```bash
-mkdir -p ~/bittdocker/secrets && cd ~/bittdocker
+mkdir -p ~/bittdocker && cd ~/bittdocker
 # copy compose.fluidgrid.yaml here (from the repo)
 
-head -c 32 /dev/urandom | base64 > secrets/tick_secret
-printf 'btabby:STRONG-PASSWORD@tcp(127.0.0.1:3306)/btabby' > secrets/db_dsn
-
-# Both containers run as uid 65532 and the app fails closed on an unreadable
-# secret. Hand the files to 65532 and lock the mode.
-sudo chown 65532 secrets/tick_secret secrets/db_dsn
-chmod 600 secrets/tick_secret secrets/db_dsn
+umask 177   # new files are 600
+cat > .env <<EOF
+BITT_DB_DSN=btabby:STRONG-PASSWORD@tcp(127.0.0.1:3306)/btabby
+BITT_TICK_SECRET=$(head -c 32 /dev/urandom | base64)
+EOF
+chmod 600 .env
 ```
 
-The DSN carries the password, so it is a file, never inline. The app adds
-collation and `sql_mode` itself, so `user:pass@tcp(127.0.0.1:3306)/btabby` is
-all it needs.
+The DSN carries the password. The app adds collation and `sql_mode` itself, so
+`user:pass@tcp(127.0.0.1:3306)/btabby` is all it needs.
 
 ---
 

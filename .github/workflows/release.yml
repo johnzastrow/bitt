@@ -2,9 +2,9 @@
 #
 #   git tag v0.7.4 && git push origin v0.7.4
 #
-# Produces ghcr.io/<owner>/bitt:0.7.4, :0.7, and :latest, for linux/amd64 and
-# linux/arm64 -- the second is not optional for this project, since a household
-# instance is as likely to be on a Raspberry Pi as on a server.
+# Produces ghcr.io/<owner>/bitt:0.7.4, :0.7, and :latest, for linux/amd64.
+# amd64 only, by project policy -- the deployment target is an amd64 host and no
+# ARM image is built.
 name: Release
 
 on:
@@ -50,7 +50,8 @@ jobs:
             exit 1
           fi
 
-      - uses: docker/setup-qemu-action@v3
+      # No QEMU: amd64 only, built natively on the amd64 runner, so there is no
+      # foreign architecture to emulate.
       - uses: docker/setup-buildx-action@v3
 
       - name: Sign in to ghcr.io
@@ -75,7 +76,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

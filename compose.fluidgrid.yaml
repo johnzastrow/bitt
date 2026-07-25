@@ -3,29 +3,25 @@
 # This matches the pattern the other sites on that host already use (actalog,
 # mealie): the container runs with network_mode: host, so it binds a loopback
 # port directly and reaches the host's MariaDB at 127.0.0.1:3306, and the host's
-# apt-installed Caddy reverse-proxies to that port. Full runbook and reasoning:
+# apt-installed Caddy reverse-proxies to that port. The two secret values come
+# from a chmod-600 .env beside this file -- the same way actalog carries its DB
+# password -- so they stay on the host, out of git, and out of any log (the app
+# never logs the DSN or the tick secret). Full runbook and reasoning:
 # docs/planning/DEPLOY-FLUIDGRID.md.
 #
-# Why this shape here (vs. the general-purpose compose.yaml):
-#   1. Database is the host's MariaDB, not SQLite in a volume. With MariaDB as
-#      the backend every byte of state -- avatars included, they are BLOBs --
-#      lives in the database, so this stack keeps NO data volume.
+# Why this shape (vs. the general-purpose compose.yaml, which uses SQLite in a
+# volume and file-based Docker secrets):
+#   1. Database is the host's MariaDB. With MariaDB every byte of state -- avatars
+#      included, they are BLOBs -- lives in the database, so this stack keeps NO
+#      data volume and runs with a read-only root filesystem.
 #   2. TLS terminates at the host's Caddy; the app is reached only over HTTPS, so
 #      secure cookies and HSTS are on.
-#   3. network_mode: host -- the established pattern on this box -- so 127.0.0.1
-#      reaches the host MariaDB and the app binds :8091 on the host for Caddy.
+#   3. network_mode: host so 127.0.0.1 reaches the host MariaDB and the app binds
+#      :8091 on the host for Caddy.
 #
-# Bring it up (from ~/bittdocker on the host):
-#   mkdir -p secrets
-#   head -c 32 /dev/urandom | base64 > secrets/tick_secret
-#   printf 'btabby:THE_DB_PASSWORD@tcp(127.0.0.1:3306)/btabby' > secrets/db_dsn
-#   sudo chown 65532 secrets/tick_secret secrets/db_dsn
-#   chmod 600 secrets/tick_secret secrets/db_dsn
+# Bring it up (from ~/bittdocker on the host, after creating .env -- see the
+# deploy doc):
 #   docker compose -f compose.fluidgrid.yaml up -d
-#
-# The chown to 65532 is the one surprising step: Docker mounts a secret file with
-# the host's ownership unchanged, both containers run as uid 65532, and the app
-# fails closed rather than run with a secret it cannot read.
 
 services:
   bittabby:
@@ -41,7 +37,7 @@ services:
     network_mode: host
 
     environment:
-      # actalog holds :8080; btabby takes :8091. Caddy proxies localhost:8091.
+      # actalog holds :8080; btabby takes :8091. Caddy proxies 127.0.0.1:8091.
       BITT_ADDR: "127.0.0.1:8091"
 
       # Reached over HTTPS through Caddy, so cookies carry Secure and HSTS is on.
@@ -57,29 +53,25 @@ services:
       BITT_BASE_URL: https://btabby.fluidgrid.site
 
       # The host's MariaDB at 127.0.0.1 (reachable because of network_mode:host).
-      # The DSN carries the password, so it comes from a file, never inline and
-      # never in a log. The app pins utf8mb4_bin and STRICT_ALL_TABLES itself, so
-      # the DSN only needs user:pass@tcp(host:port)/dbname.
+      # The DSN carries the password, so it comes from the chmod-600 .env, never
+      # inline here and never in a log. The app pins utf8mb4_bin and
+      # STRICT_ALL_TABLES itself, so the DSN only needs user:pass@tcp(...)/db.
       BITT_DB_DRIVER: mariadb
-      BITT_DB_DSN: file:/run/secrets/db_dsn
+      BITT_DB_DSN: ${BITT_DB_DSN:?set BITT_DB_DSN in .env}
 
       # Authenticates the hourly reminder caller to /internal/tick. Unset means
       # the endpoint refuses every request (fail closed).
-      BITT_TICK_SECRET: file:/run/secrets/tick_secret
+      BITT_TICK_SECRET: ${BITT_TICK_SECRET:?set BITT_TICK_SECRET in .env}
 
       # Notification delivery -- the host uses smtp2go for actalog. Set here, or
       # in the app under Notifications; an environment value WINS over the app, so
-      # leave unset anything you want to manage in the app. Password is a secret.
+      # leave unset anything you want to manage in the app. Put the password in
+      # .env as ${BITT_SMTP_PASSWORD}, never inline.
       # BITT_SMTP_HOST: mail.smtp2go.com
       # BITT_SMTP_PORT: "2525"
       # BITT_SMTP_USERNAME: bitt@fluidgrid.site
-      # BITT_SMTP_PASSWORD: file:/run/secrets/smtp_password
+      # BITT_SMTP_PASSWORD: ${BITT_SMTP_PASSWORD}
       # BITT_EMAIL_FROM: BitTabby <bitt@fluidgrid.site>
-
-    secrets:
-      - tick_secret
-      - db_dsn
-      # - smtp_password
 
     # No data volume: with MariaDB the container holds no state, which also lets
     # the root filesystem be read-only. If it ever fails to start with a
@@ -94,20 +86,20 @@ services:
       - ALL
 
   # The external caller that drives reminders -- there is no timer inside the
-  # server by design. It posts hourly with the shared secret. Sending is
-  # idempotent per (tab, event, channel): a doubled hour sends nothing twice, a
-  # missed hour sends late rather than never. On host networking it reaches the
-  # app at 127.0.0.1:8091. A host crontab or systemd timer works instead.
+  # server by design. It posts hourly with the shared secret (passed as an env
+  # var from the same .env). Sending is idempotent per (tab, event, channel): a
+  # doubled hour sends nothing twice, a missed hour sends late rather than never.
   reminders:
     image: curlimages/curl:latest
     container_name: bittabby-reminders
     restart: unless-stopped
     network_mode: host
-    user: "65532:65532"
     depends_on:
       - bittabby
-    secrets:
-      - tick_secret
+    environment:
+      TICK_SECRET: ${BITT_TICK_SECRET:?set BITT_TICK_SECRET in .env}
+    # $$TICK_SECRET is escaped from compose interpolation so the shell expands it
+    # at runtime, not compose at parse time.
     entrypoint:
       - sh
       - -c
@@ -115,7 +107,7 @@ services:
         while :; do
           sleep 3600
           curl -fsS -X POST \
-            -H "Authorization: Bearer $$(cat /run/secrets/tick_secret)" \
+            -H "Authorization: Bearer $$TICK_SECRET" \
             http://127.0.0.1:8091/internal/tick || true
         done
     read_only: true
@@ -123,11 +115,3 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-
-secrets:
-  tick_secret:
-    file: ./secrets/tick_secret
-  db_dsn:
-    file: ./secrets/db_dsn
-  # smtp_password:
-  #   file: ./secrets/smtp_password

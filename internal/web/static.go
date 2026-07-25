@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"io"
 	"io/fs"
+	"mime"
 	"net/http"
 	"path"
 	"sort"
@@ -16,6 +17,13 @@ import (
 //
 //go:embed static
 var staticFS embed.FS
+
+func init() {
+	// Go's mime table does not carry .webmanifest, so http.FileServer would
+	// serve the PWA manifest as octet-stream and some browsers would ignore it.
+	// Register the correct type once, at load.
+	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
+}
 
 var (
 	assetOnce sync.Once
@@ -68,6 +76,31 @@ func AssetVersion() string {
 // mattered.
 func AssetURL(name string) string {
 	return "/static/" + path.Clean(name) + "?v=" + AssetVersion()
+}
+
+// serviceWorkerHandler serves the service worker from the origin root (UI-05).
+//
+// A worker served from /static/sw.js would, by default, control only /static/.
+// To control the whole origin it must be served from the root, which is why this
+// exists as its own route rather than bending the static path. The script is the
+// same embedded file the digest already covers; it reads its own version from
+// the "?v=" the page registers it with, so nothing is templated in here.
+func serviceWorkerHandler() http.Handler {
+	body, err := staticFS.ReadFile("static/sw.js")
+	if err != nil {
+		panic("web: service worker missing from binary: " + err.Error())
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		// Redundant when served from root, but explicit and correct: this worker
+		// is allowed to claim the whole origin.
+		w.Header().Set("Service-Worker-Allowed", "/")
+		// The worker script itself is never cached, so an update check always
+		// sees the current bytes. The assets it precaches carry the digest and
+		// are cached hard; the worker is the one thing that must not be.
+		w.Header().Set("Cache-Control", "no-cache")
+		_, _ = w.Write(body)
+	})
 }
 
 // staticHandler serves the embedded assets.

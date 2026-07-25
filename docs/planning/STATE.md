@@ -4,13 +4,14 @@
 
 ## Where things stand
 
-**Phases 1–5 complete; Phase 6 (ship) is 4 of 5.** 53 of 54 v1 requirements
-delivered. Only UI-05 (the PWA) remains.
+**All six phases complete.** 54 of 54 v1 requirements delivered. v1 is
+feature-complete; what remains is release polish (a milestone audit, then tag
+`v1.0.0`) and the deployment to `btabby.fluidgrid.site`.
 
 | Item | State |
 |------|-------|
 | Repository | `main`, working tree clean |
-| Version | 0.8.1 |
+| Version | 0.8.2 |
 | Scope | 54 requirements, 6 phases |
 | Stack | Go 1.26 + templ + htmx 2.0.4 (vendored); SQLite or MariaDB |
 | Phase 1 | Complete — walking skeleton |
@@ -18,7 +19,7 @@ delivered. Only UI-05 (the PWA) remains.
 | Phase 3 | Complete — recurrence |
 | Phase 4 | Complete — payoff tabs, late fees, interest |
 | Phase 5 | Complete — notifications (email/ntfy, per-tab and instance settings) |
-| Phase 6 | In progress — Docker + deploy + backup/restore + MariaDB shipped; PWA remains |
+| Phase 6 | Complete — Docker, deploy, backup/restore, MariaDB, and the PWA (UI-05) |
 
 ## What works today
 
@@ -52,7 +53,7 @@ entry.
 | 3 | SCHED-01, 02, 03, 04, 05; CHG-01, 02, 04; TAB-02 (pulled forward) |
 | 4 | TAB-02; PAYOFF-01, 02, 03; FEE-01…07 |
 | 5 | Notifications (added by request; email/ntfy reminders, per-tab + instance config) |
-| 6 | DEPLOY-03 (MariaDB), 05 (Docker), 06 (secrets), 07 (backup/restore) — **UI-05 (PWA) outstanding** |
+| 6 | DEPLOY-03 (MariaDB), 05 (Docker), 06 (secrets), 07 (backup/restore), UI-05 (PWA) |
 
 ## Verification performed
 
@@ -80,18 +81,19 @@ entry.
 
 ## Next action
 
-**UI-05 — the PWA.** The one requirement left in v1: a web-app manifest, a
-service worker that caches the app shell, and home-screen icons, so the app
-installs to a phone and opens to a cached shell (data operations still require a
-connection). Self-contained; no backend risk.
+**v1 is feature-complete (54/54).** UI-05 (the PWA) landed in 0.8.2: a web app
+manifest, home-screen icons rasterised from the logo, a root-scoped service
+worker that caches the static shell (network-first for navigations, a styled
+offline page as the only fallback), and cache-versioning derived from the
+existing `AssetVersion` digest. Verified headless, including the offline path.
 
-**Start from [HANDOFF-PHASE6.md](HANDOFF-PHASE6.md)** — it leads with UI-05, the
-concrete steps, and the app-specific traps (CSP, SW scope, cache versioning off
-the existing `AssetVersion` digest, and the shell-only-not-offline-data
-constraint).
+Two things remain, both non-feature:
 
-After that, v1 is feature-complete and the work is release polish: a milestone
-audit, a tagged `v1.0.0`, and the first published image via the release workflow.
+1. **Deploy to `btabby.fluidgrid.site`** — a Docker Compose stack on the
+   `recipe.fluidgrid.site` host, behind the existing Caddy reverse proxy, on the
+   host's MariaDB. See [DEPLOY-FLUIDGRID.md](DEPLOY-FLUIDGRID.md) for the plan.
+2. **Release polish** — a milestone audit against the original intent, then tag
+   `v1.0.0` and let the release workflow publish the first image.
 
 ## Working agreement
 

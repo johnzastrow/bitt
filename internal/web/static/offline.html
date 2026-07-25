@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Offline -- BitTabby</title>
+    <!-- No version query: the service worker matches this with ignoreSearch, so
+         the precached stylesheet answers even with no network. Styles must stay
+         external -- the page CSP is style-src 'self'. -->
+    <link rel="stylesheet" href="/static/app.css" />
+  </head>
+  <body>
+    <main class="wrap">
+      <div class="offline">
+        <img class="offline-logo" src="/static/logo.svg" alt="" width="72" height="72" />
+        <h1>You're offline</h1>
+        <p>
+          BitTabby keeps one authoritative balance on the server, so it never
+          shows figures from a stale cache. Reconnect and the app picks up
+          exactly where it was.
+        </p>
+        <p><a class="button primary" href="/">Try again</a></p>
+      </div>
+    </main>
+  </body>
+</html>

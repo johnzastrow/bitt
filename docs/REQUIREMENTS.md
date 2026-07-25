@@ -7,7 +7,7 @@
 
 Requirements are grouped by area. Each carries a stable REQ-ID used for roadmap traceability.
 
-**Status:** Phases 1-4 complete and verified (49/54). Phase 5 (notifications) next, then Phase 6 (ship).
+**Status:** All six phases complete and verified (54/54). v1 is feature-complete; the remaining work is release polish (milestone audit, then tag `v1.0.0`).
 
 Phase 4 also added declining-balance interest on Payoff loans and in-app upcoming-payment notices, beyond the listed requirements, plus version display and a logo.
 
@@ -94,7 +94,7 @@ Driven entirely by the schedule's due dates. Reuses the lazy posting path.
 - [x] **UI-02**: The interface is mobile-first and fully usable on desktop
 - [x] **UI-03**: Settling from the dashboard takes one tap plus one confirmation, with every field prefilled and immediate visual feedback on success
 - [x] **UI-04**: Colors, spacing, and type are defined as design tokens using the Chalk & Pastel palette rather than hardcoded values
-- [ ] **UI-05**: The app installs to a phone home screen as a PWA and opens to a cached shell; all data operations require a connection
+- [x] **UI-05**: The app installs to a phone home screen as a PWA and opens to a cached shell; all data operations require a connection
 
 ### Deployment & Data (DEPLOY)
 
@@ -208,7 +208,7 @@ Requirement-to-phase mapping. Every phase after Phase 1 adds to an application a
 | UI-02 | Phase 1 | Complete |
 | UI-03 | Phase 2 | Complete |
 | UI-04 | Phase 2 | Complete |
-| UI-05 | Phase 6 | Pending |
+| UI-05 | Phase 6 | Complete |
 | DEPLOY-01 | Phase 1 | Complete |
 | DEPLOY-02 | Phase 1 | Complete |
 | DEPLOY-03 | Phase 6 | Complete |

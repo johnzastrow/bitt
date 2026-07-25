@@ -63,6 +63,9 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.Handle("GET /static/", http.StripPrefix("/static/", staticHandler()))
+	// The service worker is served from the root so its scope is the whole
+	// origin, not just /static/ (UI-05).
+	mux.Handle("GET /sw.js", serviceWorkerHandler())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("ok " + version.Short()))

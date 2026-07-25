@@ -7,6 +7,59 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [0.8.2] - 2026-07-25 — Installable as a PWA (UI-05)
+
+UI-05, the last of the 54 v1 requirements. The app now installs to a phone home
+screen and opens to a cached shell. It is **shell-only by design**: the service
+worker caches the static frame so the app paints instantly and looks native, but
+every data operation still hits the network. There is no offline ledger and no
+cached balance — the balance is derived server-side and must never be shown
+stale (LEDGER-03), so caching tab data would be a way to show a wrong number.
+
+### Added
+- **A web app manifest** (`internal/web/static/manifest.webmanifest`): name,
+  `display: standalone`, `start_url: /`, and background/theme colours from the
+  chalk palette. Served with `application/manifest+json` (a MIME type Go's table
+  does not carry, now registered) and linked from every page's `<head>`.
+- **Home-screen icons** rasterised from `logo.svg`: 192px and 512px (`any`), a
+  512px `maskable` variant with a generous safe zone so Android does not crop it,
+  and a 180px `apple-touch-icon` for iOS, which ignores manifest icons. The one
+  new set of binary assets, committed like the vendored htmx.
+- **A service worker** (`sw.js`), served from the origin root via a dedicated
+  `GET /sw.js` handler so its scope is the whole site — a worker under `/static/`
+  would control only `/static/`. It precaches the shell (stylesheet, htmx, the
+  scripts, the logo, the offline page, icons) and serves navigations
+  **network-first**, falling back to a cached offline page only when the network
+  is unreachable. Static assets are cache-first; nothing else is cached.
+- **A styled offline page** (`offline.html`) shown when a navigation cannot reach
+  the network. It renders from the cached stylesheet, so it looks like the app
+  rather than a browser error, and it says plainly why there is nothing to show.
+- **Theme-colour meta tags** for light and dark, and iOS web-app meta tags.
+
+### Cache versioning
+- The worker derives its cache name from the existing asset digest
+  (`web.AssetVersion`), passed to it as `?v=` on the registration URL via a
+  `<meta>` tag `sw-register.js` reads. A deploy changes the digest, which changes
+  the worker's script URL, which makes the browser install a fresh worker that
+  rebuilds the precache and drops the old one. The shell and its cache invalidate
+  together — the same mechanism that fixed the 0.5.2 stale-stylesheet bug, not a
+  second hand-maintained version string.
+
+### Verified
+- Full suite green including `-race`; new `pwa_test.go` pins the manifest, the
+  icons, the root-scoped worker headers, the version-tracks-digest link, and a
+  guard that the worker never references a tab route.
+- Driven headless (Playwright, localhost as a secure context): the worker
+  registers at scope `/` and activates, the manifest and all four icons resolve,
+  and — taken **offline** — a navigation serves the styled offline page from
+  cache while the cached stylesheet still applies. The one console error is the
+  pre-existing htmx indicator-stylesheet CSP notice, not new. The home-screen
+  install itself was checked by reason, not a real phone, per the standing rule.
+
+### Status
+- **v1 is feature-complete: 54 of 54 requirements.** What remains is release
+  polish — a milestone audit against the original intent, then tag `v1.0.0`.
+
 ## [0.8.1] - 2026-07-24 — MariaDB as a second backend
 
 DEPLOY-03. The store now runs on MariaDB (or MySQL) as well as SQLite, selected

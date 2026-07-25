@@ -39,8 +39,21 @@ templ Layout(p Page) {
 			<meta name="color-scheme" content="light dark"/>
 			<title>{ pageTitle(p.Title) }</title>
 			<link rel="stylesheet" href={ p.asset("app.css") }/>
+			<!-- PWA (UI-05). The manifest and icons make the app installable; the
+			     theme colours track the chalk palette in both schemes. The digest
+			     meta feeds sw-register.js the version to register the worker with,
+			     so a deploy rolls the worker's precache. -->
+			<link rel="manifest" href={ p.asset("manifest.webmanifest") }/>
+			<link rel="icon" href={ p.asset("logo.svg") } type="image/svg+xml"/>
+			<link rel="apple-touch-icon" href={ p.asset("apple-touch-icon.png") }/>
+			<meta name="theme-color" content="#f7f5f0" media="(prefers-color-scheme: light)"/>
+			<meta name="theme-color" content="#1c1f22" media="(prefers-color-scheme: dark)"/>
+			<meta name="apple-mobile-web-app-capable" content="yes"/>
+			<meta name="apple-mobile-web-app-title" content="BitTabby"/>
+			<meta name="bittabby-asset-version" content={ p.AssetVersion }/>
 			<script src={ p.asset("htmx.min.js") } defer></script>
 			<script src={ p.asset("counter.js") } defer></script>
+			<script src={ p.asset("sw-register.js") } defer></script>
 		</head>
 		<body
 			if p.CSRFToken != "" {

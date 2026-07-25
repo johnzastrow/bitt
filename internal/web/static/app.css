@@ -908,3 +908,15 @@ tr.reversal td { color: var(--fg-muted); }
    it like a fault would teach an operator to ignore the colour. */
 .pill-ready { color: var(--credit); }
 .pill-notready { color: var(--fg-muted); }
+
+/* The offline fallback page (UI-05). Served by the service worker when a
+   navigation cannot reach the network; it uses this same stylesheet from cache,
+   so it must lean on classes that are already here plus this small block. */
+.offline {
+  max-width: 30rem;
+  margin: var(--s6) auto;
+  text-align: center;
+}
+.offline-logo { opacity: 0.85; margin-bottom: var(--s3); }
+.offline h1 { margin: 0 0 var(--s3); }
+.offline p { color: var(--fg-muted); margin: 0 0 var(--s4); }

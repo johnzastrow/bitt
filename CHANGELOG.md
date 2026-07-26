@@ -7,6 +7,28 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [1.1.0] - 2026-07-25 — Admin can send a test notification
+
+### Added
+- **A "Send a test notification" button** on the admin Notifications screen. It
+  delivers a fixed test message to the requesting administrator over every
+  configured channel their account has a coordinate for — their email, and their
+  ntfy topic if they have set one on their profile — so delivery can be confirmed
+  end to end without waiting for a real reminder to come due. The button appears
+  only once a channel is configured.
+- New endpoint `POST /admin/notifications/test` (admin-only, CSRF-checked).
+
+### Notes
+- The test is a **pure side effect**: it posts no ledger entry and writes no
+  sent-notification claim, so it never touches the balance path and can be run as
+  often as needed without affecting or suppressing real reminders. It also
+  ignores the admin's own per-channel reminder toggles — a request to test should
+  not be silenced by an opt-out from reminders.
+- The per-channel result (sent, or a one-line failure reason) is shown to the
+  admin. Delivery errors describe the transport and, by the notify package's
+  construction, never carry the SMTP password or ntfy token, so surfacing them to
+  the administrator debugging their own instance is safe — and the point.
+
 ## [1.0.0] - 2026-07-25 — v1
 
 All 54 v1 requirements are delivered, verified, and in use. This is the first

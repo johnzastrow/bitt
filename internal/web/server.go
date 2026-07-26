@@ -132,6 +132,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /admin/notifications", s.requireAdmin(http.HandlerFunc(s.getAdminNotify)))
 	mux.Handle("POST /admin/notifications/delivery", s.requireAdmin(http.HandlerFunc(s.postAdminDelivery)))
 	mux.Handle("POST /admin/notifications/reminders", s.requireAdmin(http.HandlerFunc(s.postAdminReminders)))
+	mux.Handle("POST /admin/notifications/test", s.requireAdmin(http.HandlerFunc(s.postAdminNotifyTest)))
 
 	return s.securityHeaders(s.recoverPanic(mux))
 }

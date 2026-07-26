@@ -98,6 +98,18 @@ templ AdminNotify(p Page, d AdminNotifyData) {
 					</span>
 				</li>
 			</ul>
+			if d.EmailReady || d.NtfyReady {
+				<form method="post" action="/admin/notifications/test" class="stack">
+					<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+					<p class="muted small">
+						Send a test to yourself over every configured channel your account has a coordinate for -- your
+						email, and your ntfy topic if you have set one on your profile. It confirms delivery works without
+						waiting for a reminder to come due, touches no ledger, and records nothing, so run it as often as
+						you like.
+					</p>
+					<button type="submit">Send a test notification</button>
+				</form>
+			}
 		</section>
 		<section class="card">
 			<h2>Credentials</h2>

@@ -148,6 +148,33 @@ func TestSetSchedule(t *testing.T) {
 	}
 }
 
+// TestSetScheduleNoOpSucceeds guards the MariaDB "rows changed vs matched"
+// trap. Saving the same schedule a second time changes no column, so MySQL and
+// MariaDB report zero affected rows by default -- and the store reads zero as
+// ErrNotFound, which surfaced in production as a 500 when a provider re-saved a
+// tab's schedule without altering it. The fix is clientFoundRows on the MariaDB
+// connection (rows matched, not changed); this pins it on both backends. On
+// SQLite it has always passed, so it is a cross-backend regression guard that
+// bites only when run against a real MariaDB (BITT_TEST_MARIADB_DSN).
+func TestSetScheduleNoOpSucceeds(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	user := mustUser(t, db, "a@example.com")
+	tab := mustTab(t, db, user.ID)
+
+	want := schedule.Schedule{
+		Kind: schedule.MonthlyDay, Anchor: day(2026, time.March, 15), Billing: schedule.InAdvance,
+	}
+	if err := db.SetSchedule(ctx, tab.ID, want); err != nil {
+		t.Fatalf("first set schedule: %v", err)
+	}
+	// The same values again: the row matches but nothing changes. This must be a
+	// success, not ErrNotFound, and not any other error.
+	if err := db.SetSchedule(ctx, tab.ID, want); err != nil {
+		t.Fatalf("re-saving an identical schedule failed: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Period claims (SCHED-03, SCHED-04)
 // ---------------------------------------------------------------------------

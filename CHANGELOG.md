@@ -7,6 +7,32 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [1.1.1] - 2026-07-26 — MariaDB no-op-save 500, and log improvements
+
+### Fixed
+- **Re-saving an unchanged tab setting no longer 500s on MariaDB.** Hit in
+  production twice — `POST /tabs/1/schedule` and `/tabs/1/fee` both returned
+  `store: not found`. Root cause: MySQL/MariaDB's `UPDATE` reports rows *changed*,
+  so writing a row's existing values back reports zero affected rows, and the
+  store read zero as "no such row" → `ErrNotFound` → 500. SQLite counts a matched
+  row as affected, so it never surfaced there. Fixed at the source with
+  `clientFoundRows` on the MariaDB connection (report rows *matched*, like
+  SQLite), which corrects every one of the ~13 `Set`/`Update` methods at once.
+  A new `TestNoOpUpdatesSucceed` re-saves each with identical values and is run
+  against a real MariaDB in CI; a dedicated `TestSetScheduleNoOpSucceeds` pins
+  the specific case.
+
+### Logging
+- **Security logs now record the real client IP behind the proxy.** `clientIP`
+  reads `X-Forwarded-For`, but only from a loopback peer (the host's Caddy) and
+  only the right-most entry the proxy appended, so a client cannot forge it. A
+  direct request still uses its connection address. Before this, every logged
+  event behind Caddy showed `127.0.0.1`. Covered by `TestClientIP`, including the
+  spoofing cases.
+- **Container logs rotate.** `compose.fluidgrid.yaml` sets the json-file driver
+  with `max-size`/`max-file`, so `docker logs bittabby` keeps a bounded, useful
+  history for diagnosis instead of growing without limit.
+
 ## [1.1.0] - 2026-07-25 — Admin can send a test notification
 
 ### Added

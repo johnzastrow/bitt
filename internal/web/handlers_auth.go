@@ -2,6 +2,7 @@ package web
 
 import (
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -204,10 +205,42 @@ func emailDomain(email string) string {
 // clientIP reports the peer address. Proxy headers are deliberately ignored:
 // they are trivially forged, and on a household deployment the peer address is
 // the honest value.
+// clientIP returns the client's address for a log line.
+//
+// Behind a reverse proxy the connection's RemoteAddr is the proxy, so a security
+// log would otherwise record the proxy for every event. When the immediate peer
+// is loopback -- which is where the app is reached from in production, through
+// the host's Caddy -- the real client is taken from X-Forwarded-For instead.
+//
+// The header is trusted ONLY from a loopback peer: a request straight off the
+// network could forge it, but one from 127.0.0.1 came through our own proxy. And
+// the RIGHT-most entry is used, not the left-most: the proxy appends the address
+// it actually saw, so a client that prepends a forged entry cannot displace it.
+// A direct, unproxied request falls back to its own RemoteAddr.
 func clientIP(r *http.Request) string {
-	host := r.RemoteAddr
-	if i := strings.LastIndex(host, ":"); i > 0 {
-		host = host[:i]
+	host := hostOnly(r.RemoteAddr)
+	if isLoopback(host) {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			if last := strings.TrimSpace(parts[len(parts)-1]); last != "" {
+				return last
+			}
+		}
 	}
 	return host
+}
+
+// hostOnly strips the port from a host:port address, IPv6-safe (unlike a bare
+// last-colon split, which mangles "[::1]:443").
+func hostOnly(addr string) string {
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		return h
+	}
+	return addr
+}
+
+// isLoopback reports whether host is a loopback IP literal.
+func isLoopback(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

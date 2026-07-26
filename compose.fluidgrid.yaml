@@ -26,9 +26,19 @@
 services:
   bittabby:
     # Pin a released tag in production so a redeploy is a deliberate version bump.
-    image: ghcr.io/johnzastrow/bitt:1.1.0
+    image: ghcr.io/johnzastrow/bitt:1.1.1
     container_name: bittabby
     restart: unless-stopped
+
+    # The app logs structured events and errors to stdout (log/slog). Docker's
+    # json-file driver captures and rotates them: read with `docker logs
+    # bittabby`, and old lines roll off rather than filling the disk. 10 MB x 5
+    # files keeps a useful history for diagnosis without unbounded growth.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
     # The established pattern on this host: share the host network, so the app
     # reaches the host MariaDB at 127.0.0.1 and binds its port on the host for
@@ -94,6 +104,11 @@ services:
     container_name: bittabby-reminders
     restart: unless-stopped
     network_mode: host
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
     depends_on:
       - bittabby
     environment:

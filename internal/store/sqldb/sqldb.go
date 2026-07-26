@@ -164,6 +164,18 @@ func mariaDSN(raw string) (string, error) {
 		return "", errors.New("sqldb: BITT_DB_DSN names no database")
 	}
 	cfg.ParseTime = false
+	// Report rows MATCHED by an UPDATE's WHERE, not rows CHANGED. MySQL/MariaDB
+	// default to changed, so an UPDATE that writes a row's existing values back
+	// (saving a form without altering a field) returns RowsAffected()==0 -- and
+	// the store reads 0 as "no such row" and raises store.ErrNotFound, turning an
+	// idempotent re-save into a 500. SQLite counts a matched row as affected
+	// whether or not a value changed, so this bug is MariaDB-only and never
+	// showed in the SQLite suite. clientFoundRows aligns the two: on both
+	// backends RowsAffected()==0 now means the id matched nothing, which is what
+	// every "== 0 -> ErrNotFound" check in this package intends. It is safe for
+	// the one conditional update here (removed_at IS NULL): a matched row there
+	// always changes, so matched and changed agree.
+	cfg.ClientFoundRows = true
 	if cfg.Params == nil {
 		cfg.Params = map[string]string{}
 	}

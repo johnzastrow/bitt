@@ -4,14 +4,19 @@
 
 ## Where things stand
 
-**All six phases complete.** 54 of 54 v1 requirements delivered. v1 is
-feature-complete; what remains is release polish (a milestone audit, then tag
-`v1.0.0`) and the deployment to `btabby.fluidgrid.site`.
+**Shipped and deployed.** All 54 v1 requirements delivered; tagged `v1.0.0`,
+then `v1.1.0` adding an admin "send a test notification" action. **Live in
+production at https://btabby.fluidgrid.site** — a Docker Compose stack on the
+`recipe.fluidgrid.site` host, on the host's MariaDB (`btabby` database),
+`network_mode: host` behind the host's apt Caddy, matching the other sites there.
+The repo is public at github.com/johnzastrow/bitt (MIT), images publish to
+`ghcr.io/johnzastrow/bitt` (amd64 only, by policy).
 
 | Item | State |
 |------|-------|
-| Repository | `main`, working tree clean |
-| Version | 0.8.2 |
+| Repository | `main`, public, working tree clean |
+| Version | 1.1.0 |
+| Deployment | Live at https://btabby.fluidgrid.site (host MariaDB, Caddy, ~/bittdocker) |
 | Scope | 54 requirements, 6 phases |
 | Stack | Go 1.26 + templ + htmx 2.0.4 (vendored); SQLite or MariaDB |
 | Phase 1 | Complete — walking skeleton |

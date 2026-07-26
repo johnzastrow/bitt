@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"errors"
+	"net/smtp"
 	"strings"
 	"testing"
 
@@ -86,6 +87,30 @@ func TestWith(t *testing.T) {
 	// The safe HTTP client (and its SSRF-checking dialer) is shared, not dropped.
 	if got.client != base.client {
 		t.Error("With did not share the base client")
+	}
+}
+
+// WithMailer swaps the SMTP sender for delivery, carrying the config and client
+// over, and does not mutate the receiver (a nil receiver is safe).
+func TestWithMailer(t *testing.T) {
+	if (*Notifier)(nil).WithMailer(func(string, smtp.Auth, string, []string, []byte) error { return nil }) != nil {
+		t.Error("nil.WithMailer(...) should be nil")
+	}
+
+	base := New(config.NotifyConfig{SMTPHost: "mail.example", SMTPPort: 587, EmailFrom: "bitt@example.com"})
+	var called bool
+	got := base.WithMailer(func(string, smtp.Auth, string, []string, []byte) error {
+		called = true
+		return nil
+	})
+	if err := got.Deliver(context.Background(), ChannelEmail, Recipient{Email: "p@example.com"}, Message{Title: "Hi", Body: "there"}); err != nil {
+		t.Fatalf("deliver through the injected mailer: %v", err)
+	}
+	if !called {
+		t.Error("the injected mailer was not used")
+	}
+	if base.sendMail != nil {
+		t.Error("WithMailer mutated the receiver's sender")
 	}
 }
 

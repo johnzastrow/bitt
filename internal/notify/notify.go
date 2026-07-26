@@ -168,6 +168,23 @@ func (n *Notifier) With(cfg config.NotifyConfig) *Notifier {
 // Enabled reports whether any channel is configured.
 func (n *Notifier) Enabled() bool { return n.cfg.EmailEnabled() || n.cfg.NtfyEnabled() }
 
+// MailFunc is the SMTP send signature, identical to smtp.SendMail. It exists so
+// a caller can route mail through an alternative transport -- a custom dialer,
+// or a test double that captures the message instead of contacting a server.
+type MailFunc = func(addr string, a smtp.Auth, from string, to []string, msg []byte) error
+
+// WithMailer returns a copy of n whose email delivery goes through fn instead of
+// smtp.SendMail. It mirrors With: the config and the SSRF-safe HTTP client are
+// carried over, only the mail sender is swapped. A nil receiver returns nil.
+func (n *Notifier) WithMailer(fn MailFunc) *Notifier {
+	if n == nil {
+		return nil
+	}
+	out := *n
+	out.sendMail = fn
+	return &out
+}
+
 // Deliver sends m to r over the given channel. It returns nil only on a
 // confirmed success, which is what lets the caller claim a send-then-claim
 // notification (decision D2) exactly when it actually went out.

@@ -7,6 +7,42 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [1.2.0] - 2026-07-26 — Tab administrators; create form keeps your entries
+
+### Added
+- **A per-tab administrator role.** Someone can now be attached to a tab as an
+  administrator, not only a payee. A tab administrator is a member who helps run
+  the tab: they can change its settings, schedule, items, and people, and they
+  bill and transact on it (charges, adjustments, payments, undo) the way the
+  Provider can — without being the Provider (the single biller set at creation).
+  It is distinct from the instance-wide administrator, who may manage any tab but
+  is never a party to the money on one they are not a member of. The attach
+  control on the tab's people section now offers "as a payee" or "as an
+  administrator". Schema migration `0011` widens the participant role.
+
+### Changed
+- **The new-tab form keeps what you typed when a field is wrong.** A validation
+  error used to send you back to an empty form; now it re-renders in place with
+  every entry intact — name, description, kind, loan fields, line items, and a
+  valid schedule or fee — and shows the error, so one mistake no longer discards
+  a carefully filled form.
+
+### Authorization notes
+- Billing actions (charge, adjustment) and undoing any entry now admit the
+  Provider **or** a per-tab administrator, both as members; a Payee still only
+  records and undoes their own entries, and the instance administrator still
+  cannot move money on a tab they are not a member of. Covered by tests across
+  the whole role matrix.
+
+### Verified
+- Migration `0011` applies and is idempotent on both backends; the `admin` role
+  round-trips (the MariaDB path rebuilds the table, since its inline CHECK is
+  auto-named `role` — a reserved word MariaDB's `DROP CONSTRAINT`/`DROP CHECK`
+  cannot resolve). New tests cover attach-as-admin, a tab admin managing and
+  transacting, a payee still being unable to manage or bill, an unknown role
+  being refused, and the create form preserving entries on error. Full suite
+  green on SQLite and against a real MariaDB.
+
 ## [1.1.1] - 2026-07-26 — MariaDB no-op-save 500, and log improvements
 
 ### Fixed

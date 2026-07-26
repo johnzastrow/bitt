@@ -392,10 +392,10 @@ func (s *Server) postUndo(w http.ResponseWriter, r *http.Request) {
 		s.denyTab(w, r, err)
 		return
 	}
-	// A Provider may undo anything on their tab. A Payee may undo only what
-	// they recorded themselves, so one participant cannot silently reverse the
-	// other's entries.
-	if role != store.RoleProvider && original.ActorUserID != user.ID {
+	// A Provider or a per-tab administrator may undo anything on the tab. A Payee
+	// may undo only what they recorded themselves, so one participant cannot
+	// silently reverse the other's entries.
+	if !billsTab(role) && original.ActorUserID != user.ID {
 		s.log.Warn("undo denied: not the author",
 			"tab_id", tab.ID, "entry_seq", seq, "user_id", user.ID)
 		redirectWith(w, r, tabPath(id), "err", "You can only undo entries you recorded.")
@@ -468,11 +468,25 @@ func (s *Server) postParticipant(w http.ResponseWriter, r *http.Request) {
 	}
 	tab := acc.Tab
 
-	// Only a Provider decides who is on their tab.
-	role, err := s.store.ParticipantRole(r.Context(), tab.ID, user.ID)
-	if err != nil || role != store.RoleProvider {
-		s.log.Warn("attach denied", "tab_id", tab.ID, "user_id", user.ID, "role", role)
-		redirectWith(w, r, tabPath(id), "err", "Only the provider can attach someone to this tab.")
+	// Managing who is on a tab is a management action: its Provider, a per-tab
+	// administrator, or the instance administrator may.
+	if !acc.CanManage() {
+		s.log.Warn("attach denied", "tab_id", tab.ID, "user_id", user.ID, "role", acc.Role)
+		redirectWith(w, r, tabPath(id), "err", "Only the provider or a tab administrator can attach someone to this tab.")
+		return
+	}
+
+	// The role to attach as: a payee (the default) or a per-tab administrator. A
+	// second Provider is not attachable here -- the biller is set at creation and
+	// changed only by transferring the tab, not by adding another.
+	var attachRole store.Role
+	switch strings.TrimSpace(r.PostFormValue("role")) {
+	case "", string(store.RolePayee):
+		attachRole = store.RolePayee
+	case string(store.RoleAdmin):
+		attachRole = store.RoleAdmin
+	default:
+		redirectWith(w, r, tabPath(id), "err", "Choose whether to add them as a payee or an administrator.")
 		return
 	}
 
@@ -497,7 +511,7 @@ func (s *Server) postParticipant(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err = s.store.AddParticipant(r.Context(), store.Participant{
-		TabID: tab.ID, UserID: target.ID, Role: store.RolePayee,
+		TabID: tab.ID, UserID: target.ID, Role: attachRole,
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
@@ -508,8 +522,13 @@ func (s *Server) postParticipant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.log.Info("payee attached", "tab_id", tab.ID, "payee_user_id", target.ID, "by_user_id", user.ID)
-	redirectWith(w, r, tabPath(id), "ok", target.DisplayName+" is now on this tab.")
+	s.log.Info("participant attached", "tab_id", tab.ID, "target_user_id", target.ID,
+		"role", string(attachRole), "by_user_id", user.ID)
+	joinWord := "a payee"
+	if attachRole == store.RoleAdmin {
+		joinWord = "an administrator"
+	}
+	redirectWith(w, r, tabPath(id), "ok", target.DisplayName+" is now on this tab as "+joinWord+".")
 }
 
 // postParticipantRemove detaches someone from a tab (TAB-03).
@@ -604,14 +623,14 @@ func (s *Server) postAdjustment(w http.ResponseWriter, r *http.Request) {
 	}
 	tab := acc.Tab
 
-	// Membership, and the Provider role within it. An administrator reaching a
-	// tab they are not party to must not move what two other people owe each
-	// other, which is why this checks the participant role rather than
-	// stopping at authorizeTab.
+	// Membership, and a billing role within it (Provider or per-tab
+	// administrator). The instance administrator reaching a tab they are not
+	// party to must not move what two other people owe each other, which is why
+	// this checks the participant role rather than stopping at authorizeTab.
 	role, err := s.store.ParticipantRole(r.Context(), tab.ID, user.ID)
-	if err != nil || role != store.RoleProvider {
+	if err != nil || !billsTab(role) {
 		s.log.Warn("adjustment denied", "tab_id", tab.ID, "user_id", user.ID, "role", role)
-		redirectWith(w, r, tabPath(id), "err", "Only the provider can adjust what is owed on this tab.")
+		redirectWith(w, r, tabPath(id), "err", "Only the provider or a tab administrator can adjust what is owed on this tab.")
 		return
 	}
 

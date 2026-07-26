@@ -588,6 +588,7 @@ select {
 
 .pill-provider { color: var(--sky-deep); }
 .pill-payee    { color: var(--fg-muted); }
+.pill-admin    { color: var(--sun-deep); }
 .pill-reversal { color: var(--fg-muted); }
 
 /* A reversed entry stays visible but recedes: the history is the record, and

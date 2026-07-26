@@ -26,7 +26,7 @@
 services:
   bittabby:
     # Pin a released tag in production so a redeploy is a deliberate version bump.
-    image: ghcr.io/johnzastrow/bitt:1.1.1
+    image: ghcr.io/johnzastrow/bitt:1.2.0
     container_name: bittabby
     restart: unless-stopped
 

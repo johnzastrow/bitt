@@ -121,7 +121,17 @@ const (
 	RoleProvider Role = "provider"
 	// RolePayee pays on the tab.
 	RolePayee Role = "payee"
+	// RoleAdmin is a per-tab administrator: a member who can manage the tab's
+	// settings, schedule, items, and people, and who transacts on it as a
+	// member, without being its Provider (the single biller). It is added when a
+	// household wants a second person to help run a tab.
+	RoleAdmin Role = "admin"
 )
+
+// Valid reports whether r is a role the app assigns.
+func (r Role) Valid() bool {
+	return r == RoleProvider || r == RolePayee || r == RoleAdmin
+}
 
 // PaymentMethod records how money actually moved, since it moves outside
 // BitTabby (PAY-02).

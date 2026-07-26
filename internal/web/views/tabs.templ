@@ -304,7 +304,49 @@ templ SettleConfirm(p Page, c TabCard) {
 // Nothing hidden is ever `required`: a hidden required field blocks submission
 // with a validation message the browser cannot even show. Every one of these is
 // validated server-side by kind, which is the real gate.
-templ NewTab(p Page) {
+// NewTabForm carries what a create-tab submission contained, so a validation
+// error re-renders the form with the user's entries intact rather than sending
+// them back to a blank one. A zero value is the first, empty render.
+type NewTabForm struct {
+	Name        string
+	Description string
+	// Kind is the selected kind value; empty selects the first (the default).
+	Kind        string
+	LoanAmount  string
+	InterestAPR string
+	LoanTerm    string
+	LoanPayment string
+	Items       []ItemInput
+	// Schedule and Fee are reconstructed best-effort for the shared sub-forms,
+	// which pre-fill from a typed value. A field that was itself invalid falls
+	// back to blank while every other entry is kept.
+	Schedule schedule.Schedule
+	Fee      fee.Policy
+}
+
+// ItemInput is one line-item row's raw strings, echoed back as typed.
+type ItemInput struct{ Name, Amount string }
+
+// ItemRows returns at least three rows, padding with blanks, so the form always
+// shows three item lines while keeping any the user filled.
+func (f NewTabForm) ItemRows() []ItemInput {
+	rows := f.Items
+	for len(rows) < 3 {
+		rows = append(rows, ItemInput{})
+	}
+	return rows
+}
+
+// KindChecked reports whether the radio for kind k should be checked: the one
+// the user chose, or the first when none was chosen.
+func (f NewTabForm) KindChecked(k store.TabKind, i int) bool {
+	if f.Kind == "" {
+		return i == 0
+	}
+	return f.Kind == string(k)
+}
+
+templ NewTab(p Page, f NewTabForm) {
 	@Layout(p) {
 		<section class="card form">
 			<h1>New tab</h1>
@@ -312,11 +354,11 @@ templ NewTab(p Page) {
 				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
 				<label>
 					Name
-					<input type="text" name="name" required autofocus placeholder="Family phone plan"/>
+					<input type="text" name="name" required autofocus placeholder="Family phone plan" value={ f.Name }/>
 				</label>
 				<label>
 					What this covers
-					<input type="text" name="description" placeholder="Optional"/>
+					<input type="text" name="description" placeholder="Optional" value={ f.Description }/>
 				</label>
 				<fieldset class="stack kindchoice">
 					<legend>Kind</legend>
@@ -327,7 +369,7 @@ templ NewTab(p Page) {
 								name="kind"
 								id={ "kind-" + string(k) }
 								value={ string(k) }
-								checked?={ i == 0 }
+								checked?={ f.KindChecked(k, i) }
 							/>
 							<span>
 								<strong>{ k.Label() }</strong>
@@ -340,20 +382,20 @@ templ NewTab(p Page) {
 					<legend>The loan</legend>
 					<label>
 						Loan amount
-						<input type="text" name="loan_amount" inputmode="decimal" placeholder="22000.00"/>
+						<input type="text" name="loan_amount" inputmode="decimal" placeholder="22000.00" value={ f.LoanAmount }/>
 						<small>Posts once as the opening balance &mdash; the amount the payments draw down.</small>
 					</label>
 					<label>
 						Annual interest rate %
-						<input type="text" name="interest_apr" inputmode="decimal" placeholder="0 for an interest-free loan"/>
+						<input type="text" name="interest_apr" inputmode="decimal" placeholder="0 for an interest-free loan" value={ f.InterestAPR }/>
 					</label>
 					<label>
 						Number of payments
-						<input type="number" name="loan_term" min="0" max={ strconv.Itoa(schedule.MaxPeriods) } placeholder="e.g. 48 &mdash; blank for open-ended"/>
+						<input type="number" name="loan_term" min="0" max={ strconv.Itoa(schedule.MaxPeriods) } placeholder="e.g. 48 &mdash; blank for open-ended" value={ f.LoanTerm }/>
 					</label>
 					<label>
 						Scheduled payment
-						<input type="text" name="loan_payment" inputmode="decimal" placeholder="What the lender charges each period"/>
+						<input type="text" name="loan_payment" inputmode="decimal" placeholder="What the lender charges each period" value={ f.LoanPayment }/>
 						<small>
 							Enter what your lender actually charges, even if it differs from the figure this works
 							out &mdash; the tab will show both rather than overriding yours.
@@ -366,15 +408,15 @@ templ NewTab(p Page) {
 						Items break down what a charge covers so both people can see which line moved when a cost changes.
 						They do not carry balances of their own.
 					</p>
-					for i := 0; i < 3; i++ {
+					for i, it := range f.ItemRows() {
 						<div class="itemrow">
-							<input type="text" name="item_name" placeholder={ itemPlaceholder(i) }/>
-							<input type="text" name="item_amount" inputmode="decimal" placeholder="0.00"/>
+							<input type="text" name="item_name" placeholder={ itemPlaceholder(i) } value={ it.Name }/>
+							<input type="text" name="item_amount" inputmode="decimal" placeholder="0.00" value={ it.Amount }/>
 						</div>
 					}
 				</fieldset>
-				@ScheduleFields(schedule.Schedule{})
-				@FeeFields(fee.Policy{})
+				@ScheduleFields(f.Schedule)
+				@FeeFields(f.Fee)
 				<button class="primary" type="submit">Create tab</button>
 			</form>
 		</section>
@@ -960,8 +1002,17 @@ templ TabDetail(p Page, d TabDetailData) {
 										<option value={ strconv.FormatInt(u.ID, 10) }>{ u.DisplayName }</option>
 									}
 								</select>
-								<button type="submit">Attach as payee</button>
+								<select name="role" aria-label="Role on this tab">
+									<option value="payee">as a payee</option>
+									<option value="admin">as an administrator</option>
+								</select>
+								<button type="submit">Attach</button>
 							</form>
+							<p class="muted small">
+								A payee pays on the tab. An administrator helps run it &mdash; they can change its
+								settings, schedule, items, and people, and record charges and payments &mdash; without
+								being its provider.
+							</p>
 						} else {
 							<p class="muted small">
 								Everyone with an account is already on this tab.

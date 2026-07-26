@@ -90,7 +90,52 @@ func (s *Server) getDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getNewTab(w http.ResponseWriter, r *http.Request) {
-	s.render(w, r, http.StatusOK, views.NewTab(s.page(w, r, "New tab")))
+	s.render(w, r, http.StatusOK, views.NewTab(s.page(w, r, "New tab"), views.NewTabForm{}))
+}
+
+// newTabFormFrom captures a create-tab submission so a validation error can
+// re-render the form with the user's entries rather than an empty one. Schedule
+// and fee are parsed best-effort: a valid one pre-fills the shared sub-form, an
+// invalid one falls back to blank while every other field is kept as typed.
+func (s *Server) newTabFormFrom(r *http.Request) views.NewTabForm {
+	f := views.NewTabForm{
+		Name:        strings.TrimSpace(r.PostFormValue("name")),
+		Description: strings.TrimSpace(r.PostFormValue("description")),
+		Kind:        r.PostFormValue("kind"),
+		LoanAmount:  strings.TrimSpace(r.PostFormValue("loan_amount")),
+		InterestAPR: strings.TrimSpace(r.PostFormValue("interest_apr")),
+		LoanTerm:    strings.TrimSpace(r.PostFormValue("loan_term")),
+		LoanPayment: strings.TrimSpace(r.PostFormValue("loan_payment")),
+	}
+	names, amounts := r.PostForm["item_name"], r.PostForm["item_amount"]
+	for i := 0; i < len(names) || i < len(amounts); i++ {
+		var it views.ItemInput
+		if i < len(names) {
+			it.Name = names[i]
+		}
+		if i < len(amounts) {
+			it.Amount = amounts[i]
+		}
+		if strings.TrimSpace(it.Name) == "" && strings.TrimSpace(it.Amount) == "" {
+			continue
+		}
+		f.Items = append(f.Items, it)
+	}
+	if sched, err := parseSchedule(r, s.location(r.Context())); err == nil {
+		f.Schedule = sched
+	}
+	if pol, err := parseFeePolicy(r); err == nil {
+		f.Fee = pol
+	}
+	return f
+}
+
+// renderNewTabError re-renders the create form with the submitted values and an
+// error message, so a single mistake does not discard everything the user typed.
+func (s *Server) renderNewTabError(w http.ResponseWriter, r *http.Request, msg string) {
+	p := s.page(w, r, "New tab")
+	p.Error = msg
+	s.render(w, r, http.StatusBadRequest, views.NewTab(p, s.newTabFormFrom(r)))
 }
 
 // postTab creates a Services tab with its line items (TAB-01, TAB-04).
@@ -98,32 +143,32 @@ func (s *Server) postTab(w http.ResponseWriter, r *http.Request) {
 	user := userFrom(r.Context())
 
 	if err := r.ParseForm(); err != nil {
-		redirectWith(w, r, "/tabs/new", "err", "Could not read that form.")
+		s.renderNewTabError(w, r, "Could not read that form.")
 		return
 	}
 	if !auth.CheckCSRF(r) {
-		redirectWith(w, r, "/tabs/new", "err", "Your session expired. Please try again.")
+		s.renderNewTabError(w, r, "Your session expired. Please try again.")
 		return
 	}
 
 	name := strings.TrimSpace(r.PostFormValue("name"))
 	if name == "" {
-		redirectWith(w, r, "/tabs/new", "err", "A tab needs a name.")
+		s.renderNewTabError(w, r, "A tab needs a name.")
 		return
 	}
 	if len(name) > 120 {
-		redirectWith(w, r, "/tabs/new", "err", "That name is too long.")
+		s.renderNewTabError(w, r, "That name is too long.")
 		return
 	}
 	description := strings.TrimSpace(r.PostFormValue("description"))
 	if len(description) > 500 {
-		redirectWith(w, r, "/tabs/new", "err", "That description is too long.")
+		s.renderNewTabError(w, r, "That description is too long.")
 		return
 	}
 
 	items, err := parseItems(r.PostForm["item_name"], r.PostForm["item_amount"])
 	if err != nil {
-		redirectWith(w, r, "/tabs/new", "err", err.Error())
+		s.renderNewTabError(w, r, err.Error())
 		return
 	}
 
@@ -131,7 +176,7 @@ func (s *Server) postTab(w http.ResponseWriter, r *http.Request) {
 	// stays a legitimate way to run one (CHG-03).
 	sched, err := parseSchedule(r, s.location(r.Context()))
 	if err != nil {
-		redirectWith(w, r, "/tabs/new", "err", err.Error())
+		s.renderNewTabError(w, r, err.Error())
 		return
 	}
 
@@ -139,7 +184,7 @@ func (s *Server) postTab(w http.ResponseWriter, r *http.Request) {
 	// tab created without a stated kind is far more often a recurring one.
 	kind, err := parseTabKind(r.PostFormValue("kind"))
 	if err != nil {
-		redirectWith(w, r, "/tabs/new", "err", err.Error())
+		s.renderNewTabError(w, r, err.Error())
 		return
 	}
 
@@ -151,11 +196,11 @@ func (s *Server) postTab(w http.ResponseWriter, r *http.Request) {
 	if kind == store.TabPayoff {
 		raw := strings.TrimSpace(r.PostFormValue("loan_amount"))
 		if raw == "" {
-			redirectWith(w, r, "/tabs/new", "err", "A Payoff loan needs a loan amount -- the balance the payments draw down.")
+			s.renderNewTabError(w, r, "A Payoff loan needs a loan amount -- the balance the payments draw down.")
 			return
 		}
 		if principal, err = money.Parse(raw); err != nil || principal <= 0 {
-			redirectWith(w, r, "/tabs/new", "err", "The loan amount must be a dollar figure greater than zero.")
+			s.renderNewTabError(w, r, "The loan amount must be a dollar figure greater than zero.")
 			return
 		}
 	}
@@ -163,7 +208,7 @@ func (s *Server) postTab(w http.ResponseWriter, r *http.Request) {
 	// A late-fee policy is optional and may be set at creation.
 	policy, err := parseFeePolicy(r)
 	if err != nil {
-		redirectWith(w, r, "/tabs/new", "err", err.Error())
+		s.renderNewTabError(w, r, err.Error())
 		return
 	}
 
@@ -176,11 +221,11 @@ func (s *Server) postTab(w http.ResponseWriter, r *http.Request) {
 	)
 	if kind == store.TabPayoff {
 		if interestBP, err = parseInterestBP(r.PostFormValue("interest_apr")); err != nil {
-			redirectWith(w, r, "/tabs/new", "err", err.Error())
+			s.renderNewTabError(w, r, err.Error())
 			return
 		}
 		if loanTerm, loanPayment, err = parseLoanTerms(r); err != nil {
-			redirectWith(w, r, "/tabs/new", "err", err.Error())
+			s.renderNewTabError(w, r, err.Error())
 			return
 		}
 	}
@@ -412,7 +457,7 @@ func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 	rows := make([]views.HistoryRow, 0, len(entries))
 	for _, e := range entries {
 		canUndo := ledger.CanUndo(e, reversed) &&
-			(role == store.RoleProvider || e.ActorUserID == user.ID)
+			(billsTab(role) || e.ActorUserID == user.ID)
 		actor := actorFor(actors, e.ActorUserID)
 		rows = append(rows, views.HistoryRow{
 			Entry:       e,
@@ -604,11 +649,12 @@ func (s *Server) postCharge(w http.ResponseWriter, r *http.Request) {
 	}
 	tab := acc.Tab
 
-	// Only the Provider bills. The role check is per-tab, not global.
+	// The Provider bills, and so may a per-tab administrator. The role check is
+	// per-tab, not global.
 	role, err := s.store.ParticipantRole(r.Context(), tab.ID, user.ID)
-	if err != nil || role != store.RoleProvider {
+	if err != nil || !billsTab(role) {
 		s.log.Warn("charge denied", "tab_id", tab.ID, "user_id", user.ID, "role", role)
-		redirectWith(w, r, tabPath(id), "err", "Only the provider can post a charge on this tab.")
+		redirectWith(w, r, tabPath(id), "err", "Only the provider or a tab administrator can post a charge on this tab.")
 		return
 	}
 
@@ -690,9 +736,24 @@ type tabAccess struct {
 // IsProvider reports whether the user bills on this tab as a participant.
 func (a tabAccess) IsProvider() bool { return a.Participant && a.Role == store.RoleProvider }
 
+// billsTab reports whether a per-tab role may bill and correct the tab -- post
+// charges and adjustments, and undo any entry on it. The Provider and a per-tab
+// administrator may; a Payee may not (a Payee still records their own payments
+// and undoes only their own entries). This is deliberately a role check, not a
+// membership one: the instance administrator, who is no party to the money, is
+// never a biller even where they may manage settings.
+func billsTab(role store.Role) bool {
+	return role == store.RoleProvider || role == store.RoleAdmin
+}
+
+// IsTabAdmin reports whether the user is a per-tab administrator: a member added
+// with the admin role, distinct from the instance-wide administrator (a.Admin).
+func (a tabAccess) IsTabAdmin() bool { return a.Participant && a.Role == store.RoleAdmin }
+
 // CanManage covers a tab's own settings: its name, kind, schedule, items, and
-// people. The Provider always may; an administrator may on any tab.
-func (a tabAccess) CanManage() bool { return a.IsProvider() || a.Admin }
+// people. The Provider always may, as does a per-tab administrator; the
+// instance administrator may on any tab.
+func (a tabAccess) CanManage() bool { return a.IsProvider() || a.IsTabAdmin() || a.Admin }
 
 // CanTransact covers moving money: charges, payments, and undo. Membership
 // only -- an administrator looking after the instance is not a party to what

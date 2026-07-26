@@ -406,14 +406,14 @@ func TestPayeeCannotBillOrAttach(t *testing.T) {
 	_, body := h.post(tab+"/charges", url.Values{
 		"csrf_token": {h.csrfToken(tab)}, "amount": {"999.00"},
 	})
-	if !strings.Contains(body, "Only the provider can post a charge") {
+	if !strings.Contains(body, "Only the provider or a tab administrator can post a charge") {
 		t.Errorf("payee was allowed to post a charge: %s", truncate(body))
 	}
 
 	_, body = h.post(tab+"/participants", url.Values{
 		"csrf_token": {h.csrfToken(tab)}, "user_id": {itoa64(other.ID)},
 	})
-	if !strings.Contains(body, "Only the provider can attach") {
+	if !strings.Contains(body, "Only the provider or a tab administrator can attach") {
 		t.Errorf("payee was allowed to attach someone: %s", truncate(body))
 	}
 

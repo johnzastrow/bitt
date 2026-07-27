@@ -1,21 +1,26 @@
 # BitTabby — Current State
 
-**Updated:** 2026-07-24
+**Updated:** 2026-07-27
 
 ## Where things stand
 
-**Shipped and deployed.** All 54 v1 requirements delivered; tagged `v1.0.0`,
-then `v1.1.0` adding an admin "send a test notification" action. **Live in
-production at https://btabby.fluidgrid.site** — a Docker Compose stack on the
-`recipe.fluidgrid.site` host, on the host's MariaDB (`btabby` database),
-`network_mode: host` behind the host's apt Caddy, matching the other sites there.
-The repo is public at github.com/johnzastrow/bitt (MIT), images publish to
-`ghcr.io/johnzastrow/bitt` (amd64 only, by policy).
+**Shipped and deployed, past v1.** All 54 v1 requirements delivered and tagged
+`v1.0.0`; since then `v1.1.0` (admin test notification), `v1.1.1` (MariaDB
+no-op-save fix + logging), and `v1.2.0` (per-tab administrator role + new-tab
+form persistence). **Live in production at https://btabby.fluidgrid.site** — a
+Docker Compose stack on the `recipe.fluidgrid.site` host, on the host's MariaDB
+(`btabby` database), `network_mode: host` behind the host's apt Caddy, matching
+the other sites there. The repo is public at github.com/johnzastrow/bitt (MIT),
+images publish to `ghcr.io/johnzastrow/bitt` (**amd64 only**, by policy).
+
+**Start the next session from [HANDOFF-OPS.md](HANDOFF-OPS.md)** — it covers the
+deployment, the redeploy runbook, the traps learned in the post-v1 sessions, and
+the open threads.
 
 | Item | State |
 |------|-------|
 | Repository | `main`, public, working tree clean |
-| Version | 1.1.0 |
+| Version | 1.2.0 |
 | Deployment | Live at https://btabby.fluidgrid.site (host MariaDB, Caddy, ~/bittdocker) |
 | Scope | 54 requirements, 6 phases |
 | Stack | Go 1.26 + templ + htmx 2.0.4 (vendored); SQLite or MariaDB |

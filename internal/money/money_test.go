@@ -2,8 +2,53 @@ package money
 
 import (
 	"errors"
+	"math"
 	"testing"
 )
+
+// Mul is the guarded scaling used when an installment is multiplied by a period
+// count. It must refuse negatives and overflow rather than wrap, since a wrapped
+// product in the money path would post a wildly wrong charge.
+func TestMul(t *testing.T) {
+	cases := []struct {
+		amount Cents
+		count  int64
+		want   Cents
+		ok     bool
+	}{
+		{100, 3, 300, true},
+		{0, 5, 0, true},
+		{5, 0, 0, true},
+		{-1, 2, 0, false},                       // negative amount
+		{1, -1, 0, false},                       // negative count
+		{math.MaxInt64, 2, 0, false},            // overflow
+		{1_000_000, 1_000, 1_000_000_000, true}, // a large product that still fits
+	}
+	for _, c := range cases {
+		got, ok := Mul(c.amount, c.count)
+		if ok != c.ok {
+			t.Errorf("Mul(%d, %d) ok = %v, want %v", c.amount, c.count, ok, c.ok)
+			continue
+		}
+		if ok && got != c.want {
+			t.Errorf("Mul(%d, %d) = %d, want %d", c.amount, c.count, got, c.want)
+		}
+		if !ok && got != 0 {
+			t.Errorf("Mul(%d, %d) failed but returned %d, want 0", c.amount, c.count, got)
+		}
+	}
+}
+
+func TestIsZero(t *testing.T) {
+	if !Cents(0).IsZero() {
+		t.Error("0 should be zero")
+	}
+	for _, c := range []Cents{1, -1, 100, -100} {
+		if c.IsZero() {
+			t.Errorf("%d should not be zero", c)
+		}
+	}
+}
 
 func TestParse(t *testing.T) {
 	cases := []struct {

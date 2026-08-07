@@ -11,7 +11,7 @@ in the `/healthz` response, and a build stamps in the commit and date.
 
 Completes the Phase 5 follow-ups: notices on a payment made and a payment
 missed, and the security review's backlog cap. Specified in
-[SPEC-EVENT-NOTICES.md](../docs/planning/SPEC-EVENT-NOTICES.md).
+[SPEC-EVENT-NOTICES.md](docs/planning/SPEC-EVENT-NOTICES.md).
 
 ### Added
 - **A per-tick send ceiling** (`BITT_NOTIFY_MAX_PER_TICK`, default 50). Event
@@ -27,6 +27,27 @@ missed, and the security review's backlog cap. Specified in
 
   A tick that hits the ceiling logs a warning and adds `deferred=N` to its
   response, omitted when zero so its presence is the signal.
+- **A notice when a payment is made**, to every party on the tab including the
+  payer, whose copy reads as a receipt. Previously the Provider — the person
+  actually owed the money — received no notification of any kind and had to open
+  the app to discover a payment had landed.
+
+  Events are derived from the ledger rather than queued: the tick treats each
+  payment it has not yet announced as an event, keyed by the entry's sequence.
+  That keeps delivery entirely off the balance path, which is Phase 5's
+  load-bearing rule — a notice sent from the payment handler would put SMTP and
+  HTTP on the ledger write path.
+
+  A payment posted and undone before the tick runs is never announced. A payment
+  that settles the tab still is: unlike a reminder, a payment is a fact that
+  occurred, so it is announced on its own terms rather than on whether money is
+  still owed.
+
+  The notice is one generic third-person message for every recipient, with new
+  `{payee}`, `{paid}` and `{balance}` variables. `{amount}` deliberately keeps
+  its existing "balance owed" meaning, so reminder templates already saved by a
+  Provider are untouched.
+
 - **A lookback window** (`BITT_NOTIFY_LOOKBACK_DAYS`, default 7) bounding how
   far back the scan will look for an event it has not yet announced. Takes
   effect with the payment notices below.

@@ -34,6 +34,12 @@ in the `/healthz` response, and a build stamps in the commit and date.
 - **The port field notes the 587 problem.** Many hosting providers block
   outbound 587 and mail services offer an alternative such as 2525; a send that
   times out rather than being rejected is a blocked port, not a bad credential.
+- **The credential guidance is accurate about what `.env` does and does not
+  buy.** It keeps a secret out of the version-controlled compose file; it does
+  not hide the value from `docker inspect`, which shows the container's
+  environment whichever route the value took. Keeping it out of the environment
+  entirely is what `file:/run/secrets/name` is for. The note also mentions
+  `env_file`, and that anything the environment sets becomes read-only here.
 
 ## [1.2.0] - 2026-07-26 — Tab administrators; create form keeps your entries
 

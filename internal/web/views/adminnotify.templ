@@ -164,11 +164,20 @@ templ AdminNotify(p Page, d AdminNotifyData) {
 					app restarted before it counts.</strong>
 				</p>
 				<p class="muted small">
-					Under Docker Compose, put the value in a <code>.env</code> file beside the compose file, readable
-					only by its owner (<code>chmod 600</code>), and reference it from the service rather than writing
-					it inline -- an inline value lands in <code>docker inspect</code> and in your shell history:
+					Under Docker Compose, keep the value in a <code>.env</code> file beside the compose file, readable
+					only by its owner (<code>chmod 600</code>), and reference it from the service. The point is to keep
+					the secret out of the compose file, which is version-controlled; it is <em>not</em> a way to hide
+					the value from <code>docker inspect</code>, which shows the container's environment whichever route
+					the value took. To keep it out of the environment as well, use
+					<code>file:/run/secrets/name</code> with a Docker secret.
 				</p>
 				<pre><code>{ credentialExample }</code></pre>
+				<p class="muted small">
+					To avoid listing each variable, <code>env_file: .env</code> on the service loads the whole file
+					instead. Either way the environment then owns those settings, so any that this screen also edits
+					are shown read-only -- which is the intended trade: a deployment configured entirely from its
+					compose file behaves the same way every time it starts.
+				</p>
 				<p class="muted small">
 					Then <code>docker compose up -d</code>. This screen will show the credential as set; if it still
 					says missing, the variable did not reach the container.

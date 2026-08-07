@@ -16,7 +16,7 @@ import "fmt"
 
 // Number is the semantic version. Bump it on every functional change: patch for
 // a fix, minor for a feature, major for a break. This is the value to edit.
-const Number = "1.2.1"
+const Number = "1.2.2"
 
 // Commit and Date are set at build time via -ldflags, e.g.
 //

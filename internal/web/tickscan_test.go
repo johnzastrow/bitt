@@ -199,3 +199,93 @@ func TestChannelsFor(t *testing.T) {
 		})
 	}
 }
+
+// NOTIF-00: every payee on a tab is notified, not just the first.
+//
+// The claim table is keyed (tab_id, event_key, channel) with no user column, so
+// the recipient has to live INSIDE the event key -- migration 0008 spells out
+// the intended shape, "req:2026-08-01:u7". The scan built the key without that
+// suffix, so the first payee's claim matched every later payee's WasSent check
+// and they were skipped in silence: one delivery for a tab that owes two people.
+//
+// Latent in production only because tabs there have a single payee.
+func TestTickScanNotifiesEveryPayee(t *testing.T) {
+	h := newHarnessWithTick(t, "the-cron-secret")
+	h.completeSetup()
+	ctx := t.Context()
+
+	alice := h.addUser("alice@example.com", "Alice", false)
+	bob := h.addUser("bob@example.com", "Bob", false)
+	for _, u := range []int64{alice.ID, bob.ID} {
+		if err := h.db.SetNotifyPrefs(ctx, u, "", true, false); err != nil {
+			t.Fatalf("set notify prefs: %v", err)
+		}
+	}
+	if err := h.db.SetDelivery(ctx, store.Delivery{
+		SMTPHost: "mail.example", SMTPPort: 587, EmailFrom: "BitTabby <bitt@example.com>",
+	}); err != nil {
+		t.Fatalf("set delivery: %v", err)
+	}
+
+	var mu sync.Mutex
+	var sent [][]byte
+	h.srv().notifier = h.srv().notifier.WithMailer(func(_ string, _ smtp.Auth, _ string, _ []string, msg []byte) error {
+		mu.Lock()
+		defer mu.Unlock()
+		sent = append(sent, msg)
+		return nil
+	})
+
+	today := instanceToday(t)
+	tabID, _ := h.createScheduledTab(today.AddDays(7), schedule.Weekly, schedule.InAdvance)
+	for _, u := range []int64{alice.ID, bob.ID} {
+		if err := h.db.AddParticipant(ctx, store.Participant{
+			TabID: tabID, UserID: u, Role: store.RolePayee,
+		}); err != nil {
+			t.Fatalf("add payee: %v", err)
+		}
+	}
+	if resp, b := h.post(tabPath(tabID)+"/charges", url.Values{
+		"csrf_token": {h.csrfToken(tabPath(tabID))},
+		"amount":     {"100.00"},
+		"memo":       {"Service"},
+	}); resp.StatusCode != 200 {
+		t.Fatalf("charge returned %d: %s", resp.StatusCode, truncate(b))
+	}
+
+	if resp := h.postRaw(t, "/internal/tick", "Bearer the-cron-secret"); resp.StatusCode != 200 {
+		t.Fatalf("tick returned %d", resp.StatusCode)
+	}
+
+	mu.Lock()
+	got := append([][]byte(nil), sent...)
+	mu.Unlock()
+
+	if len(got) != 2 {
+		t.Fatalf("tick sent %d emails, want 2 -- one per payee", len(got))
+	}
+	var toAlice, toBob bool
+	for _, m := range got {
+		if strings.Contains(string(m), "To: alice@example.com") {
+			toAlice = true
+		}
+		if strings.Contains(string(m), "To: bob@example.com") {
+			toBob = true
+		}
+	}
+	if !toAlice || !toBob {
+		t.Errorf("both payees should be reached: alice=%v bob=%v", toAlice, toBob)
+	}
+
+	// Idempotency must survive per-recipient scoping: a second tick in the same
+	// window sends nothing to either of them.
+	if resp := h.postRaw(t, "/internal/tick", "Bearer the-cron-secret"); resp.StatusCode != 200 {
+		t.Fatalf("second tick returned %d", resp.StatusCode)
+	}
+	mu.Lock()
+	after := len(sent)
+	mu.Unlock()
+	if after != 2 {
+		t.Errorf("second tick sent %d more emails, want 0 -- the claim must still dedupe", after-2)
+	}
+}

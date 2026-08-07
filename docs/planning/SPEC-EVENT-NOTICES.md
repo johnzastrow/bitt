@@ -166,9 +166,26 @@ New variables, and one thing to be careful about:
 
 | Variable | Meaning |
 |----------|---------|
-| `{payee}` | Display name of whoever made the payment |
+| `{payee}` | Display name of whoever **recorded** the payment |
 | `{paid}` | The payment amount |
 | `{balance}` | What remains owed after it |
+
+**`{payee}` is the entry's actor, and that is a compromise.** A payment entry
+records who posted it and nothing about whom it was posted for. Ordinarily the
+payee records their own payment and the wording reads naturally. When a Provider
+records one on a payee's behalf, the notice says "Jane Provider made a payment"
+— technically true of the entry, misleading about the money. The actor is the
+only signal the ledger carries, so this is accepted rather than solved, and
+`TestPaymentNoticeNamesWhoeverRecordedIt` pins it so it stays a decision.
+Solving it properly would mean recording a subject on payment entries, which is
+a ledger change and out of scope here.
+
+**Header safety rests on placement.** `{payee}` appears in the body only; the
+title carries `{tab}` alone. Body text cannot inject a header — the separator is
+already written — so a control character in a display name is inert, while one
+in a tab name still fails the send closed. Moving `{payee}` into the title would
+quietly turn a user-controlled name into header input;
+`TestPaymentNoticeHeaderSafety` asserts both halves so that change breaks a test.
 
 `{amount}` is **not** reused for the payment amount. It already means "the
 balance owed" in every reminder template, including per-tab templates a Provider

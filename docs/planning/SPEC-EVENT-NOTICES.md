@@ -78,23 +78,38 @@ feature in this spec notifies several people about one event, so it would bite
 immediately and invisibly: the first recipient would claim the event for
 everyone else.
 
-### Fix
+### Fix — no migration required
 
-- Migration `0011`, both `sqlite/` and `mariadb/`: change the primary key to
-  `(tab_id, event_key, channel, user_id)`.
-- `WasSent` gains a `userID` parameter and filters on it.
-- SQLite cannot alter a primary key in place: rebuild as create-new →
-  `INSERT … SELECT` → drop-old → rename. **The append-only triggers must be
-  recreated on the new table** — they are row-level and do not block the DDL, so
-  it is easy to end up with the constraint quietly gone. Assert their presence
-  after migrating.
-- Existing rows carry a real `user_id`, so the copy is lossless and no
-  already-sent notice is re-sent.
+The first draft of this spec called for a migration adding `user_id` to the
+primary key. **That was wrong, and reading migration `0008` is what corrected
+it.** Its comment states the intended shape outright:
+
+> `event_key` identifies one notifiable event **for one recipient**, e.g.
+> `"req:2026-08-01:u7"` (a two-week payment request for the Aug 1 period, **to
+> user 7**).
+
+The recipient was always meant to live *inside* the key. The schema is right;
+the scan simply dropped the `:u<id>` suffix when it built the key. So the fix is
+a one-line scoping change, not a schema change:
+
+- `eventFor(occasion, userID)` appends `:u<id>`, and **every event key in the
+  package must go through it**. An unscoped key silently means "this tab has
+  been told" rather than "this person has been told".
+- No migration, no primary-key change, no table rebuild, and none of the
+  attendant risk of silently losing the append-only triggers.
+
+**Upgrade note.** The key format changes, so any event already claimed under the
+old format no longer matches. An instance with a reminder in flight sends one
+duplicate for that occasion, once. This is exactly the "harmless duplicate" the
+send-then-claim design already tolerates, and it is a one-time effect at the
+version boundary.
 
 ### Test
 
-A tab with two payees, both with a usable channel, receives two deliveries for
-one reminder event. This test fails before the migration and passes after.
+`TestTickScanNotifiesEveryPayee`: a tab with two payees, both with a usable
+channel, receives two deliveries for one reminder event, and a second tick in
+the same window sends nothing. Verified to fail without the fix (one delivery)
+and pass with it.
 
 ---
 
@@ -265,9 +280,9 @@ migration, and the ceiling above already bounds the blast radius.
 ## 8. Exit criteria
 
 - [ ] A tab with two payees receives two deliveries for one reminder event
-      (proves NOTIF-00; fails before the migration)
-- [ ] The append-only triggers on `sent_notifications` still exist and still
-      refuse UPDATE and DELETE after migration `0011`, on both backends
+      (proves NOTIF-00; verified to fail without the fix)
+- [ ] Every event key in the package is built through `eventFor`, so no future
+      event type can reintroduce a tab-scoped claim
 - [ ] Posting a payment produces one notice per participant per enabled channel,
       including the payer
 - [ ] A payment posted and reversed before the next tick produces no notice
@@ -293,7 +308,7 @@ migration, and the ceiling above already bounds the blast radius.
 
 ## 9. Build order
 
-1. **NOTIF-00** — migration `0011`, `WasSent` signature, multi-payee test.
+1. **NOTIF-00** — scope the event key to the recipient, multi-payee test. No migration.
    Ships on its own; it is a bug fix and valuable without the rest.
 2. **NOTIF-03** — the cap, before the features that need it.
 3. **NOTIF-01** — payment-made.

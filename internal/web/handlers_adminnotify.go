@@ -60,6 +60,11 @@ func (s *Server) getAdminNotify(w http.ResponseWriter, r *http.Request) {
 		TickReady:        env.TickEnabled(),
 		SMTPPasswordSet:  env.SMTPPassword != "",
 		NtfyTokenSet:     env.NtfyToken != "",
+		// A username with no password: the send will reach the server and fail
+		// authentication. The username can come from either source, but the
+		// password is environment-only and is never merged from storage, so it
+		// is read from the environment config rather than the effective one.
+		SMTPAuthIncomplete: effective.SMTPUsername != "" && env.SMTPPassword == "",
 	}))
 }
 

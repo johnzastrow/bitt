@@ -288,3 +288,62 @@ func TestAdminNotifyRequiresAdmin(t *testing.T) {
 		t.Errorf("a non-admin changed the ntfy server: %+v", inst.Delivery)
 	}
 }
+
+// A username with no password is the one delivery configuration that looks
+// finished and is not: email counts as configured on a server address alone
+// (a server wanting no credentials is legitimate), so a half-filled credential
+// would otherwise show "Ready" and fail authentication on every send, with the
+// reason visible only in the container log.
+//
+// This is the failure an operator hits after setting SMTP up through the form
+// and finding no password field -- because there is none by design, the value
+// being environment-only. The screen has to say so rather than show green.
+func TestDeliveryFlagsUsernameWithoutPassword(t *testing.T) {
+	h := newHarness(t) // environment silent: no SMTP password anywhere
+	h.completeSetup()
+
+	if _, body := h.post("/admin/notifications/delivery", url.Values{
+		"csrf_token":    {h.csrfToken("/admin/notifications")},
+		"smtp_host":     {"mail.smtp2go.com"},
+		"smtp_port":     {"2525"},
+		"smtp_username": {"bitt@example.com"},
+		"email_from":    {"BitTabby <bitt@example.com>"},
+	}); !strings.Contains(body, "Delivery settings saved") {
+		t.Fatalf("save failed: %s", truncate(body))
+	}
+
+	_, body := h.get("/admin/notifications")
+	if !strings.Contains(body, "Misconfigured") {
+		t.Errorf("a username with no password did not report as misconfigured: %s", truncate(body))
+	}
+	if !strings.Contains(body, "BITT_SMTP_PASSWORD") {
+		t.Errorf("the warning did not name the variable to set: %s", truncate(body))
+	}
+	// The fault must not be reported as the ordinary not-configured state, which
+	// is deliberately neutral and would read as "not there yet" rather than broken.
+	if strings.Contains(body, ">Ready<") {
+		t.Errorf("email reported ready despite an unusable credential: %s", truncate(body))
+	}
+}
+
+// The mirror: with the password supplied by the environment the same settings
+// are simply ready, so the new warning cannot fire on a healthy deployment.
+func TestDeliveryUsernameWithPasswordIsReady(t *testing.T) {
+	h := newHarnessCfg(t, config.NotifyConfig{SMTPPassword: "env-password"})
+	h.completeSetup()
+
+	if _, body := h.post("/admin/notifications/delivery", url.Values{
+		"csrf_token":    {h.csrfToken("/admin/notifications")},
+		"smtp_host":     {"mail.smtp2go.com"},
+		"smtp_port":     {"2525"},
+		"smtp_username": {"bitt@example.com"},
+		"email_from":    {"BitTabby <bitt@example.com>"},
+	}); !strings.Contains(body, "Delivery settings saved") {
+		t.Fatalf("save failed: %s", truncate(body))
+	}
+
+	_, body := h.get("/admin/notifications")
+	if strings.Contains(body, "Misconfigured") {
+		t.Errorf("a complete credential reported as misconfigured: %s", truncate(body))
+	}
+}

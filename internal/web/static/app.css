@@ -910,6 +910,13 @@ tr.reversal td { color: var(--fg-muted); }
 .pill-ready { color: var(--credit); }
 .pill-notready { color: var(--fg-muted); }
 
+/* The exception the rule above earns: a half-configured credential is not "not
+   got there yet", it is a setting that looks finished and fails on every send.
+   That is a fault and is coloured like one -- which only keeps its meaning
+   because the merely-unconfigured state above stays neutral. */
+.pill-fault { color: var(--caution); }
+.statusnote-fault { color: var(--caution); }
+
 /* The offline fallback page (UI-05). Served by the service worker when a
    navigation cannot reach the network; it uses this same stylesheet from cache,
    so it must lean on classes that are already here plus this small block. */

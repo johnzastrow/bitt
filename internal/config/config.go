@@ -62,8 +62,9 @@ type Config struct {
 	// means notifications are configured off, which is a valid way to run.
 	Notify NotifyConfig
 	// Reminders are the INSTANCE-WIDE payment-reminder lead times and their
-	// message templates, in send order. Defaults to 14/7/1 days before the due
-	// date with a built-in message; each is overridable by environment.
+	// message templates, in send order. Defaults to 14/7/1 days before the due date
+	// and 1/7 days after it (overdue notices, held as negative lead times);
+	// each is overridable by environment.
 	//
 	// These are the fallback layer. A tab whose Provider has set its own
 	// reminders (store.TabReminder, migration 0009) uses those instead, and
@@ -122,6 +123,12 @@ const (
 	defaultReminderTitle = "{tab}: {amount} due {when}"
 	defaultReminderBody  = "Your {days}-day reminder: a payment on the tab \"{tab}\" is due {when}, on {due}.\n" +
 		"{amount} is owed.\n{url}"
+
+	// The overdue wording is past tense throughout, because a notice that says
+	// a payment "is due yesterday" reads as a bug.
+	defaultOverdueTitle = "{tab}: {amount} was due {when}"
+	defaultOverdueBody  = "A payment on the tab \"{tab}\" was due {when}, on {due}.\n" +
+		"{amount} is still owed.\n{url}"
 )
 
 // DefaultReminders is the built-in reminder set: 14, 7, and 1 days before a due
@@ -133,12 +140,25 @@ const (
 // the fallback is needed.
 func DefaultReminders() []Reminder {
 	days := []int{14, 7, 1}
-	out := make([]Reminder, 0, len(days))
+	out := make([]Reminder, 0, len(days)+len(defaultOverdueDays))
 	for _, d := range days {
 		out = append(out, Reminder{Days: d, Title: defaultReminderTitle, Body: defaultReminderBody})
 	}
+	// Overdue notices, as negative lead times (decision D-F). They ship on
+	// rather than waiting to be discovered: a feature nobody switches on is a
+	// feature that does not exist. Two notices then silence -- the cadence IS
+	// the cap, so there is no separate stop-nagging rule and no unbounded
+	// dunning loop. An administrator can edit them, add a third, or clear them
+	// to turn overdue off entirely.
+	for _, d := range defaultOverdueDays {
+		out = append(out, Reminder{Days: d, Title: defaultOverdueTitle, Body: defaultOverdueBody})
+	}
 	return out
 }
+
+// defaultOverdueDays are the built-in overdue lead times: the morning after,
+// and a week later.
+var defaultOverdueDays = []int{-1, -7}
 
 // NotifyConfig is the delivery configuration for notifications.
 //

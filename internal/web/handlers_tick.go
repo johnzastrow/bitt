@@ -101,8 +101,9 @@ func (s *Server) runScans(ctx context.Context, notifier *notify.Notifier) (sent,
 
 	rs, rk := s.runNotifications(ctx, notifier, budget)
 	ps, pk := s.runPaymentNotices(ctx, notifier, budget)
+	os, ok := s.runOverdueNotices(ctx, notifier, budget)
 
-	return rs + ps, rk + pk, budget.deferred
+	return rs + ps + os, rk + pk + ok, budget.deferred
 }
 
 func (s *Server) runNotifications(ctx context.Context, notifier *notify.Notifier, budget *sendBudget) (sent, skipped int) {
@@ -266,7 +267,10 @@ func (s *Server) reminderMessage(spec config.Reminder, tab store.Tab, due schedu
 		"{tab}", tab.Name,
 		"{amount}", balance.Neg().Display(),
 		"{due}", due.Display(),
-		"{days}", strconv.Itoa(lead),
+		// Magnitude only: {when} already carries the direction ("in one week"
+		// versus "a week ago"), and an overdue notice reading "-7-day reminder"
+		// would be a defect visible to every recipient.
+		"{days}", strconv.Itoa(abs(lead)),
 		"{when}", leadPhrase(lead),
 		"{url}", url,
 	)
@@ -277,6 +281,9 @@ func (s *Server) reminderMessage(spec config.Reminder, tab store.Tab, due schedu
 }
 
 // leadPhrase renders a lead time as a human phrase for {when}.
+// A negative lead is an overdue notice, and reads in the past tense. Without
+// this branch a d+7 rule would render "in -7 days", which is the kind of detail
+// that makes an otherwise correct notice look broken.
 func leadPhrase(days int) string {
 	switch days {
 	case 0:
@@ -287,7 +294,16 @@ func leadPhrase(days int) string {
 		return "in one week"
 	case 14:
 		return "in two weeks"
+	case -1:
+		return "yesterday"
+	case -7:
+		return "a week ago"
+	case -14:
+		return "two weeks ago"
 	default:
+		if days < 0 {
+			return strconv.Itoa(-days) + " days ago"
+		}
 		return "in " + strconv.Itoa(days) + " days"
 	}
 }

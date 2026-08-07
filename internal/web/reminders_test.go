@@ -163,7 +163,6 @@ func TestTabRemindersRejectBadInput(t *testing.T) {
 	}{
 		{"a non-numeric day", "soon", "T", "B", "comma-separated list"},
 		{"a zero day", "0", "T", "B", "comma-separated list"},
-		{"a negative day", "-3", "T", "B", "comma-separated list"},
 		{"too many lead times", "1,2,3,4,5,6,7", "T", "B", "at most 6 reminders"},
 		{"a newline in the title", "7", "Due\nnow", "B", "no line breaks"},
 		{"a carriage return in the title", "7", "Due\rnow", "B", "no line breaks"},
@@ -240,3 +239,34 @@ func tabIDFrom2(t *testing.T, path string) int64 {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+// A negative lead time is an overdue notice, fired that many days AFTER the due
+// date (D-B). It was refused before overdue existed; refusing it now would make
+// the feature unreachable through the interface that configures it.
+func TestTabRemindersAcceptNegativeDays(t *testing.T) {
+	got, err := parseReminderDays("14, 1, -1, -7")
+	if err != nil {
+		t.Fatalf("negative lead times should be accepted: %v", err)
+	}
+	want := []int{14, 1, -1, -7}
+	if len(got) != len(want) {
+		t.Fatalf("parsed %v, want %v", got, want)
+	}
+	// Sorted longest-lead-first, which with negatives is simply the order they
+	// fire in: two weeks before, the day before, the day after, a week after.
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("parsed %v, want %v -- rules must stay in firing order", got, want)
+		}
+	}
+
+	// Zero remains refused: "on the due date" is ambiguous between a reminder
+	// and an overdue notice, and nobody would agree which they meant.
+	if _, err := parseReminderDays("0"); err == nil {
+		t.Error("zero should still be refused")
+	}
+	// The bound applies in both directions.
+	if _, err := parseReminderDays("-4000"); err == nil {
+		t.Error("a lead time beyond the bound should be refused in the negative direction too")
+	}
+}

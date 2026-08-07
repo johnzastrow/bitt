@@ -118,11 +118,18 @@ func (s *Server) runNotifications(ctx context.Context, notifier *notify.Notifier
 		if err != nil {
 			continue
 		}
-		event := "reminder:" + due.String() + ":d" + strconv.Itoa(lead)
+		occasion := "reminder:" + due.String() + ":d" + strconv.Itoa(lead)
 		for _, p := range participants {
 			if p.Role != store.RolePayee {
 				continue
 			}
+			// The recipient belongs IN the key. The claim table is keyed
+			// (tab_id, event_key, channel) with no user column in the key, by
+			// design -- migration 0008 spells out the intended shape,
+			// "req:2026-08-01:u7". Without the suffix the first payee notified
+			// claims the occasion for the whole tab and every other payee is
+			// skipped in silence, so a tab with two payees notifies one person.
+			event := eventFor(occasion, p.UserID)
 			did := s.notifyParticipant(ctx, notifier, tab, p, event, spec, due, lead, balance)
 			sent += did
 			if did == 0 {
@@ -131,6 +138,16 @@ func (s *Server) runNotifications(ctx context.Context, notifier *notify.Notifier
 		}
 	}
 	return sent, skipped
+}
+
+// eventFor scopes an occasion to one recipient, producing the claim key.
+//
+// Every event key in this package MUST go through here. The claim table's
+// primary key is (tab_id, event_key, channel): the recipient is not a column in
+// that key, so an unscoped key silently means "this tab has been told", not
+// "this person has been told".
+func eventFor(occasion string, userID int64) string {
+	return occasion + ":u" + strconv.FormatInt(userID, 10)
 }
 
 // notifyParticipant delivers one reminder to one payee over each channel they

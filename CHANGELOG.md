@@ -7,6 +7,30 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [1.3.0] - 2026-08-07 — Event notices
+
+Completes the Phase 5 follow-ups: notices on a payment made and a payment
+missed, and the security review's backlog cap. Specified in
+[SPEC-EVENT-NOTICES.md](../docs/planning/SPEC-EVENT-NOTICES.md).
+
+### Added
+- **A per-tick send ceiling** (`BITT_NOTIFY_MAX_PER_TICK`, default 50). Event
+  notices are derived from the ledger rather than queued, so without a bound a
+  long cron outage would turn one tick into a burst across every tab at once.
+  Nothing is lost when it bites: a claim is written only after a confirmed
+  delivery, so an event this tick did not reach is reached by the next one. Zero
+  or negative is unbounded.
+
+  The ceiling is spent only on work about to happen — it is taken after the
+  already-sent check, never before. Reversed, a backlog of settled events eats
+  the ceiling and permanently starves the events still to send.
+
+  A tick that hits the ceiling logs a warning and adds `deferred=N` to its
+  response, omitted when zero so its presence is the signal.
+- **A lookback window** (`BITT_NOTIFY_LOOKBACK_DAYS`, default 7) bounding how
+  far back the scan will look for an event it has not yet announced. Takes
+  effect with the payment notices below.
+
 ## [1.2.2] - 2026-08-07 — Every payee on a tab gets their reminder
 
 ### Fixed

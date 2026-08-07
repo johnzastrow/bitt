@@ -37,6 +37,8 @@ Overdue is not merely unimplemented, it is structurally unreachable:
 | D-B | Overdue cadence | **Configurable, mirroring the existing lead days**, expressed as negative leads (d+1, d+7). Per-tab overridable exactly like current reminders. |
 | D-C | Who receives overdue notices | **Payee and Provider.** The payee is chased; the Provider learns the money did not arrive. |
 | D-D | Opt-out granularity | **Reuse the existing `notify_email` / `notify_ntfy` toggles.** No migration, no new profile UI. |
+| D-E | Wording per recipient | **One message for everyone**, in generic third person — "{payee} made a payment". No second template slot, no per-reader variant. |
+| D-F | Overdue defaults | **Ship editable instance defaults** (d+1 and d+7) rather than leaving overdue silent until an administrator opts in. |
 
 D-B carries a useful consequence: **the cap falls out of the configuration.**
 Configured negative leads of d+1, d+7, d+14 produce exactly three overdue
@@ -139,9 +141,29 @@ retracted — see §7.
 
 ### Message
 
-Reuses the existing template mechanism with the reminder variables plus the
-payment amount and the payer's display name. Tab names stay in the body, never
-a header — the header-injection rule in `internal/notify` is unchanged.
+**One message, sent to everyone, written in generic third person** (D-E) —
+"{payee} made a payment of {paid} on {tab}". The payer receives the same text as
+the Provider. It reads very slightly oddly to the person who just paid, and that
+is the accepted cost of not maintaining two templates, two variable sets, and a
+rule about which reader gets which.
+
+New variables, and one thing to be careful about:
+
+| Variable | Meaning |
+|----------|---------|
+| `{payee}` | Display name of whoever made the payment |
+| `{paid}` | The payment amount |
+| `{balance}` | What remains owed after it |
+
+`{amount}` is **not** reused for the payment amount. It already means "the
+balance owed" in every reminder template, including per-tab templates a Provider
+has already customised and saved. Redefining it per event type would silently
+change the meaning of stored text. A new name costs nothing and cannot misfire.
+
+`{tab}` and `{url}` behave as they do now. Tab names stay in the body, never a
+header — the header-injection rule in `internal/notify` is unchanged, and a
+display name reaching `{payee}` is user-controlled text subject to exactly the
+same treatment.
 
 ---
 
@@ -170,6 +192,21 @@ the Provider has not customised, exactly as reminders do.
 
 The existing "a customised tab is customised completely" rule carries over
 unchanged: a tab's rule list replaces the instance list rather than merging.
+
+**Defaults (D-F): d+1 and d+7, editable.** Overdue is on out of the box rather
+than waiting for an administrator to discover it — a feature nobody switches on
+is a feature that does not exist. Two notices is restrained: one the morning
+after, one a week later, then silence. An administrator can change them, add a
+third, or clear them entirely to turn overdue off.
+
+Note this is a behaviour change on upgrade: an instance that has never touched
+its reminder settings starts sending overdue notices it did not send before.
+That is the intent, but it belongs in the release notes rather than being a
+surprise.
+
+`leadPhrase` needs an overdue form. Today it renders 0/1/7/14 as "today",
+"tomorrow", "in one week", "in two weeks"; a negative lead has to read "1 day
+ago" / "a week ago" rather than "in -7 days".
 
 ### Recipients
 
@@ -243,6 +280,14 @@ migration, and the ceiling above already bounds the blast radius.
       a ledger transaction
 - [ ] A tick that exceeds the ceiling logs what it deferred, and the next tick
       delivers it
+- [ ] `{amount}` still renders the balance owed in an existing saved reminder
+      template — the new `{payee}`, `{paid}` and `{balance}` variables must not
+      change the meaning of text a Provider already stored
+- [ ] A display name containing a control character fails the send closed,
+      exactly as a hostile `{tab}` does today
+- [ ] A fresh instance has overdue rules at d+1 and d+7, and an administrator
+      can edit them, extend them, or clear them to silence overdue entirely
+- [ ] A negative lead renders as "1 day ago", never "in -1 days"
 
 ---
 
@@ -262,10 +307,14 @@ Version: NOTIF-00 alone is a patch. The set is a minor.
 
 ## 10. Open questions
 
-- **Should the Provider's payment-made notice differ in wording from the
-  payer's receipt?** Same event, different reader — "you paid" versus "someone
-  paid you." Cheap to do at template level; needs a decision on whether the
-  per-tab template mechanism grows a second slot.
-- **What does a tab with no Provider-set rules do about overdue?** The instance
-  defaults currently carry no negative leads, so overdue would be silent until
-  an administrator adds one. Ship a default (say d+1) or leave it opt-in?
+None outstanding. The two the draft carried are resolved as D-E and D-F.
+
+Two things to watch during the build rather than decide now:
+
+- **The generic wording on the payer's own copy.** "Alice made a payment" read
+  by Alice is the known cost of D-E. If it grates in practice the cheapest
+  remedy is dropping the payer from the recipient list, not adding a second
+  template.
+- **Whether d+1 and d+7 is the right default pair.** It is a judgement, not a
+  derivation. Easy to change before release, harder afterwards once instances
+  have customised around it.

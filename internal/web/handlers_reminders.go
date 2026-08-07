@@ -133,10 +133,14 @@ func parseReminderDays(raw string) ([]int, error) {
 		if p == "" {
 			continue
 		}
+		// A negative value is an overdue notice, fired that many days AFTER the
+		// due date. Zero is refused because "on the due date" is ambiguous
+		// between the two and nobody would agree which they meant.
 		n, err := strconv.Atoi(p)
-		if err != nil || n <= 0 || n > 3650 {
+		if err != nil || n == 0 || n < -3650 || n > 3650 {
 			return nil, errors.New(
-				"Reminder days must be a comma-separated list of whole days before the due date, like \"14, 7, 1\".")
+				"Reminder days must be a comma-separated list of whole days, like \"14, 7, 1\". " +
+					"A negative number is an overdue notice sent that many days after the due date, like \"-1, -7\".")
 		}
 		if !seen[n] {
 			seen[n] = true

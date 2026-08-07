@@ -48,6 +48,26 @@ missed, and the security review's backlog cap. Specified in
   its existing "balance owed" meaning, so reminder templates already saved by a
   Provider are untouched.
 
+- **A notice when a payment is missed**, to the payee and the Provider. Overdue
+  was not merely unimplemented before this, it was structurally unreachable: the
+  scan discarded past due dates, so once a due date passed that period went
+  permanently silent and a missed payment was indistinguishable from a healthy
+  tab.
+
+  The cadence reuses the existing reminder rules with **negative lead times** —
+  `-1, -7` fires the day after and a week after — so there is one mental model
+  rather than two, and the cap falls out of the configuration: two notices, then
+  silence. There is no separate stop-nagging rule to get wrong, and clearing the
+  negative rules turns overdue off.
+
+  Unlike a payment notice, overdue re-derives live state before sending: a
+  period settled late is not chased at the later lead.
+
+  **Overdue ships on**, with instance defaults at `-1` and `-7` that an
+  administrator can edit, extend, or clear. Note this is a behaviour change on
+  upgrade — an instance that has never touched its reminder settings will start
+  sending overdue notices it did not send before.
+
 - **A lookback window** (`BITT_NOTIFY_LOOKBACK_DAYS`, default 7) bounding how
   far back the scan will look for an event it has not yet announced. Takes
   effect with the payment notices below.

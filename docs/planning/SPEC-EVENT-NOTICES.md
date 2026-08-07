@@ -1,6 +1,6 @@
 # Spec — Event notices: payment made, payment missed
 
-**Status:** specified, not built
+**Status:** built and tested (v1.3.0)
 **Drafted:** 2026-08-07
 **Completes:** the Phase 5 follow-ups recorded in
 [ROADMAP.md](ROADMAP.md) ("payment-made/missed event notices, a backlog cap")

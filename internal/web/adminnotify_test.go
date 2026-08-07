@@ -193,8 +193,25 @@ func TestInstanceRemindersPrecedence(t *testing.T) {
 	ctx := t.Context()
 
 	// Nothing set anywhere: the built-in default, which the config already holds.
-	if got := h.srv().instanceReminders(ctx); len(got) != 3 || got[0].Days != 14 {
-		t.Fatalf("built-in default = %+v, want 14/7/1", got)
+	// Since D-F that is 14/7/1 before the due date plus overdue notices at 1 and
+	// 7 days after, so overdue is on out of the box rather than waiting to be
+	// discovered.
+	got := h.srv().instanceReminders(ctx)
+	var days []int
+	for _, r := range got {
+		days = append(days, r.Days)
+	}
+	if len(days) != 5 || days[0] != 14 {
+		t.Fatalf("built-in default = %v, want 14/7/1 and -1/-7", days)
+	}
+	var overdue int
+	for _, d := range days {
+		if d < 0 {
+			overdue++
+		}
+	}
+	if overdue != 2 {
+		t.Errorf("built-in default has %d overdue rules, want 2 -- overdue ships on", overdue)
 	}
 
 	if err := h.db.SetInstanceReminders(ctx, []store.TabReminder{
@@ -202,9 +219,9 @@ func TestInstanceRemindersPrecedence(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("set: %v", err)
 	}
-	got := h.srv().instanceReminders(ctx)
-	if len(got) != 1 || got[0].Days != 5 || got[0].Title != "stored" {
-		t.Fatalf("stored defaults not used: %+v", got)
+	stored := h.srv().instanceReminders(ctx)
+	if len(stored) != 1 || stored[0].Days != 5 || stored[0].Title != "stored" {
+		t.Fatalf("stored defaults not used: %+v", stored)
 	}
 
 	// The environment having spoken outranks the stored set.

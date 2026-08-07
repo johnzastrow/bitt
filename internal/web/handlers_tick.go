@@ -67,7 +67,7 @@ func (s *Server) postTick(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sent, skipped, deferred := s.runNotifications(r.Context(), notifier)
+	sent, skipped, deferred := s.runScans(r.Context(), notifier)
 	s.log.Info("tick completed", "sent", sent, "skipped", skipped, "deferred", deferred)
 	if deferred > 0 {
 		// Never let a cap look like quiet. A truncated run that reports only
@@ -94,10 +94,18 @@ func (s *Server) postTick(w http.ResponseWriter, r *http.Request) {
 // A per-tick send ceiling (NOTIF-03) bounds the run: nothing is lost when it
 // bites, because a claim is only written after a delivery, so an event that was
 // not reached this tick is reached by the next one.
-func (s *Server) runNotifications(ctx context.Context, notifier *notify.Notifier) (sent, skipped, deferred int) {
+// runScans performs every scan one tick owes, under a single shared send
+// budget so the ceiling bounds the whole run rather than each scan separately.
+func (s *Server) runScans(ctx context.Context, notifier *notify.Notifier) (sent, skipped, deferred int) {
 	budget := newSendBudget(s.cfg.Notify.MaxPerTick)
-	defer func() { deferred = budget.deferred }()
 
+	rs, rk := s.runNotifications(ctx, notifier, budget)
+	ps, pk := s.runPaymentNotices(ctx, notifier, budget)
+
+	return rs + ps, rk + pk, budget.deferred
+}
+
+func (s *Server) runNotifications(ctx context.Context, notifier *notify.Notifier, budget *sendBudget) (sent, skipped int) {
 	tabs, err := s.allTabsForNotify(ctx)
 	if err != nil {
 		s.log.Error("tick: list tabs", "error", err)

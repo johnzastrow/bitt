@@ -63,13 +63,21 @@ func (s *Server) postTick(w http.ResponseWriter, r *http.Request) {
 	if notifier == nil || !notifier.Enabled() {
 		// Authenticated, but nothing to deliver over. Report success with zero
 		// work so a cron does not treat it as an error.
-		writeTickResult(w, 0, 0)
+		writeTickResult(w, 0, 0, 0)
 		return
 	}
 
-	sent, skipped := s.runNotifications(r.Context(), notifier)
-	s.log.Info("tick completed", "sent", sent, "skipped", skipped)
-	writeTickResult(w, sent, skipped)
+	sent, skipped, deferred := s.runNotifications(r.Context(), notifier)
+	s.log.Info("tick completed", "sent", sent, "skipped", skipped, "deferred", deferred)
+	if deferred > 0 {
+		// Never let a cap look like quiet. A truncated run that reports only
+		// "sent=0" reads exactly like a run with nothing to do, and telling
+		// those two apart from the outside is expensive.
+		s.log.Warn("tick hit the per-tick send ceiling",
+			"deferred", deferred, "ceiling", s.cfg.Notify.MaxPerTick,
+			"note", "the next tick will deliver these; no claim was written")
+	}
+	writeTickResult(w, sent, skipped, deferred)
 }
 
 // runNotifications scans scheduled tabs and delivers due payment reminders.
@@ -82,11 +90,18 @@ func (s *Server) postTick(w http.ResponseWriter, r *http.Request) {
 // lost. Before sending it re-derives live state, so a period paid early or a
 // tab already settled produces no dunning notice (the one confirmed defect the
 // security review named).
-func (s *Server) runNotifications(ctx context.Context, notifier *notify.Notifier) (sent, skipped int) {
+//
+// A per-tick send ceiling (NOTIF-03) bounds the run: nothing is lost when it
+// bites, because a claim is only written after a delivery, so an event that was
+// not reached this tick is reached by the next one.
+func (s *Server) runNotifications(ctx context.Context, notifier *notify.Notifier) (sent, skipped, deferred int) {
+	budget := newSendBudget(s.cfg.Notify.MaxPerTick)
+	defer func() { deferred = budget.deferred }()
+
 	tabs, err := s.allTabsForNotify(ctx)
 	if err != nil {
 		s.log.Error("tick: list tabs", "error", err)
-		return 0, 0
+		return
 	}
 	today := s.today(ctx)
 
@@ -130,14 +145,47 @@ func (s *Server) runNotifications(ctx context.Context, notifier *notify.Notifier
 			// claims the occasion for the whole tab and every other payee is
 			// skipped in silence, so a tab with two payees notifies one person.
 			event := eventFor(occasion, p.UserID)
-			did := s.notifyParticipant(ctx, notifier, tab, p, event, spec, due, lead, balance)
+			did := s.notifyParticipant(ctx, notifier, tab, p, event, spec, due, lead, balance, budget)
 			sent += did
 			if did == 0 {
 				skipped++
 			}
 		}
 	}
-	return sent, skipped
+	return
+}
+
+// sendBudget bounds the deliveries one tick may perform.
+//
+// Exceeding it is not an error and nothing is dropped: a claim is written only
+// after a confirmed delivery, so an event this tick did not reach carries no
+// claim and the next tick picks it up. What the budget prevents is a single run
+// after a long outage turning into a burst across every tab at once.
+type sendBudget struct {
+	remaining int // negative means unbounded
+	deferred  int
+}
+
+func newSendBudget(max int) *sendBudget {
+	if max <= 0 {
+		return &sendBudget{remaining: -1}
+	}
+	return &sendBudget{remaining: max}
+}
+
+// take reserves one delivery, reporting whether the caller may proceed. A
+// refusal is counted so the tick can say how much it left behind -- a silent
+// cap is indistinguishable from having nothing to send.
+func (b *sendBudget) take() bool {
+	if b.remaining < 0 {
+		return true
+	}
+	if b.remaining == 0 {
+		b.deferred++
+		return false
+	}
+	b.remaining--
+	return true
 }
 
 // eventFor scopes an occasion to one recipient, producing the claim key.
@@ -153,7 +201,7 @@ func eventFor(occasion string, userID int64) string {
 // notifyParticipant delivers one reminder to one payee over each channel they
 // have enabled that has not already sent this event. Returns the number of
 // channels delivered on.
-func (s *Server) notifyParticipant(ctx context.Context, notifier *notify.Notifier, tab store.Tab, p store.Participant, event string, spec config.Reminder, due schedule.Date, lead int, balance money.Cents) int {
+func (s *Server) notifyParticipant(ctx context.Context, notifier *notify.Notifier, tab store.Tab, p store.Participant, event string, spec config.Reminder, due schedule.Date, lead int, balance money.Cents, budget *sendBudget) int {
 	user, err := s.store.GetUser(ctx, p.UserID)
 	if err != nil || !user.Active() {
 		return 0
@@ -165,6 +213,12 @@ func (s *Server) notifyParticipant(ctx context.Context, notifier *notify.Notifie
 	for _, ch := range channelsFor(user, notifier, rcpt) {
 		already, err := s.store.WasSent(ctx, tab.ID, event, string(ch))
 		if err != nil || already {
+			continue
+		}
+		// Budget is taken only for work actually about to happen: an
+		// already-claimed channel must not consume the ceiling, or a large
+		// backlog of settled events would starve the ones still to send.
+		if !budget.take() {
 			continue
 		}
 		if err := notifier.Deliver(ctx, ch, rcpt, msg); err != nil {
@@ -299,9 +353,16 @@ func bearerToken(header string) string {
 	return ""
 }
 
-func writeTickResult(w http.ResponseWriter, sent, skipped int) {
+func writeTickResult(w http.ResponseWriter, sent, skipped, deferred int) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = w.Write([]byte("ok sent=" + strconv.Itoa(sent) + " skipped=" + strconv.Itoa(skipped) + "\n"))
+	body := "ok sent=" + strconv.Itoa(sent) + " skipped=" + strconv.Itoa(skipped)
+	// Only present when it happened, so the usual line a cron logs every hour
+	// stays as short as it has always been, and a deferred= appearing in it is
+	// itself the signal that something needs attention.
+	if deferred > 0 {
+		body += " deferred=" + strconv.Itoa(deferred)
+	}
+	_, _ = w.Write([]byte(body + "\n"))
 }
 
 // allowTick rate-limits the cron endpoint. The caller is a single cron, so the

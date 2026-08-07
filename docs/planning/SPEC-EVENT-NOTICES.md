@@ -246,15 +246,26 @@ The outstanding "cap and drain" item from the Phase 5 security review, and now
 load-bearing: deriving events from the ledger means a long cron outage could
 otherwise produce a burst of notices across every tab at once.
 
-- **Lookback window.** Only entries newer than `BITT_NOTIFY_LOOKBACK` (default
-  7 days) are candidates. Anything older is never announced — after a week's
-  outage, a payment notice is noise, not news.
+- **Lookback window.** Only entries newer than `BITT_NOTIFY_LOOKBACK_DAYS`
+  (default 7) are candidates. Anything older is never announced — after a week's
+  outage, a payment notice is noise, not news. Consumed by NOTIF-01, where
+  events first become ledger-derived.
 - **Per-tick send ceiling.** `BITT_NOTIFY_MAX_PER_TICK` (default 50) bounds one
-  run. Undelivered events are not lost: with no claim written, the next tick
-  picks them up.
-- **Log what was dropped.** A tick that hits the ceiling logs the count left
-  behind. A silent cap reads as "nothing to send," which is the failure mode
-  this session already demonstrated is expensive to diagnose.
+  run. Zero or negative is unbounded. Undelivered events are not lost: with no
+  claim written, the next tick picks them up.
+- **Log what was dropped.** A tick that hits the ceiling logs a warning with the
+  count left behind, and adds `deferred=N` to the response body — omitted when
+  zero, so its presence is itself the signal. A silent cap reads as "nothing to
+  send," which is the failure mode this session already demonstrated is
+  expensive to diagnose.
+
+**The ceiling is spent only on work about to happen.** `budget.take()` comes
+*after* the already-claimed check, never before. Reversed, a backlog of settled
+events consumes the ceiling and starves the events still to send — and because
+the starved ones are re-deferred every tick, they are starved permanently.
+`TestTickCeilingDrainsOnLaterTicks` pins this: with the order inverted the
+second tick reports `sent=0 skipped=2 deferred=1` and the deferred payee is
+never reached.
 
 The review also asked for per-recipient failure bounding — stop retrying a hard
 failing recipient. That needs attempt/error columns on `sent_notifications`,

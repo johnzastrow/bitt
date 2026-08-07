@@ -168,7 +168,29 @@ type NotifyConfig struct {
 	NtfyBaseURL string
 	// NtfyToken is an optional bearer token for a private ntfy server.
 	NtfyToken string
+
+	// LookbackDays bounds how far back the scan will look for an event it has
+	// not yet announced. Event notices are derived from the ledger rather than
+	// queued, so without a floor a long cron outage would eventually announce
+	// history. A week-old payment notice is noise, not news: past this age an
+	// event is dropped, permanently and deliberately.
+	LookbackDays int
+
+	// MaxPerTick bounds the deliveries one tick may perform, so an outage does
+	// not become a burst across every tab at once. Nothing is lost when it
+	// bites: no claim is written for an undelivered event, so the next tick
+	// picks it up. Zero or negative means unbounded.
+	MaxPerTick int
 }
+
+// Lookback is LookbackDays as a duration, for comparing against entry
+// timestamps.
+func (n NotifyConfig) Lookback() time.Duration {
+	return time.Duration(n.LookbackDays) * 24 * time.Hour
+}
+
+// Capped reports whether a per-tick ceiling is in force.
+func (n NotifyConfig) Capped() bool { return n.MaxPerTick > 0 }
 
 // EmailEnabled reports whether email delivery is configured.
 func (n NotifyConfig) EmailEnabled() bool { return n.SMTPHost != "" }
@@ -204,6 +226,8 @@ func Load() (Config, error) {
 			EmailFrom:    ld.str("BITT_EMAIL_FROM", ""),
 			NtfyBaseURL:  strings.TrimRight(ld.str("BITT_NTFY_URL", ""), "/"),
 			NtfyToken:    ld.str("BITT_NTFY_TOKEN", ""),
+			LookbackDays: envInt("BITT_NOTIFY_LOOKBACK_DAYS", 7),
+			MaxPerTick:   envInt("BITT_NOTIFY_MAX_PER_TICK", 50),
 		},
 	}
 	// A file: read that fails is a misconfiguration, not a reason to fall back

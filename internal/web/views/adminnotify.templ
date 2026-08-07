@@ -41,6 +41,12 @@ type AdminNotifyData struct {
 	// SecretsSet reports which credentials are present, without their values.
 	SMTPPasswordSet bool
 	NtfyTokenSet    bool
+	// SMTPAuthIncomplete reports the one configuration that looks finished and
+	// is not: a username with no password. Email counts as "ready" on a server
+	// address alone, because a server that wants no credentials is legitimate --
+	// so a half-filled credential would otherwise show green and fail on every
+	// send, with the reason visible only in the container log.
+	SMTPAuthIncomplete bool
 }
 
 // EnvLocks marks the settings the environment has taken authority over.
@@ -69,12 +75,24 @@ templ AdminNotify(p Page, d AdminNotifyData) {
 			<h2>Status</h2>
 			<ul class="statuslist">
 				<li>
-					<span class={ "pill", readyClass(d.EmailReady) }>{ readyLabel(d.EmailReady) }</span>
+					if d.SMTPAuthIncomplete {
+						<span class="pill pill-fault">Misconfigured</span>
+					} else {
+						<span class={ "pill", readyClass(d.EmailReady) }>{ readyLabel(d.EmailReady) }</span>
+					}
 					Email delivery
 					if !d.EmailReady {
 						<span class="muted small">
 							Needs an SMTP server and a from address, below. A password, if your server wants one,
-							comes from the environment.
+							is <code>BITT_SMTP_PASSWORD</code> in the environment -- there is no field for it here,
+							by design. See Credentials below.
+						</span>
+					}
+					if d.SMTPAuthIncomplete {
+						<span class="statusnote-fault small">
+							A username is set but <code>BITT_SMTP_PASSWORD</code> is not, so the server will be reached
+							and every send will fail authentication. Set the password in the environment and restart
+							the app, or clear the username if your server wants no credentials. See Credentials below.
 						</span>
 					}
 				</li>
@@ -138,6 +156,24 @@ templ AdminNotify(p Page, d AdminNotifyData) {
 				Each accepts <code>file:/run/secrets/name</code> as well as a plain value, and a file that cannot be
 				read stops the app from starting rather than falling back to blank.
 			</p>
+			<details class="stack">
+				<summary>How to set one</summary>
+				<p class="muted small">
+					Unlike the delivery settings below -- which are read fresh on every tick, so a change there takes
+					effect without a restart -- these are read once at startup. <strong>A credential change needs the
+					app restarted before it counts.</strong>
+				</p>
+				<p class="muted small">
+					Under Docker Compose, put the value in a <code>.env</code> file beside the compose file, readable
+					only by its owner (<code>chmod 600</code>), and reference it from the service rather than writing
+					it inline -- an inline value lands in <code>docker inspect</code> and in your shell history:
+				</p>
+				<pre><code>{ credentialExample }</code></pre>
+				<p class="muted small">
+					Then <code>docker compose up -d</code>. This screen will show the credential as set; if it still
+					says missing, the variable did not reach the container.
+				</p>
+			</details>
 		</section>
 		<section class="card">
 			<h2>Delivery</h2>
@@ -176,6 +212,11 @@ templ AdminNotify(p Page, d AdminNotifyData) {
 							placeholder="587"
 							readonly?={ d.Env.SMTPHost }
 						/>
+						<small>
+							587 is the usual submission port. Many hosting providers block outbound 587, and most mail
+							services offer an alternative such as 2525 for exactly that reason -- if sends time out
+							rather than being rejected, try the alternative before suspecting the credentials.
+						</small>
 					</label>
 					<label>
 						Username
@@ -187,9 +228,14 @@ templ AdminNotify(p Page, d AdminNotifyData) {
 							autocomplete="off"
 							readonly?={ d.Env.SMTPUsername }
 						/>
-						if d.Env.SMTPUsername {
-							<small>Fixed by <code>BITT_SMTP_USERNAME</code>.</small>
-						}
+						<small>
+							Leave blank only if your server accepts unauthenticated mail. With a username set, the
+							matching password must be in <code>BITT_SMTP_PASSWORD</code>; there is no password field
+							here because a credential is never stored in the database.
+							if d.Env.SMTPUsername {
+								Fixed by <code>BITT_SMTP_USERNAME</code>.
+							}
+						</small>
 					</label>
 					<label>
 						From address
@@ -313,6 +359,16 @@ templ AdminNotify(p Page, d AdminNotifyData) {
 		</section>
 	}
 }
+
+// credentialExample shows the shape of a Compose reference rather than a
+// literal value. The ":?" form fails the deployment loudly when the variable is
+// absent, which is preferable to starting with an empty credential and failing
+// silently on the first send.
+const credentialExample = `# .env, beside the compose file, chmod 600
+BITT_SMTP_PASSWORD=your-smtp-password
+
+# compose file, under the service's environment:
+    BITT_SMTP_PASSWORD: ${BITT_SMTP_PASSWORD:?set BITT_SMTP_PASSWORD in .env}`
 
 // readyClass and readyLabel report a channel's state as a pill.
 func readyClass(ready bool) string {

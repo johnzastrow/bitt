@@ -7,6 +7,34 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [1.2.1] - 2026-08-07 — Notification settings say why email cannot send
+
+### Fixed
+- **An SMTP username with no password no longer reports as ready.** Email counts
+  as configured on a server address alone, because a server that wants no
+  credentials is legitimate. That meant a half-filled credential — a username
+  saved through the form with no `BITT_SMTP_PASSWORD` in the environment — showed
+  green on the notification settings screen while every send failed
+  authentication, with the reason visible only in the container log. It now
+  reports as **Misconfigured** and names the variable to set.
+
+  The colour is the exception that proves the existing rule: an unconfigured
+  channel stays neutral, because a deployment that has not got there yet is not
+  a fault. A setting that looks finished and cannot work is.
+
+### Changed
+- **The settings screen explains where credentials come from.** The absence of
+  an SMTP password field is deliberate — a secret in the database would need a
+  key that has to come from the environment anyway — but the screen did not say
+  so anywhere an administrator looking for the field would read it. The username
+  field now states it, and the Credentials section carries a worked example of
+  setting a variable through Compose and a `.env`, along with the fact that
+  credentials are read once at startup and so need a restart, unlike the
+  delivery settings, which apply on the next tick.
+- **The port field notes the 587 problem.** Many hosting providers block
+  outbound 587 and mail services offer an alternative such as 2525; a send that
+  times out rather than being rejected is a blocked port, not a bad credential.
+
 ## [1.2.0] - 2026-07-26 — Tab administrators; create form keeps your entries
 
 ### Added

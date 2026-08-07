@@ -7,6 +7,25 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [1.2.2] - 2026-08-07 — Every payee on a tab gets their reminder
+
+### Fixed
+- **A tab with more than one payee notified only the first of them.** The
+  send-once claim table is keyed `(tab_id, event_key, channel)` with no user
+  column, because the recipient was always meant to live inside the event key —
+  migration `0008` documents the shape, `req:2026-08-01:u7`. The reminder scan
+  built the key without that suffix, so the first payee's claim matched every
+  later payee's already-sent check and they were skipped in silence: no error,
+  no log line, indistinguishable from nothing being due.
+
+  Fixed by scoping the key to its recipient. No migration: the schema was right
+  all along.
+
+  **Upgrade note.** The key format changes, so a reminder already claimed under
+  the old format sends one duplicate at the version boundary. This is the
+  harmless duplicate the send-then-claim design already tolerates, and it
+  happens once.
+
 ## [1.2.1] - 2026-08-07 — Notification settings say why email cannot send
 
 ### Fixed

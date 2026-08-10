@@ -3,6 +3,8 @@ package notify
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +12,7 @@ import (
 	"net/mail"
 	"net/smtp"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -291,7 +294,7 @@ func (n *Notifier) deliverEmail(ctx context.Context, to string, m Message) error
 		return err
 	}
 
-	msg, err := buildEmail(fromAddr.String(), toAddr.Address, subject, m)
+	msg, err := buildEmail(fromAddr.String(), fromAddr.Address, toAddr.Address, subject, m)
 	if err != nil {
 		return err
 	}
@@ -316,10 +319,35 @@ func (n *Notifier) deliverEmail(ctx context.Context, to string, m Message) error
 	return nil
 }
 
-// buildEmail assembles the RFC 5322 message. Every header value has already
-// been through address parsing or oneLine, so no user text reaches a header
-// unchecked; the user's free text lives only in the body.
-func buildEmail(from, to, subject string, m Message) ([]byte, error) {
+// now is the clock, swappable so a test can pin the Date header.
+var now = time.Now
+
+// messageID returns a globally unique Message-ID local part plus the sending
+// domain, e.g. "3f2b...@example.com".
+//
+// The randomness is from crypto/rand rather than math/rand. A Message-ID is not
+// a secret, but a predictable one lets an outsider guess identifiers for
+// messages they never saw, and the cost of using the good generator is nil. A
+// failure to read randomness falls back to the clock rather than failing the
+// send: a duplicate-prone Message-ID is far better than no notification.
+func messageID(fromAddr string) string {
+	var b [16]byte
+	local := ""
+	if _, err := rand.Read(b[:]); err == nil {
+		local = hex.EncodeToString(b[:])
+	} else {
+		local = strconv.FormatInt(now().UnixNano(), 36)
+	}
+	domain := "localhost"
+	if i := strings.LastIndex(fromAddr, "@"); i >= 0 && i+1 < len(fromAddr) {
+		domain = fromAddr[i+1:]
+	}
+	return local + "@" + domain
+}
+
+// buildEmail assembles the message. fromAddr is the bare address (no display
+// name), used for the Message-ID domain; from is the full header value.
+func buildEmail(from, fromAddr, to, subject string, m Message) ([]byte, error) {
 	// Defence in depth: re-check the assembled header values.
 	for _, h := range []string{from, to, subject} {
 		if _, err := sanitizeHeader(h); err != nil {
@@ -332,6 +360,14 @@ func buildEmail(from, to, subject string, m Message) ([]byte, error) {
 	}
 
 	var buf bytes.Buffer
+	// Date is REQUIRED by RFC 5322 section 3.6, and Message-ID is expected by
+	// every filter that has an opinion. Omitting them is not a cosmetic lapse:
+	// SpamAssassin scores MISSING_DATE and MISSING_MID directly, so a message
+	// without them starts with spam points before its content is read. That is
+	// enough to land otherwise well-authenticated mail -- SPF, DKIM and DMARC
+	// all passing -- in a spam folder.
+	fmt.Fprintf(&buf, "Date: %s\r\n", now().Format(time.RFC1123Z))
+	fmt.Fprintf(&buf, "Message-ID: <%s>\r\n", messageID(fromAddr))
 	fmt.Fprintf(&buf, "From: %s\r\n", from)
 	fmt.Fprintf(&buf, "To: %s\r\n", to)
 	fmt.Fprintf(&buf, "Subject: %s\r\n", subject)

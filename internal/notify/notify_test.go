@@ -1,12 +1,15 @@
 package notify
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
+	"net/mail"
 	"net/smtp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/johnzastrow/bitt/internal/config"
 )
@@ -59,7 +62,7 @@ func TestDestinationPolicy(t *testing.T) {
 
 func TestBuildEmailPutsUserTextInBodyNotHeaders(t *testing.T) {
 	m := Message{Title: "Payment due on Rent", Body: "You owe $50.00 on the Rent tab.", Link: "https://bitt.example/tabs/3"}
-	msg, err := buildEmail("bitt@example.com", "payee@example.com", m.Title, m)
+	msg, err := buildEmail("bitt@example.com", "bitt@example.com", "payee@example.com", m.Title, m)
 	if err != nil {
 		t.Fatalf("buildEmail: %v", err)
 	}
@@ -81,7 +84,7 @@ func TestBuildEmailPutsUserTextInBodyNotHeaders(t *testing.T) {
 
 // A CRLF in the title is refused rather than producing extra headers.
 func TestBuildEmailRefusesHeaderInjection(t *testing.T) {
-	if _, err := buildEmail("a@b.com", "c@d.com", "x\r\nBcc: evil@e.com", Message{}); !errors.Is(err, ErrHeaderInjection) {
+	if _, err := buildEmail("a@b.com", "a@b.com", "c@d.com", "x\r\nBcc: evil@e.com", Message{}); !errors.Is(err, ErrHeaderInjection) {
 		t.Errorf("buildEmail accepted a CRLF subject: %v", err)
 	}
 }
@@ -143,5 +146,67 @@ func TestAvailableAndEnabled(t *testing.T) {
 	}
 	if n.Available(ChannelNtfy, Recipient{Topic: "bad/topic"}) {
 		t.Error("ntfy must reject an invalid topic")
+	}
+}
+
+// RFC 5322 section 3.6 makes Date mandatory and Message-ID expected. Relays
+// commonly paper over their absence -- SMTP2GO inserts both -- which is exactly
+// why this is worth pinning: the app must not depend on a particular relay's
+// good manners, and a Message-ID in the SENDER's domain is better aligned than
+// one in the relay's.
+func TestBuildEmailHasRequiredHeaders(t *testing.T) {
+	fixed := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	old := now
+	now = func() time.Time { return fixed }
+	defer func() { now = old }()
+
+	raw, err := buildEmail(`"BitTabby" <bitt@example.com>`, "bitt@example.com",
+		"payee@example.com", "Subject here", Message{Body: "body"})
+	if err != nil {
+		t.Fatalf("buildEmail: %v", err)
+	}
+	msg, err := mail.ReadMessage(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("the message does not parse as RFC 5322: %v", err)
+	}
+
+	d, err := msg.Header.Date()
+	if err != nil {
+		t.Errorf("Date header missing or unparseable: %v", err)
+	} else if !d.Equal(fixed) {
+		t.Errorf("Date = %v, want %v", d, fixed)
+	}
+
+	mid := msg.Header.Get("Message-ID")
+	if mid == "" {
+		t.Fatal("Message-ID header is absent")
+	}
+	if !strings.HasPrefix(mid, "<") || !strings.HasSuffix(mid, ">") {
+		t.Errorf("Message-ID %q is not angle-bracketed", mid)
+	}
+	if !strings.HasSuffix(mid, "@example.com>") {
+		t.Errorf("Message-ID %q should carry the sending domain, not a relay's", mid)
+	}
+}
+
+// Two messages must never share an identifier, or threading collapses them.
+func TestMessageIDIsUnique(t *testing.T) {
+	seen := map[string]bool{}
+	for range 500 {
+		id := messageID("bitt@example.com")
+		if seen[id] {
+			t.Fatalf("duplicate Message-ID generated: %s", id)
+		}
+		seen[id] = true
+	}
+}
+
+// A From with no domain must not produce a malformed header.
+func TestMessageIDHandlesAOddFrom(t *testing.T) {
+	for _, in := range []string{"", "no-at-sign", "trailing@"} {
+		id := messageID(in)
+		if !strings.Contains(id, "@") || strings.HasSuffix(id, "@") {
+			t.Errorf("messageID(%q) = %q, want a well-formed id", in, id)
+		}
 	}
 }

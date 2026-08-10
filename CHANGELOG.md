@@ -7,6 +7,25 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [1.3.1] - 2026-08-10 — Notification emails carry Date and Message-ID
+
+### Fixed
+- **Outgoing email omitted the `Date` and `Message-ID` headers.** `Date` is
+  mandatory under RFC 5322 section 3.6 and `Message-ID` is expected by
+  essentially every filter and mail client. The app emitted neither.
+
+  In practice a relay usually papers over this — SMTP2GO inserts both, so mail
+  sent through it arrived complete and this was invisible. That is exactly the
+  reason to fix it: the app should not depend on a particular relay's good
+  manners, and a `Message-ID` in the sending domain is better aligned than one
+  in the relay's. Threading and de-duplication in mail clients key on it.
+
+  The identifier uses `crypto/rand`. A Message-ID is not a secret, but a
+  predictable one lets an outsider guess identifiers for messages they never
+  saw, and the better generator costs nothing. If randomness is unavailable it
+  falls back to the clock rather than failing the send — a duplicate-prone
+  identifier beats a notification that never goes out.
+
 ## [1.3.0] - 2026-08-07 — Event notices
 
 Completes the Phase 5 follow-ups: notices on a payment made and a payment

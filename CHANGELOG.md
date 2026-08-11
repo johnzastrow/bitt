@@ -7,6 +7,31 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [1.4.1] - 2026-08-11 — Overdue lead times can actually be saved
+
+### Fixed
+- **Overdue notices could not be configured at all.** They are expressed as
+  negative lead times (`-1` fires the day after a due date), but both reminder
+  tables carried `CHECK (days > 0 AND days <= 3650)` from before overdue
+  existed. A negative rule could never be stored.
+
+  The failure was quiet and misleading. Overdue worked from the **built-in
+  defaults**, which live in code and never touch the database — so it appeared
+  to work. Any instance that had saved its reminders through the admin screen
+  (which *replaces* the built-in set) silently had no overdue at all, and trying
+  to add one failed against the constraint. The feature was reachable only by
+  never configuring it.
+
+  Migration `0012` rebuilds both tables with `CHECK (days <> 0 AND days >= -3650
+  AND days <= 3650)`. Zero stays refused: "on the due date" is ambiguous between
+  a reminder and an overdue notice.
+
+  Shipped in 1.3.0 and found in production when an administrator tried to add
+  the overdue rules. The parser was relaxed to accept negatives without the
+  schema being relaxed to store them, and the test covered the parser as a pure
+  function — nothing exercised the round trip to storage. Three storage tests
+  now do, and they fail without the migration.
+
 ## [1.4.0] - 2026-08-11 — Reminders quote the payment due, not the whole balance
 
 ### Fixed

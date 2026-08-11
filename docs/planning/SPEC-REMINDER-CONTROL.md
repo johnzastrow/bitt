@@ -123,7 +123,8 @@ Answers "can I see it happen now".
 ### Behaviour
 
 A control on the tab's Reminders card that runs the real send path for that tab
-immediately: real message, real recipients, real channels.
+immediately -- the real message, built from the tab's live figures, over real
+channels -- addressed to the administrator who pressed it.
 
 ### Decided: preview-to-self, bypassing both gates
 
@@ -156,9 +157,10 @@ ntfy") so it can never be mistaken for having notified the tab.
 ### Guard rails
 
 - Provider or tab administrator only — the same authority that edits the tab.
-- Rate limited per tab, so it cannot become a way to mail somebody repeatedly.
-- Logged distinctly (`manual reminder sent`) so a claim row's origin is legible
-  afterwards.
+- Rate limited per tab. Even self-addressed, an unbounded button is a way to
+  mail yourself into a spam folder.
+- Logged distinctly (`reminder preview sent`), and the log must make clear no
+  claim was written, so nobody later reads it as evidence the payee was told.
 
 ---
 

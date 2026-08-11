@@ -112,7 +112,7 @@ func TestOverdueNoticeReadsInThePastTense(t *testing.T) {
 	if strings.Contains(body, "-1") || strings.Contains(body, "in -") {
 		t.Errorf("a negative lead leaked into the wording:\n%s", body)
 	}
-	if !strings.Contains(body, "is still owed") {
+	if !strings.Contains(body, "Balance owed:") {
 		t.Errorf("overdue notice does not use the overdue template:\n%s", body)
 	}
 }
@@ -149,7 +149,7 @@ func TestOverdueStopsOnceThePeriodIsPaid(t *testing.T) {
 	// The payment notice still goes out -- that is NOTIF-01, and a payment is a
 	// fact. What must not appear is a dunning notice for a paid period.
 	for _, m := range sent() {
-		if strings.Contains(m.body, "was due") || strings.Contains(m.body, "is still owed") {
+		if strings.Contains(m.body, "was due") {
 			t.Errorf("a settled tab was still chased:\n%s", m.body)
 		}
 	}

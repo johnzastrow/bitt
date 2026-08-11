@@ -58,7 +58,7 @@ func TestBearerToken(t *testing.T) {
 func TestReminderMessageKeepsBodyClean(t *testing.T) {
 	h := newHarness(t)
 	spec := config.Reminder{Days: 7, Title: "Payment due {when}", Body: "Tab: {tab}"}
-	m := h.srv().reminderMessage(spec, tabNamed("Rent"), dateOf(2026, 8, 1), 7, -5000)
+	m := h.srv().reminderMessage(t.Context(), spec, tabNamed("Rent"), dateOf(2026, 8, 1), 7, -5000)
 	if !strings.Contains(m.Body, "Rent") {
 		t.Errorf("body should carry the tab name: %q", m.Body)
 	}
@@ -76,7 +76,7 @@ func TestReminderMessageRendersVariables(t *testing.T) {
 	h := newHarness(t)
 	h.srv().cfg.BaseURL = "https://bitt.example"
 	spec := config.Reminder{Days: 7, Title: "Due {when}: {tab}", Body: "You owe {amount} by {due}. Pay: {url}"}
-	m := h.srv().reminderMessage(spec, store.Tab{ID: 4, Name: "Rent"}, dateOf(2026, 8, 1), 7, -50000)
+	m := h.srv().reminderMessage(t.Context(), spec, store.Tab{ID: 4, Name: "Rent"}, dateOf(2026, 8, 1), 7, -50000)
 	if m.Title != "Due in one week: Rent" {
 		t.Errorf("title = %q", m.Title)
 	}

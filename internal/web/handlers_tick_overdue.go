@@ -60,7 +60,7 @@ func (s *Server) runOverdueNotices(ctx context.Context, notifier *notify.Notifie
 		if err != nil {
 			continue
 		}
-		msg := s.reminderMessage(spec, tab, due, lead, balance)
+		msg := s.reminderMessage(ctx, spec, tab, due, lead, balance)
 		occasion := "overdue:" + due.String() + ":d" + strconv.Itoa(-lead)
 
 		for _, p := range participants {

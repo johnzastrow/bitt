@@ -956,3 +956,9 @@ tr.reversal td { color: var(--fg-muted); }
 }
 .previewto { margin: var(--s1) 0 0; padding-left: var(--s3); }
 .previewto li { margin: 0.15rem 0; }
+
+/* REM-03: inline notification settings on the People table. Compact, because it
+   sits in a table cell beside three other columns. */
+.notifyform { display: flex; flex-wrap: wrap; gap: var(--s1); align-items: center; }
+.notifyform input[type="text"] { width: 10rem; }
+.notifyform .checkrow { margin: 0; white-space: nowrap; }

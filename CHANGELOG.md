@@ -7,6 +7,45 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [1.5.0] - 2026-08-11 — Seeing and controlling reminders
+
+Prompted by a production audit that found three settings problems, none of
+which the interface could have shown anyone. Specified in
+[SPEC-REMINDER-CONTROL.md](docs/planning/SPEC-REMINDER-CONTROL.md).
+
+### Added
+- **Each reminder is now rendered on the tab's Setup screen** exactly as it
+  would send, using the tab's **live figures** rather than sample values. This
+  is the feature that would have caught a car loan reminder headed
+  "$21,877.58 due tomorrow": the screen showed the template, `{amount}`, and the
+  mistake existed only in what it rendered to. Sample data would have produced a
+  plausible figure and hidden it just as well.
+
+  Each rule also lists **who it reaches**, by channel — and anyone it cannot
+  reach **with the reason**: no ntfy topic, notifications switched off, no email
+  address. A payee silently receiving nothing is the other way a reminder goes
+  missing, and diagnosing it previously required a database query.
+
+  A rule that cannot be rendered says why instead of rendering. "$0.00 due
+  Jan 1, year 1" reads as a real reminder; "this tab has no schedule" is
+  information.
+- **A "Send this to me now" control** on each rendered reminder. It sends the
+  real message over the real channels **to the administrator who pressed it and
+  to nobody else** — a rehearsal, not a "notify everyone" button.
+
+  It bypasses the already-sent claim and the lead-day match, both of which would
+  otherwise make it do nothing on most days. **It writes no claim**, so it
+  cannot suppress the genuine reminder to the genuine payee. Bounded at six a
+  minute per account.
+- **An administrator can edit another account's notification settings** — ntfy
+  topic and the two channel toggles — from the People screen, which now shows
+  every account's topic in a column. Two people sharing one topic is then
+  obvious at a glance instead of buried in separate profiles.
+
+  Deliberately narrow: not passwords, not email addresses, not roles. Changes
+  are logged with both user ids, since "who changed whose" is the question an
+  audit trail has to answer.
+
 ## [1.4.1] - 2026-08-11 — Overdue lead times can actually be saved
 
 ### Fixed

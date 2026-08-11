@@ -147,7 +147,7 @@ func announceablePayments(entries []store.Entry, cutoff time.Time) []store.Entry
 func paymentMessage(tab store.Tab, payer string, paid, balance money.Cents, baseURL string) notify.Message {
 	url := ""
 	if baseURL != "" {
-		url = baseURL + tabPath(tab.ID)
+		url = baseURL + tabPath(tab.ID) // a payment notice links to the tab, not the pay form
 	}
 	// Balance is held negative when money is owed, matching the reminder path's
 	// presentation, so it is negated for display.

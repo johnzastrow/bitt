@@ -962,3 +962,9 @@ tr.reversal td { color: var(--fg-muted); }
 .notifyform { display: flex; flex-wrap: wrap; gap: var(--s1); align-items: center; }
 .notifyform input[type="text"] { width: 10rem; }
 .notifyform .checkrow { margin: 0; white-space: nowrap; }
+
+/* The dedicated payment screen. One job, so the amount leads and everything
+   else is subordinate to it -- this is opened from a notification, often
+   one-handed, to do one thing. */
+.paycard { max-width: 30rem; }
+.payamount { margin: 0; font-size: 2.2rem; font-weight: 600; line-height: 1.1; }

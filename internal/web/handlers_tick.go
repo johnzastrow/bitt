@@ -261,7 +261,11 @@ func channelsFor(u store.User, n *notify.Notifier, r notify.Recipient) []notify.
 func (s *Server) reminderMessage(ctx context.Context, spec config.Reminder, tab store.Tab, due schedule.Date, lead int, balance money.Cents) notify.Message {
 	url := ""
 	if s.cfg.BaseURL != "" {
-		url = s.cfg.BaseURL + tabPath(tab.ID)
+		// The dedicated payment screen, not the whole tab. {url} has always been
+		// documented as "a link to the tab's payment page"; it pointed at the tab
+		// page instead, which on a phone is a lot of scrolling to reach the one
+		// form a reminder is asking you to use.
+		url = s.cfg.BaseURL + payPath(tab.ID)
 	}
 	rep := strings.NewReplacer(
 		"{tab}", tab.Name,

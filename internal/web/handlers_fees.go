@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -200,10 +201,16 @@ func parseInterestBP(raw string) (int64, error) {
 // expectation that posts nothing, and reading one field as both is what let a
 // mis-set loan read as already settled.
 func (s *Server) payoffFor(r *http.Request, tab store.Tab) (ledger.Payoff, error) {
-	entries, err := s.ledger.History(r.Context(), tab.ID)
+	return s.payoffAt(r.Context(), tab)
+}
+
+// payoffAt is payoffFor without a request. The notification scan needs the same
+// figures and has only a context -- the request was never used for anything but
+// its context.
+func (s *Server) payoffAt(ctx context.Context, tab store.Tab) (ledger.Payoff, error) {
+	entries, err := s.ledger.History(ctx, tab.ID)
 	if err != nil {
 		return ledger.Payoff{}, err
 	}
-	loc := s.location(r.Context())
-	return ledger.ComputePayoff(tab, entries, s.today(r.Context()), loc), nil
+	return ledger.ComputePayoff(tab, entries, s.today(ctx), s.location(ctx)), nil
 }

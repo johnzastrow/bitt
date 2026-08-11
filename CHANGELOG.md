@@ -7,6 +7,36 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [1.4.0] - 2026-08-11 — Reminders quote the payment due, not the whole balance
+
+### Fixed
+- **A Payoff tab's reminder quoted the entire loan instead of the installment.**
+  Caught in production: a car loan reminder went out headed
+  `Tobi Car Loan: $21,877.58 due tomorrow`. That figure was the whole
+  outstanding balance. The payment actually due was one installment, and
+  quoting the balance turns a routine reminder into a demand for the entire
+  debt.
+
+  The cause was `{amount}`, which renders the tab balance. On every other kind
+  of tab that IS what is due, so the bug was invisible until a Payoff tab came
+  due in production.
+
+### Added
+- **A `{payment}` template variable** — what to pay now: the installment on a
+  Payoff tab, the balance on any other. The final payment is whatever is left
+  rather than a full installment, so the two are taken together.
+
+  `{amount}` deliberately keeps meaning the whole balance. Providers have saved
+  per-tab templates that use it that way, and redefining it per tab kind would
+  silently change stored text — the same trap avoided when `{paid}` was added.
+
+### Changed
+- **The default reminder and overdue templates now lead with `{payment}`** and
+  keep the balance as context ("Balance owed: ..."). On a non-Payoff tab the
+  two are equal and the message reads as it always did; on a Payoff tab it is
+  now correct. This changes the wording of default messages for every instance
+  that has not customised its templates.
+
 ## [1.3.1] - 2026-08-10 — Notification emails carry Date and Message-ID
 
 ### Fixed

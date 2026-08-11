@@ -94,7 +94,8 @@ type Config struct {
 // filled per send:
 //
 //	{tab}     the tab name
-//	{amount}  the amount owed, e.g. "$505.65"
+//	{amount}  the whole balance owed, e.g. "$505.65"
+//	{payment} what to pay now: the installment on a Payoff tab, else {amount}
 //	{due}     the due date, e.g. "Aug 1, 2026"
 //	{days}    the lead time in days, e.g. "7"
 //	{when}    a phrase for the lead time, e.g. "in one week" / "tomorrow"
@@ -120,15 +121,20 @@ type Reminder struct {
 // names the lead time it is ({days}), says the same "when" in words and as a
 // date, restates the amount now that there is room for it, and ends on the link.
 const (
-	defaultReminderTitle = "{tab}: {amount} due {when}"
-	defaultReminderBody  = "Your {days}-day reminder: a payment on the tab \"{tab}\" is due {when}, on {due}.\n" +
-		"{amount} is owed.\n{url}"
+	// {payment} is what to pay now; {amount} is the whole balance. On most tabs
+	// they are the same number, but on a Payoff tab they are emphatically not --
+	// a car loan reminder headed "$21,877.58 due tomorrow" quotes the loan
+	// instead of the installment, which is alarming and wrong. The headline is
+	// therefore the payment, with the balance kept as context in the body.
+	defaultReminderTitle = "{tab}: {payment} due {when}"
+	defaultReminderBody  = "Your {days}-day reminder: {payment} is due {when}, on {due}, " +
+		"on the tab \"{tab}\".\nBalance owed: {amount}\n{url}"
 
 	// The overdue wording is past tense throughout, because a notice that says
 	// a payment "is due yesterday" reads as a bug.
-	defaultOverdueTitle = "{tab}: {amount} was due {when}"
-	defaultOverdueBody  = "A payment on the tab \"{tab}\" was due {when}, on {due}.\n" +
-		"{amount} is still owed.\n{url}"
+	defaultOverdueTitle = "{tab}: {payment} was due {when}"
+	defaultOverdueBody  = "{payment} was due {when}, on {due}, on the tab \"{tab}\".\n" +
+		"Balance owed: {amount}\n{url}"
 )
 
 // DefaultReminders is the built-in reminder set: 14, 7, and 1 days before a due

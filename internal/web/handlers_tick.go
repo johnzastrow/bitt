@@ -216,7 +216,7 @@ func (s *Server) notifyParticipant(ctx context.Context, notifier *notify.Notifie
 		return 0
 	}
 	rcpt := notify.Recipient{Email: user.Email, Topic: user.NtfyTopic}
-	msg := s.reminderMessage(spec, tab, due, lead, balance)
+	msg := s.reminderMessage(ctx, spec, tab, due, lead, balance)
 
 	var delivered int
 	for _, ch := range channelsFor(user, notifier, rcpt) {
@@ -258,7 +258,7 @@ func channelsFor(u store.User, n *notify.Notifier, r notify.Recipient) []notify.
 // reminderMessage renders a reminder's admin-configured templates with the
 // per-send variables. A control character that reaches the title via the {tab}
 // variable is caught by the sender's header check, which fails the send closed.
-func (s *Server) reminderMessage(spec config.Reminder, tab store.Tab, due schedule.Date, lead int, balance money.Cents) notify.Message {
+func (s *Server) reminderMessage(ctx context.Context, spec config.Reminder, tab store.Tab, due schedule.Date, lead int, balance money.Cents) notify.Message {
 	url := ""
 	if s.cfg.BaseURL != "" {
 		url = s.cfg.BaseURL + tabPath(tab.ID)
@@ -266,6 +266,11 @@ func (s *Server) reminderMessage(spec config.Reminder, tab store.Tab, due schedu
 	rep := strings.NewReplacer(
 		"{tab}", tab.Name,
 		"{amount}", balance.Neg().Display(),
+		// What to pay NOW, which on a Payoff tab is not the same thing as what
+		// is owed. A car loan reminder that says "$21,877.58 due tomorrow" is
+		// technically the balance and practically alarming: the payment due is
+		// the installment. On every other kind of tab the two are equal.
+		"{payment}", s.paymentDue(ctx, tab, balance).Display(),
 		"{due}", due.Display(),
 		// Magnitude only: {when} already carries the direction ("in one week"
 		// versus "a week ago"), and an overdue notice reading "-7-day reminder"
@@ -278,6 +283,33 @@ func (s *Server) reminderMessage(spec config.Reminder, tab store.Tab, due schedu
 		Title: strings.TrimSpace(rep.Replace(spec.Title)),
 		Body:  strings.TrimRight(rep.Replace(spec.Body), "\n "),
 	}
+}
+
+// paymentDue is what the recipient should pay now.
+//
+// On most tabs that is simply the balance: everything owed is due. A Payoff tab
+// is different -- it carries a loan balance that is deliberately paid down over
+// a term, so the amount due on any one date is the installment, and quoting the
+// balance instead turns a routine car-payment reminder into a demand for the
+// whole loan.
+//
+// The final payment is whatever is left rather than a full installment, so the
+// two are taken together. Any failure to derive the loan figures falls back to
+// the balance, which is the old behaviour: a reminder with a debatable number
+// still beats no reminder.
+func (s *Server) paymentDue(ctx context.Context, tab store.Tab, balance money.Cents) money.Cents {
+	owed := balance.Neg()
+	if tab.Kind != store.TabPayoff {
+		return owed
+	}
+	p, err := s.payoffAt(ctx, tab)
+	if err != nil || p.Installment <= 0 {
+		return owed
+	}
+	if p.Remaining > 0 && p.Remaining < p.Installment {
+		return p.Remaining
+	}
+	return p.Installment
 }
 
 // leadPhrase renders a lead time as a human phrase for {when}.

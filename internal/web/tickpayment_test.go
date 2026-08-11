@@ -297,7 +297,7 @@ func TestReminderVariablesAreUnchangedByPaymentVariables(t *testing.T) {
 		Body:  "You owe {amount}, due {due}. Paid: {paid} by {payee}.",
 	}
 	tab := store.Tab{ID: 1, Name: "Rent"}
-	msg := srv.reminderMessage(spec, tab, instanceToday(t), 7, money.Cents(-2500))
+	msg := srv.reminderMessage(t.Context(), spec, tab, instanceToday(t), 7, money.Cents(-2500))
 
 	if !strings.Contains(msg.Body, "$25.00") {
 		t.Errorf("{amount} no longer renders the balance owed: %q", msg.Body)
@@ -328,5 +328,73 @@ func TestPaymentNoticeNamesWhoeverRecordedIt(t *testing.T) {
 	}
 	if !strings.Contains(got[0].body, "Jane Provider made a payment") {
 		t.Errorf("notice should name the actor who recorded the entry:\n%s", got[0].body)
+	}
+}
+
+// A Payoff tab's reminder must quote the INSTALLMENT, not the loan.
+//
+// This is the production bug that prompted the change: a car loan reminder went
+// out headed "Tobi Car Loan: $21,877.58 due tomorrow". That figure is the whole
+// outstanding loan. The payment actually due was one installment, and quoting
+// the balance turns a routine reminder into a demand for the entire debt.
+//
+// {amount} keeps meaning the balance -- Providers have saved templates that use
+// it that way -- so the fix is the separate {payment} variable, and the default
+// template leads with it.
+func TestPayoffReminderQuotesTheInstallmentNotTheLoan(t *testing.T) {
+	h := newHarness(t)
+	h.completeSetup()
+	ctx := t.Context()
+	srv := h.srv()
+
+	// A $10,000 loan repaid at $250 a period.
+	tabID, _ := h.createPayoffTab("10000.00", "250.00", instanceToday(t).AddDays(7), nil)
+	tab, err := h.db.GetTab(ctx, tabID)
+	if err != nil {
+		t.Fatalf("get tab: %v", err)
+	}
+
+	balance, err := srv.ledger.Balance(ctx, tabID)
+	if err != nil {
+		t.Fatalf("balance: %v", err)
+	}
+	owed := balance.Neg()
+
+	due := srv.paymentDue(ctx, tab, balance)
+	if due == owed {
+		t.Fatalf("payment due (%s) equals the whole balance (%s) -- the loan is being "+
+			"quoted instead of the installment", due.Display(), owed.Display())
+	}
+	if due.Display() != "$250.00" {
+		t.Errorf("payment due = %s, want the $250.00 installment", due.Display())
+	}
+
+	// And the rendered message must lead with the payment, not the balance.
+	spec := config.Reminder{Title: "{tab}: {payment} due {when}", Body: "Balance owed: {amount}"}
+	msg := srv.reminderMessage(ctx, spec, tab, instanceToday(t).AddDays(7), 7, balance)
+	if !strings.Contains(msg.Title, "$250.00") {
+		t.Errorf("title does not lead with the installment: %q", msg.Title)
+	}
+	if strings.Contains(msg.Title, owed.Display()) {
+		t.Errorf("title quotes the whole balance %s: %q", owed.Display(), msg.Title)
+	}
+	if !strings.Contains(msg.Body, owed.Display()) {
+		t.Errorf("{amount} should still render the balance in the body: %q", msg.Body)
+	}
+}
+
+// On every other kind of tab the two are the same number: everything owed is due.
+func TestNonPayoffPaymentDueIsTheBalance(t *testing.T) {
+	h := newHarness(t)
+	h.completeSetup()
+	ctx := t.Context()
+
+	tabID := h.createPlainTab("Rent")
+	tab, err := h.db.GetTab(ctx, tabID)
+	if err != nil {
+		t.Fatalf("get tab: %v", err)
+	}
+	if got := h.srv().paymentDue(ctx, tab, money.Cents(-5000)); got != money.Cents(5000) {
+		t.Errorf("paymentDue = %s, want the balance $50.00", got.Display())
 	}
 }

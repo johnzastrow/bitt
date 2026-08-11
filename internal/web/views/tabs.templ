@@ -1275,6 +1275,17 @@ templ TabDetail(p Page, d TabDetailData) {
 													</li>
 												}
 											</ul>
+											if d.CanManage {
+												<form method="post" action={ reminderPreviewAction(d.Tab.ID) } class="inlineform">
+													<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+													<input type="hidden" name="days" value={ strconv.Itoa(pv.Days) }/>
+													<button type="submit">Send this to me now</button>
+													<small class="muted">
+														Goes to you only. Nobody listed above is notified, and the scheduled
+														reminder still goes out as normal.
+													</small>
+												</form>
+											}
 										}
 									</article>
 								}
@@ -1969,6 +1980,11 @@ type ReminderPreview struct {
 	Note string
 	// Recipients is who this rule reaches, including those it cannot.
 	Recipients []PreviewRecipient
+}
+
+// reminderPreviewAction is the send-to-self endpoint for one rule.
+func reminderPreviewAction(id int64) templ.SafeURL {
+	return templ.SafeURL("/tabs/" + strconv.FormatInt(id, 10) + "/reminders/preview")
 }
 
 // overdueClass colours an overdue rule differently from a reminder, since they

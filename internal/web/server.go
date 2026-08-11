@@ -96,6 +96,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /tabs/{id}/charges", s.requireAuth(http.HandlerFunc(s.postCharge)))
 
 	// The settle loop (PAY-01, UI-03)
+	mux.Handle("GET /tabs/{id}/pay", s.requireAuth(http.HandlerFunc(s.getTabPay)))
 	mux.Handle("GET /tabs/{id}/card", s.requireAuth(http.HandlerFunc(s.getCard)))
 	mux.Handle("GET /tabs/{id}/settle", s.requireAuth(http.HandlerFunc(s.getSettleConfirm)))
 	mux.Handle("POST /tabs/{id}/settle", s.requireAuth(http.HandlerFunc(s.postSettle)))
@@ -191,7 +192,16 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 				http.Redirect(w, r, "/setup", http.StatusSeeOther)
 				return
 			}
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			// Remember where they were going, so a link in a notification
+			// survives the login it almost always triggers on a phone.
+			// safeNext refuses anything that could leave the site.
+			dest := "/login"
+			if r.Method == http.MethodGet {
+				if n := safeNext(r.URL.RequestURI()); n != "" && n != "/" {
+					dest += "?next=" + url.QueryEscape(n)
+				}
+			}
+			http.Redirect(w, r, dest, http.StatusSeeOther)
 			return
 		}
 		ctx := context.WithValue(r.Context(), userKey, &user)

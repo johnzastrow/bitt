@@ -64,11 +64,21 @@ templ Setup(p Page, timezone string) {
 }
 
 // Login is the sign-in screen (AUTH-02).
+// Login keeps the existing signature for any caller that has no destination.
 templ Login(p Page) {
+	@LoginNext(p, "")
+}
+
+// LoginNext carries a validated local path through the form, so a link tapped
+// from a notification survives the login it triggers.
+templ LoginNext(p Page, next string) {
 	@Layout(p) {
 		<section class="card narrow">
 			<h1>Sign in</h1>
 			<form method="post" action="/login" class="stack">
+				if next != "" {
+					<input type="hidden" name="next" value={ next }/>
+				}
 				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
 				<label>
 					Email

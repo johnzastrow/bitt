@@ -7,6 +7,38 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [1.6.0] - 2026-08-11 — A notification's link opens a payment screen
+
+### Added
+- **A screen dedicated to recording one payment**, at `/tabs/{id}/pay`, and
+  reminder links now point at it. The tab page is the right place to understand
+  a tab — history, schedule, people, settings — and the wrong place to land when
+  a reminder has just told you something is due; on a phone it is a lot of
+  scrolling to reach one form.
+
+  The amount is prefilled with **one period's payment**, which is what the
+  reminder just quoted, with the full balance stated beside it. A settled tab
+  says so rather than offering a form that would post zero. An administrator who
+  oversees a tab without belonging to it sees the figures but no form, matching
+  what the payment endpoint would enforce on submit.
+
+  Nothing new is posted: the form targets the existing payment endpoint, so
+  every rule about who may record a payment, idempotency and the append-only
+  ledger applies unchanged.
+
+  `{url}` was **already documented** as "a link to the tab's payment page" — it
+  simply pointed at the whole tab. This makes the documentation true, so no new
+  template variable is introduced and no saved template needs editing.
+- **A login now returns you to where you were going.** Following a notification
+  link on a phone almost always triggers a sign-in, and previously that landed
+  on the dashboard — leaving the person to find the tab themselves, which defeats
+  the link.
+
+  The destination is validated as an allowlist of shapes, not a blocklist:
+  it must be a path on this site, and `//host`, `/\host`, anything carrying a
+  scheme or host, and anything that fails to parse are all refused. An open
+  redirect here would turn every notification into a phishing vector.
+
 ## [1.5.0] - 2026-08-11 — Seeing and controlling reminders
 
 Prompted by a production audit that found three settings problems, none of

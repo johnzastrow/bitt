@@ -104,7 +104,10 @@ func (s *Server) getLogin(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
-	s.render(w, r, http.StatusOK, views.Login(s.page(w, r, "Sign in")))
+	// Carried through the form so a successful login lands where the person was
+	// heading. Validated on the way in as well as on the way out.
+	s.render(w, r, http.StatusOK, views.LoginNext(s.page(w, r, "Sign in"),
+		safeNext(r.URL.Query().Get("next"))))
 }
 
 func (s *Server) postLogin(w http.ResponseWriter, r *http.Request) {
@@ -153,7 +156,13 @@ func (s *Server) postLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info("login", "user_id", user.ID)
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	// Never trust the posted value: safeNext refuses anything that could leave
+	// the site, and an empty result falls back to the dashboard.
+	dest := "/"
+	if n := safeNext(r.PostFormValue("next")); n != "" {
+		dest = n
+	}
+	http.Redirect(w, r, dest, http.StatusSeeOther)
 }
 
 func (s *Server) postLogout(w http.ResponseWriter, r *http.Request) {

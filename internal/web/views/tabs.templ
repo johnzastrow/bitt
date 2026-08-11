@@ -2024,3 +2024,109 @@ func (p PreviewRecipient) Reachable() bool { return len(p.Channels) > 0 }
 
 // ChannelList renders the channels for display.
 func (p PreviewRecipient) ChannelList() string { return strings.Join(p.Channels, " and ") }
+
+// TabPayData is the dedicated "record a payment" screen, where a notification's
+// link lands. It is deliberately one job: what is due, and a form to pay it.
+type TabPayData struct {
+	Tab     store.Tab
+	Balance money.Cents
+	// Owed is the whole outstanding balance.
+	Owed money.Cents
+	// Period is one period's payment, capped at what is owed. Zero when the tab
+	// has no periodic amount, in which case the form offers the balance.
+	Period money.Cents
+	// Due is the next unpaid due date, already formatted. Empty when the tab
+	// has no schedule.
+	Due string
+	// CanPost is membership: an administrator who merely oversees the tab sees
+	// the figures but is not offered a form that would be refused on submit.
+	CanPost        bool
+	IdempotencyKey string
+	Methods        []store.PaymentMethod
+}
+
+// Prefill is the amount the form starts with: one period where the tab has one,
+// the whole balance otherwise. A reminder says a payment is due, so the field
+// should already hold that payment.
+func (d TabPayData) Prefill() money.Cents {
+	if d.Period > 0 {
+		return d.Period
+	}
+	return d.Owed
+}
+
+// Settled reports that there is nothing to pay.
+func (d TabPayData) Settled() bool { return d.Owed <= 0 }
+
+// PartOfBalance reports that one period is less than the whole balance, so the
+// screen should say what the rest is rather than let the smaller figure read as
+// the total.
+func (d TabPayData) PartOfBalance() bool { return d.Period > 0 && d.Period < d.Owed }
+
+// TabPay renders the dedicated payment screen.
+templ TabPay(p Page, d TabPayData) {
+	@Layout(p) {
+		<h1>{ d.Tab.Name }</h1>
+		<section class="card paycard">
+			if d.Settled() {
+				<p class="banner banner-ok">Nothing is owed on this tab right now.</p>
+				<p class="muted small">
+					You can still record a payment ahead if you want to; open the tab to do that.
+				</p>
+			} else {
+				<p class="payamount">{ d.Prefill().Display() }</p>
+				<p class="muted">
+					if d.Due != "" {
+						due { d.Due }
+					}
+					if d.PartOfBalance() {
+						&mdash; one period&#39;s payment. { d.Owed.Display() } is owed in total.
+					}
+				</p>
+				if d.CanPost {
+					<form method="post" action={ paymentAction(d.Tab.ID) } class="stack">
+						<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+						<input type="hidden" name="idempotency_key" value={ d.IdempotencyKey }/>
+						<label>
+							Amount
+							<input
+								type="text"
+								name="amount"
+								inputmode="decimal"
+								required
+								value={ prefill(d.Prefill()) }
+								aria-label="Payment amount"
+							/>
+							<small>Change it to record a partial payment.</small>
+						</label>
+						<label>
+							Method
+							<select name="method" aria-label="Payment method">
+								for _, m := range d.Methods {
+									<option value={ string(m) }>{ m.Label() }</option>
+								}
+							</select>
+						</label>
+						<label>
+							Note
+							<input type="text" name="memo" placeholder="Optional" aria-label="Note"/>
+						</label>
+						<button class="primary" type="submit">Record payment</button>
+					</form>
+				} else {
+					<p class="muted small">
+						You oversee this tab but are not a member of it, so you cannot record a
+						payment on it.
+					</p>
+				}
+			}
+			<p class="muted small">
+				<a href={ templ.SafeURL(tabPathOf(d.Tab.ID)) }>Open the full tab</a>
+				&mdash; history, schedule and settings.
+			</p>
+		</section>
+	}
+}
+
+// tabPathOf mirrors the server's tabPath for use in the view.
+func tabPathOf(id int64) string { return "/tabs/" + strconv.FormatInt(id, 10) }

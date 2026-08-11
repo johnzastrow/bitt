@@ -928,3 +928,31 @@ tr.reversal td { color: var(--fg-muted); }
 .offline-logo { opacity: 0.85; margin-bottom: var(--s3); }
 .offline h1 { margin: 0 0 var(--s3); }
 .offline p { color: var(--fg-muted); margin: 0 0 var(--s4); }
+
+/* REM-01: the rendered reminder preview on a tab's Setup.
+   Deliberately quiet -- it sits under a form and must read as information
+   about that form, not as a second thing competing with it. */
+.previewbox { margin-top: var(--s4); padding-top: var(--s3); border-top: 1px solid var(--border); }
+.preview {
+  margin: var(--s3) 0 0;
+  padding: var(--s3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card-bg);
+}
+.previewhead { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: baseline; margin: 0 0 var(--s2); }
+/* The rendered title is what lands on a lock screen, so it is shown at the
+   weight it will be read at rather than as body copy. */
+.previewtitle { margin: 0 0 var(--s2); font-weight: 600; }
+.previewbody {
+  margin: 0;
+  padding: var(--s2);
+  background: var(--bg);
+  border-radius: var(--radius);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  font-size: 0.95em;
+}
+.previewto { margin: var(--s1) 0 0; padding-left: var(--s3); }
+.previewto li { margin: 0.15rem 0; }

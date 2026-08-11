@@ -32,13 +32,19 @@ INSERT INTO instance_reminders_new (days, title, body)
 DROP TABLE instance_reminders;
 ALTER TABLE instance_reminders_new RENAME TO instance_reminders;
 
+-- The foreign key is added AFTER the old table is gone, deliberately.
+--
+-- In MariaDB a foreign key constraint name is unique across the whole DATABASE,
+-- not per table. Declaring fk_tab_reminders_tab on the new table while the
+-- original still holds that name fails with errno 121, "Duplicate key on write
+-- or update" -- an error message that says nothing about constraint names and
+-- sends you looking at the data instead.
 CREATE TABLE tab_reminders_new (
     tab_id  BIGINT        NOT NULL,
     days    INT           NOT NULL CHECK (days <> 0 AND days >= -3650 AND days <= 3650),
     title   VARCHAR(255)  NOT NULL,
     body    VARCHAR(4096) NOT NULL,
-    PRIMARY KEY (tab_id, days),
-    CONSTRAINT fk_tab_reminders_tab FOREIGN KEY (tab_id) REFERENCES tabs (id) ON DELETE CASCADE
+    PRIMARY KEY (tab_id, days)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 
 INSERT INTO tab_reminders_new (tab_id, days, title, body)
@@ -46,3 +52,8 @@ INSERT INTO tab_reminders_new (tab_id, days, title, body)
 
 DROP TABLE tab_reminders;
 ALTER TABLE tab_reminders_new RENAME TO tab_reminders;
+
+-- Now the name is free, so the constraint keeps the name it had before rather
+-- than a temporary one that would confuse the next person to read the schema.
+ALTER TABLE tab_reminders
+    ADD CONSTRAINT fk_tab_reminders_tab FOREIGN KEY (tab_id) REFERENCES tabs (id) ON DELETE CASCADE;

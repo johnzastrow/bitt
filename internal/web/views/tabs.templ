@@ -593,6 +593,9 @@ type TabDetailData struct {
 	// Reminders are the tab's own payment reminders. Empty means the Provider
 	// has not customised this tab and DefaultReminders apply.
 	Reminders []store.TabReminder
+	// ReminderPreviews is each rule in force rendered as it would send, with
+	// the people it would reach. Read-only; it never sends anything.
+	ReminderPreviews []ReminderPreview
 	// DefaultReminders is the instance-wide fallback, carried for display so
 	// the form can show what a tab inherits before it is customised.
 	DefaultReminders []store.TabReminder
@@ -1233,6 +1236,50 @@ templ TabDetail(p Page, d TabDetailData) {
 							</p>
 							<button class="primary" type="submit">Save reminders</button>
 						</form>
+						if len(d.ReminderPreviews) > 0 {
+							<div class="previewbox">
+								<h3>What these actually send</h3>
+								<p class="muted small">
+									Rendered from this tab&#39;s current figures, not sample values &mdash; so the amounts
+									below are the amounts that would go out today.
+								</p>
+								for _, pv := range d.ReminderPreviews {
+									<article class="preview">
+										<p class="previewhead">
+											<span class={ "pill", overdueClass(pv) }>{ pv.Label() }</span>
+											if pv.Due != "" {
+												<span class="muted small">due { pv.Due } &mdash; { pv.When }</span>
+											}
+										</p>
+										if pv.Problem != "" {
+											<p class="muted small">{ pv.Problem }</p>
+										} else {
+											<p class="previewtitle">{ pv.Title }</p>
+											<pre class="previewbody">{ pv.Body }</pre>
+											if pv.Note != "" {
+												<p class="statusnote-fault small">{ pv.Note }</p>
+											}
+											<p class="muted small">Goes to:</p>
+											<ul class="previewto">
+												if len(pv.Recipients) == 0 {
+													<li>Nobody on this tab is in scope for this rule.</li>
+												}
+												for _, rc := range pv.Recipients {
+													<li>
+														<b>{ rc.Name }</b> <span class="muted small">({ rc.Role })</span>
+														if rc.Reachable() {
+															<span class="small">&mdash; { rc.ChannelList() }</span>
+														} else {
+															<span class="statusnote-fault small">&mdash; receives nothing: { rc.Reason }</span>
+														}
+													</li>
+												}
+											</ul>
+										}
+									</article>
+								}
+							</div>
+						}
 					</section>
 					if d.IsPayoff() {
 						<section class="card">
@@ -1896,3 +1943,68 @@ func chargeKey(base string) string { return base + "-charge" }
 // adjustmentKey derives the adjustment form's idempotency key from the page's,
 // so a double-tapped correction posts once (LEDGER-07).
 func adjustmentKey(base string) string { return base + "-adjustment" }
+
+// ReminderPreview is one reminder rule rendered as it would actually send.
+//
+// The values come from the tab's LIVE figures rather than samples. That is the
+// whole point: a template reading "{amount}" looks fine on screen, and the
+// mistake -- quoting a whole loan balance where an installment belongs -- exists
+// only in what it renders to.
+type ReminderPreview struct {
+	// Days is the lead time; negative means an overdue notice.
+	Days int
+	// When is that lead time in words, e.g. "in one week" or "yesterday".
+	When string
+	// Due is the date this rule counts from, already formatted.
+	Due string
+	// Title and Body are the rendered message. Empty when Problem is set.
+	Title string
+	Body  string
+	// Problem explains why this rule cannot be rendered at all -- no schedule,
+	// no due date to count from. Shown INSTEAD of a message, because a rendered
+	// zero would be a lie rather than an absence.
+	Problem string
+	// Note is a caveat about a message that renders but would not send, e.g.
+	// nothing is currently owed.
+	Note string
+	// Recipients is who this rule reaches, including those it cannot.
+	Recipients []PreviewRecipient
+}
+
+// overdueClass colours an overdue rule differently from a reminder, since they
+// are read at a glance and mean opposite things.
+func overdueClass(r ReminderPreview) string {
+	if r.Overdue() {
+		return "pill-fault"
+	}
+	return "pill-ready"
+}
+
+// Overdue reports whether this rule fires after the due date rather than before.
+func (r ReminderPreview) Overdue() bool { return r.Days < 0 }
+
+// Label is how the rule is titled in the list.
+func (r ReminderPreview) Label() string {
+	if r.Days < 0 {
+		return strconv.Itoa(-r.Days) + " days after"
+	}
+	return strconv.Itoa(r.Days) + " days before"
+}
+
+// PreviewRecipient is one person a rule would reach, or would miss.
+type PreviewRecipient struct {
+	Name string
+	Role string
+	// Channels are the delivery methods that would actually be used. Empty
+	// means this person receives nothing.
+	Channels []string
+	// Reason says why, when Channels is empty. A recipient listed as skipped
+	// without a reason is what made the original fault need a database query.
+	Reason string
+}
+
+// Reachable reports whether this person would receive anything.
+func (p PreviewRecipient) Reachable() bool { return len(p.Channels) > 0 }
+
+// ChannelList renders the channels for display.
+func (p PreviewRecipient) ChannelList() string { return strings.Join(p.Channels, " and ") }

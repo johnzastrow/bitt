@@ -530,6 +530,8 @@ func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 		CanTransact:    access.CanTransact(),
 		AsAdmin:        access.Admin,
 		Upcoming:       s.upcoming(tab, acc, itemTotal),
+		// REM-01: what each reminder would actually say, and who would get it.
+		ReminderPreviews: s.reminderPreviews(r.Context(), tab),
 
 		Reminders:        reminders,
 		DefaultReminders: s.defaultReminders(r.Context()),

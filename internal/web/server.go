@@ -40,6 +40,9 @@ type Server struct {
 	// authenticated user can ask for it in a loop.
 	avatarRate   sync.Map
 	avatarRateMu sync.Mutex
+	// previewRate bounds REM-02's send-to-self button per account.
+	previewRate   sync.Map
+	previewRateMu sync.Mutex
 }
 
 // New builds a server.
@@ -111,6 +114,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /tabs/{id}/fee", s.requireAuth(http.HandlerFunc(s.postFeePolicy)))
 	mux.Handle("POST /tabs/{id}/interest", s.requireAuth(http.HandlerFunc(s.postInterestRate)))
 	mux.Handle("POST /tabs/{id}/loan", s.requireAuth(http.HandlerFunc(s.postLoanTerms)))
+	mux.Handle("POST /tabs/{id}/reminders/preview", s.requireAuth(http.HandlerFunc(s.postReminderPreview)))
 	mux.Handle("POST /tabs/{id}/reminders", s.requireAuth(http.HandlerFunc(s.postTabReminders)))
 	mux.Handle("POST /tabs/{id}/items", s.requireAuth(http.HandlerFunc(s.postItem)))
 	mux.Handle("POST /tabs/{id}/items/{itemID}", s.requireAuth(http.HandlerFunc(s.postItemUpdate)))

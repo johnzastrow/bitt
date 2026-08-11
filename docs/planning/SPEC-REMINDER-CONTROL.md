@@ -125,10 +125,13 @@ Answers "can I see it happen now".
 A control on the tab's Reminders card that runs the real send path for that tab
 immediately: real message, real recipients, real channels.
 
-### The two decisions that make or break it
+### Decided: preview-to-self, bypassing both gates
 
-Both were raised with the Provider and are recorded here as the open questions
-in §7, because getting either wrong makes the feature useless or dangerous:
+The send goes **to the administrator who pressed it, and to nobody else**. It
+renders the real message for the real tab, over that administrator's own
+channels. It is a rehearsal, not an operational "mail everyone now" button.
+
+That choice makes the other two decisions safe rather than dangerous:
 
 - **Does it bypass the already-sent claim?** Respecting it means pressing the
   button for an occasion already delivered does nothing, silently — the exact
@@ -138,10 +141,17 @@ in §7, because getting either wrong makes the feature useless or dangerous:
   works on the precise day the reminder would have fired anyway, which is
   almost never the day you press it.
 
-**Recommendation: bypass both, and be loud about it.** A confirmation naming the
-recipients and channels before sending, and a result line reporting exactly what
-went where. The claim is still *written* on success, so the scheduled send does
-not later duplicate it.
+**Decided: bypass both.** Since the message only reaches the person who asked
+for it, a duplicate is harmless and a button that silently does nothing is not.
+
+**It MUST NOT write a claim.** This is the load-bearing detail of the whole
+feature. A claim is what suppresses a later send of the same occasion — so a
+rehearsal that claimed `reminder:2026-08-12:d1:u3` would silently cancel the
+real reminder to the real payee. The rehearsal is not the event. Nothing is
+recorded in `sent_notifications`, and the scheduled send proceeds untouched.
+
+The result line should say plainly who it went to ("sent to you, over email and
+ntfy") so it can never be mistaken for having notified the tab.
 
 ### Guard rails
 
@@ -194,12 +204,11 @@ column, and invisible in three separate forms.
 
 ## 7. Open questions
 
-1. **Manual send: bypass the claim?** (recommend yes)
-2. **Manual send: bypass the lead-day match?** (recommend yes)
-3. **Manual send: to real recipients, or to the pressing administrator only?**
-   These are different features. Real recipients makes it an operational tool;
-   self-only makes it a rehearsal. Building the wrong one is worse than
-   building neither.
+1. ~~Manual send: bypass the claim?~~ **Decided: yes**, and no claim is written.
+2. ~~Manual send: bypass the lead-day match?~~ **Decided: yes.**
+3. ~~Real recipients or self?~~ **Decided: preview-to-self.** It is a rehearsal.
+   An operational "send to everyone now" button remains unbuilt and would be a
+   separate decision.
 4. **Should the Provider receive reminders too?** Out of scope here, but the
    audit shows the Provider currently receives nothing on any tab, which may
    not be what anyone intended.

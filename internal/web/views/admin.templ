@@ -54,6 +54,7 @@ templ AdminUsers(p Page, users []AdminUser) {
 						<th>Name</th>
 						<th>Email</th>
 						<th>Role</th>
+						<th>Notifications</th>
 						<th class="right"></th>
 					</tr>
 				</thead>
@@ -80,6 +81,28 @@ templ AdminUsers(p Page, users []AdminUser) {
 									<span class="pill">deactivated</span>
 								}
 							</td>
+							<td>
+								<form method="post" action={ userNotifyAction(row.User.ID) } class="notifyform">
+									<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+									<input
+										type="text"
+										name="ntfy_topic"
+										value={ row.User.NtfyTopic }
+										placeholder="ntfy topic"
+										size="16"
+										autocomplete="off"
+									/>
+									<label class="checkrow small">
+										<input type="checkbox" name="notify_email" value="1" checked?={ row.User.NotifyEmail }/>
+										email
+									</label>
+									<label class="checkrow small">
+										<input type="checkbox" name="notify_ntfy" value="1" checked?={ row.User.NotifyNtfy }/>
+										ntfy
+									</label>
+									<button class="link" type="submit">Save</button>
+								</form>
+							</td>
 							<td class="right">
 								<form method="post" action={ userActiveAction(row.User.ID) } class="inline">
 									<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
@@ -101,11 +124,22 @@ templ AdminUsers(p Page, users []AdminUser) {
 				</tbody>
 			</table>
 			<p class="muted small">
+				Each person needs their OWN ntfy topic. Two accounts sharing one means either can
+				read the other&#39;s notices, and a topic nobody is subscribed to publishes into a
+				void &mdash; which looks exactly like a delivery failure. Showing them in a column
+				here is so that is visible at a glance rather than buried in separate profiles.
+			</p>
+			<p class="muted small">
 				Accounts are deactivated rather than deleted, because they are referenced by
 				ledger entries that must stay readable. Deactivating ends their sessions immediately.
 			</p>
 		</section>
 	}
+}
+
+// userNotifyAction is REM-03's endpoint: notification settings only.
+func userNotifyAction(id int64) templ.SafeURL {
+	return templ.SafeURL("/admin/users/" + strconv.FormatInt(id, 10) + "/notify")
 }
 
 func userActiveAction(id int64) templ.SafeURL {

@@ -1,6 +1,6 @@
 # Spec — Seeing and controlling reminders
 
-**Status:** specified, not built
+**Status:** built and shipped in v1.5.0
 **Drafted:** 2026-08-11
 **Prompted by:** a production audit of `btabby.fluidgrid.site` that found three
 settings problems, none of which the interface could have shown anyone.

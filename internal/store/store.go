@@ -452,6 +452,7 @@ type Store interface {
 	SessionStore
 	TabStore
 	EntryStore
+	BankStore
 
 	// Migrate brings the schema to the current version. Safe to call on every
 	// startup and safe to call concurrently (DEPLOY-01).

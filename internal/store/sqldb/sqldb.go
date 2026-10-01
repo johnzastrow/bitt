@@ -366,6 +366,13 @@ func translate(err error) error {
 	return err
 }
 
+// isDeadlock reports whether MariaDB rolled the transaction back to break a
+// deadlock, after which the whole transaction may simply be run again.
+func isDeadlock(err error) bool {
+	var me *mysql.MySQLError
+	return errors.As(err, &me) && me.Number == erDeadlock
+}
+
 // Close releases the handle.
 func (d *DB) Close() error { return d.db.Close() }
 

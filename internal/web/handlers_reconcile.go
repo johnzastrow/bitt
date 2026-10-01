@@ -6,7 +6,6 @@ import (
 
 	"github.com/johnzastrow/bitt/internal/auth"
 	"github.com/johnzastrow/bitt/internal/store"
-	"github.com/johnzastrow/bitt/internal/web/views"
 )
 
 // requireReconcile guards every bank reconciliation route (RECON-01), checked
@@ -38,12 +37,6 @@ func (s *Server) requireReconcile(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	}))
-}
-
-// getReconcile is the Reconciliation screen. Importing, matching and the setup
-// controls arrive with RECON-02 onward.
-func (s *Server) getReconcile(w http.ResponseWriter, r *http.Request) {
-	s.render(w, r, http.StatusOK, views.Reconcile(s.page(w, r, "Reconciliation")))
 }
 
 // postAdminUserReconcile grants or removes Can reconcile on one account. Any

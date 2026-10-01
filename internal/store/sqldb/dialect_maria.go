@@ -127,6 +127,7 @@ const (
 	erDupEntry     = 1062 // duplicate key
 	erDupEntryKey  = 1586 // duplicate entry for a named key
 	erSignalRaised = 1644 // an unhandled user-defined SIGNAL: the append-only triggers
+	erDeadlock     = 1213 // InnoDB chose this transaction as a deadlock victim
 )
 
 // lockRows takes a write lock on the matched rows for the rest of the

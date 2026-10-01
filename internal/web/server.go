@@ -43,11 +43,17 @@ type Server struct {
 	// previewRate bounds REM-02's send-to-self button per account.
 	previewRate   sync.Map
 	previewRateMu sync.Mutex
+	// reconcileRate bounds bank statement uploads per account; pending holds
+	// uploads whose layout is being mapped (RECON-02).
+	reconcileRate   sync.Map
+	reconcileRateMu sync.Mutex
+	pending         *pendingUploads
 }
 
 // New builds a server.
 func New(cfg config.Config, st store.Store, led *ledger.Service, sessions *auth.Manager, notifier *notify.Notifier, log *slog.Logger) *Server {
-	return &Server{cfg: cfg, store: st, ledger: led, sessions: sessions, notifier: notifier, log: log}
+	return &Server{cfg: cfg, store: st, ledger: led, sessions: sessions, notifier: notifier, log: log,
+		pending: newPendingUploads()}
 }
 
 // contextKey is unexported so no other package can collide with it.
@@ -145,6 +151,10 @@ func (s *Server) Handler() http.Handler {
 	// Bank reconciliation (SPEC-BANK-RECONCILE). Every route goes through
 	// requireReconcile, which checks the switch and the permission per request.
 	mux.Handle("GET /admin/reconcile", s.requireReconcile(http.HandlerFunc(s.getReconcile)))
+	mux.Handle("POST /admin/reconcile/upload", s.requireReconcile(http.HandlerFunc(s.postReconcileUpload)))
+	mux.Handle("GET /admin/reconcile/map/{token}", s.requireReconcile(http.HandlerFunc(s.getReconcileMap)))
+	mux.Handle("POST /admin/reconcile/map/{token}", s.requireReconcile(http.HandlerFunc(s.postReconcileMap)))
+	mux.Handle("GET /admin/reconcile/imports/{id}", s.requireReconcile(http.HandlerFunc(s.getReconcileImport)))
 
 	return s.securityHeaders(s.recoverPanic(mux))
 }

@@ -200,6 +200,19 @@ func (s *Server) postProfilePassword(w http.ResponseWriter, r *http.Request) {
 func (s *Server) postProfileAvatar(w http.ResponseWriter, r *http.Request) {
 	user := userFrom(r.Context())
 
+	// Bound the body before anything parses it, so an oversized upload is
+	// refused rather than buffered. This must come before CheckCSRF: reading
+	// the token parses the whole multipart body with Go's defaults (32 MB in
+	// memory, the rest to temporary files, no total limit), and a limit set
+	// after that has nothing left to limit. The extra kilobyte covers the
+	// multipart envelope.
+	r.Body = http.MaxBytesReader(w, r.Body, avatar.MaxUploadBytes+1024)
+	if err := r.ParseMultipartForm(avatar.MaxUploadBytes); err != nil {
+		redirectWith(w, r, "/profile", "err", "That image is too large. The limit is 2 MB.")
+		return
+	}
+	defer func() { _ = r.MultipartForm.RemoveAll() }()
+
 	if !auth.CheckCSRF(r) {
 		redirectWith(w, r, "/profile", "err", "Your session expired. Please try again.")
 		return
@@ -209,15 +222,6 @@ func (s *Server) postProfileAvatar(w http.ResponseWriter, r *http.Request) {
 		redirectWith(w, r, "/profile", "err", "Too many uploads just now. Try again in a minute.")
 		return
 	}
-
-	// Bound the body before parsing, so an oversized upload is refused rather
-	// than buffered. The extra kilobyte covers the multipart envelope.
-	r.Body = http.MaxBytesReader(w, r.Body, avatar.MaxUploadBytes+1024)
-	if err := r.ParseMultipartForm(avatar.MaxUploadBytes); err != nil {
-		redirectWith(w, r, "/profile", "err", "That image is too large. The limit is 2 MB.")
-		return
-	}
-	defer func() { _ = r.MultipartForm.RemoveAll() }()
 
 	file, _, err := r.FormFile("avatar")
 	if err != nil {

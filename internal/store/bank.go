@@ -1,0 +1,107 @@
+package store
+
+import (
+	"context"
+	"time"
+
+	"github.com/johnzastrow/bitt/internal/bankcsv"
+	"github.com/johnzastrow/bitt/internal/money"
+)
+
+// Bank reconciliation storage (SPEC-BANK-RECONCILE). These tables sit beside
+// the ledger and never inside it: nothing here changes an entry.
+
+// BankFormat is a saved column mapping for one export layout, recognised by
+// the signature of its header row.
+type BankFormat struct {
+	ID        int64
+	Name      string
+	Signature string
+	// HeaderText is the header row as it appeared, for display.
+	HeaderText string
+	Mapping    bankcsv.Mapping
+	CreatedBy  int64
+	CreatedAt  time.Time
+}
+
+// BankImport is one uploaded file and what happened to its rows.
+type BankImport struct {
+	ID           int64
+	FormatID     int64
+	FormatName   string // read only
+	FileName     string
+	FileSHA256   string
+	UploadedBy   int64
+	UploaderName string // read only
+	UploadedAt   time.Time
+
+	// Kept is lines stored; Duplicates, lines already imported from another
+	// file (or earlier in a race); Outgoing, money out or zero, counted and
+	// dropped; Ignored, lines stored as ignored by a rule; Refused, rows that
+	// could not be read.
+	Kept       int
+	Duplicates int
+	Outgoing   int
+	Ignored    int
+	Refused    int
+
+	// FirstDate and LastDate bound the file's incoming lines, "YYYY-MM-DD", or
+	// "" when there were none.
+	FirstDate string
+	LastDate  string
+	// RefusedDetail is the first few refusal reasons, one per line.
+	RefusedDetail string
+}
+
+// BankLineState is where a bank line stands.
+type BankLineState string
+
+const (
+	BankLineOpen     BankLineState = "open"
+	BankLineMatched  BankLineState = "matched"
+	BankLineRecorded BankLineState = "recorded"
+	BankLineIgnored  BankLineState = "ignored"
+)
+
+// BankLine is one incoming line of an import, kept forever.
+type BankLine struct {
+	ID       int64
+	ImportID int64
+	// Row is the row number in the file (header = 1); Raw the row's original
+	// text, so a match can always be shown against what the bank exported.
+	Row          int
+	Raw          string
+	Account      string
+	PostedOn     string // "YYYY-MM-DD"
+	Amount       money.Cents
+	Description  string
+	Note         string // verbatim
+	Reference    string
+	Fingerprint  string
+	State        BankLineState
+	IgnoreReason string
+}
+
+// BankStore covers bank statement imports.
+type BankStore interface {
+	// BankFormatBySignature finds the saved mapping for a header, or
+	// ErrNotFound.
+	BankFormatBySignature(ctx context.Context, signature string) (BankFormat, error)
+	GetBankFormat(ctx context.Context, id int64) (BankFormat, error)
+	// CreateBankFormat saves a mapping. ErrConflict when the signature is
+	// already saved (two people mapping the same new layout at once).
+	CreateBankFormat(ctx context.Context, f BankFormat) (BankFormat, error)
+	ListBankFormats(ctx context.Context) ([]BankFormat, error)
+
+	// SaveBankImport stores an import and its lines in one transaction. A line
+	// whose fingerprint is already stored is skipped and counted in
+	// Duplicates; every other line is stored and counted in Kept, or in
+	// Ignored when its State is BankLineIgnored. The caller fills Outgoing,
+	// Refused and the rest; the returned import has every count.
+	SaveBankImport(ctx context.Context, imp BankImport, lines []BankLine) (BankImport, error)
+	GetBankImport(ctx context.Context, id int64) (BankImport, error)
+	// ListBankImports returns the most recent imports first.
+	ListBankImports(ctx context.Context, limit int) ([]BankImport, error)
+	// ListBankLines returns an import's stored lines in file order.
+	ListBankLines(ctx context.Context, importID int64) ([]BankLine, error)
+}

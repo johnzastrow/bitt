@@ -30,10 +30,38 @@ instance switch that is off by default.
   the permission. The permission does not change who may post through the
   ordinary payment form.
 
+- **Importing a bank statement (RECON-02).** Upload one CSV (5 MB, 10,000
+  rows; UTF-8 or Windows-1252; comma or semicolon; quoted fields with line
+  breaks). A header the instance has not seen opens **Map this layout**, which
+  starts from a guess by column name and shows the first ten rows read that
+  way; saving is accepted only for the exact mapping whose preview was on
+  screen. The next file with the same header imports without asking. Amounts
+  go straight to integer cents: `$`, thousands separators, parentheses for
+  negative, an optional decimal comma, and separate debit/credit columns are
+  handled. Only money received is kept; outgoing lines are counted and
+  dropped, never stored. Each kept line keeps its row number, its original row
+  text and any bank note, verbatim.
+- **Duplicate lines across overlapping files are skipped.** Each line has a
+  UNIQUE fingerprint (layout, account, date, amount, normalised description,
+  reference, and its occurrence among identical lines in the file), so two real
+  $50 transfers on one day stay two lines while the same two in next month's
+  export are recognised. Imports of one layout are serialised by a row lock,
+  which on MariaDB turns concurrent overlapping uploads from deadlocks into a
+  short queue.
+- Migration 0014: `bank_formats`, `bank_imports`, `bank_lines`. Kept forever;
+  nothing in them references or changes the ledger.
+
 ### Fixed
 - **The People screen no longer scrolls sideways on a phone.** The accounts
   table, with a notification form on every row, was 614 px wide at a 360 px
   viewport; it now scrolls inside its card.
+- **The avatar upload's 2 MB limit now actually applies.** The handler read the
+  CSRF token before installing the limit, and reading the token parses the
+  whole multipart body with Go's defaults (32 MB in memory, the rest to
+  temporary files, no total cap), so a signed-in account could stream an
+  unbounded upload. The limit now goes on first; a test streams 64 MB and
+  checks the server stops near the limit. The bank upload is built the same
+  way.
 
 ## [1.7.0] - 2026-10-01 — Navigation moves under the avatar
 

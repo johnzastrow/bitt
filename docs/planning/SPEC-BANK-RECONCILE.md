@@ -328,7 +328,15 @@ own.
    **Built 2026-10-01** (migration 0013; unreleased). The administrator role
    cannot be removed in the app today, so "removing the role removes the
    permission" is enforced as a schema CHECK.
-2. RECON-02 and 5: formats, import, fingerprints (migration).
+2. RECON-02 and 5: formats, import, fingerprints (migration). **Built
+   2026-10-01** (migration 0014; unreleased). Choices made while building:
+   the row number is the record's position with the header as row 1 (a
+   spreadsheet's row, so a two-line description is one row); the fingerprint
+   also includes the account column, since one export can cover several
+   accounts; the mapping screen has a decimal-comma option for semicolon
+   exports; an unmapped upload is held in memory for 30 minutes, bound to its
+   uploader, so its outgoing lines never reach the database. Ignore rules and
+   the minimum line amount arrive with RECON-03's setup controls.
 3. RECON-03: suggestions (pure function, heavily tested).
 4. RECON-04: confirm, delta posting, undo.
 5. RECON-05: record and ignore.

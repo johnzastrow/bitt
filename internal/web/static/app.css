@@ -1035,3 +1035,44 @@ tr.reversal td { color: var(--fg-muted); }
    one-handed, to do one thing. */
 .paycard { max-width: 30rem; }
 .payamount { margin: 0; font-size: 2.2rem; font-weight: 600; line-height: 1.1; }
+
+/* ---------- Bank reconciliation (SPEC-BANK-RECONCILE) ---------- */
+
+.actions { display: flex; flex-wrap: wrap; gap: var(--s2); }
+
+.importlist { list-style: none; margin: 0; padding: 0; }
+.importlist li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--s2) 0;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+.importlist li:last-child { border-bottom: none; }
+
+.mono { font-family: var(--font-num); overflow-wrap: anywhere; }
+
+/* One bank line: a head row (row number, date, amount, state), then its
+   text. Stacked rather than a table, so a long two-line description reads on
+   a phone without a sideways scroll. */
+.banklines { list-style: none; margin: 0; padding: 0; }
+.bankline { padding: var(--s3) 0; border-bottom: 1px solid var(--border); min-width: 0; }
+.bankline:last-child { border-bottom: none; }
+.bankline-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s2); }
+.bankline-head .amount { margin-left: auto; }
+.bankline.outcome-out, .bankline.outcome-refused { color: var(--fg-muted); }
+
+/* Bank text keeps its line breaks: the second line of a description is often
+   the sender, and a note is shown verbatim. */
+.banktext, .banknote { white-space: pre-line; overflow-wrap: anywhere; margin: var(--s1) 0; }
+.rawrow, .refused {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-num);
+  font-size: var(--t-sm);
+  background: var(--chalk-sunk);
+  padding: var(--s2);
+  border-radius: 6px;
+  margin: var(--s1) 0 0;
+}

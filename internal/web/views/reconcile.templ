@@ -1,17 +1,309 @@
 package views
 
-// Reconcile is the bank reconciliation screen (SPEC-BANK-RECONCILE). This is
-// the shell RECON-01 puts behind the permission; upload, review and the setup
-// controls are added from RECON-02 on.
-templ Reconcile(p Page) {
+import (
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/johnzastrow/bitt/internal/bankcsv"
+	"github.com/johnzastrow/bitt/internal/store"
+)
+
+// ReconcileData is the Reconciliation screen (SPEC-BANK-RECONCILE section 10).
+type ReconcileData struct {
+	Imports []store.BankImport
+	Formats []store.BankFormat
+}
+
+// Reconcile is the bank reconciliation home: upload, and the recent imports.
+// Suggested matches and unmatched lines are added from RECON-03 on.
+templ Reconcile(p Page, d ReconcileData) {
 	@Layout(p) {
 		<h1>Reconciliation</h1>
 		<section class="card">
+			<h2>Import a bank statement</h2>
+			<form method="post" action="/admin/reconcile/upload" enctype="multipart/form-data" class="stack">
+				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+				<label>
+					CSV export from your bank
+					<input type="file" name="statement" accept=".csv,text/csv" required/>
+					<small>One file at a time, up to 5 MB. Only money received is kept; payments out are counted and dropped. Lines already imported from another file are skipped.</small>
+				</label>
+				<button class="primary" type="submit">Upload</button>
+			</form>
+		</section>
+		<section class="card">
+			<h2>Recent imports</h2>
+			if len(d.Imports) == 0 {
+				<p class="muted">Nothing imported yet.</p>
+			} else {
+				<ul class="importlist">
+					for _, imp := range d.Imports {
+						<li>
+							<a href={ importURL(imp.ID) }>{ imp.FileName }</a>
+							<span class="muted small">
+								{ imp.FormatName } &middot; { imp.UploadedAt.Format("Jan 2, 2006") } by { imp.UploaderName }
+							</span>
+							<span class="small">{ importCounts(imp) }</span>
+						</li>
+					}
+				</ul>
+			}
+		</section>
+		if len(d.Formats) > 0 {
+			<section class="card">
+				<h2>Saved layouts</h2>
+				<ul class="importlist">
+					for _, f := range d.Formats {
+						<li>
+							<span>{ f.Name }</span>
+							<span class="muted small mono">{ f.HeaderText }</span>
+						</li>
+					}
+				</ul>
+			</section>
+		}
+	}
+}
+
+func importURL(id int64) templ.SafeURL {
+	return templ.SafeURL("/admin/reconcile/imports/" + strconv.FormatInt(id, 10))
+}
+
+// importCounts is an import's outcome in one line.
+func importCounts(i store.BankImport) string {
+	parts := []string{strconv.Itoa(i.Kept) + " kept"}
+	if i.Duplicates > 0 {
+		parts = append(parts, strconv.Itoa(i.Duplicates)+" already imported")
+	}
+	if i.Ignored > 0 {
+		parts = append(parts, strconv.Itoa(i.Ignored)+" ignored")
+	}
+	parts = append(parts, strconv.Itoa(i.Outgoing)+" outgoing")
+	if i.Refused > 0 {
+		parts = append(parts, strconv.Itoa(i.Refused)+" unreadable")
+	}
+	return strings.Join(parts, ", ")
+}
+
+// ReconcileMapData is the "Map this layout" screen.
+type ReconcileMapData struct {
+	Token       string
+	FileName    string
+	Header      []string
+	Mapping     bankcsv.Mapping
+	Name        string
+	Problem     string
+	DateLayouts []bankcsv.DateLayout
+	Rows        int
+	// Preview is the first rows under Mapping; empty while the mapping is
+	// incomplete. PreviewOf ties a save to this exact preview.
+	Preview   []bankcsv.PreviewRow
+	PreviewOf string
+}
+
+// ReconcileMap asks once how to read a layout the instance has not seen.
+templ ReconcileMap(p Page, d ReconcileMapData) {
+	@Layout(p) {
+		<h1>Map this layout</h1>
+		<p class="muted">
+			{ d.FileName } has a header this instance has not seen ({ strconv.Itoa(len(d.Header)) } columns,
+			{ strconv.Itoa(d.Rows) } rows). Say which column is which; the next file with the same header will
+			import without asking.
+		</p>
+		if d.Problem != "" {
+			<div class="banner banner-error" role="alert">{ d.Problem }</div>
+		}
+		<form method="post" action={ mapURL(d.Token) } class="card stack">
+			<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+			<input type="hidden" name="preview_of" value={ d.PreviewOf }/>
+			@columnSelect("Date", "date", d.Header, d.Mapping.Date, false)
+			<label>
+				Date layout
+				<select name="date_layout">
+					for _, l := range d.DateLayouts {
+						<option value={ l.Key } selected?={ l.Key == d.Mapping.DateLayout }>{ l.Label }</option>
+					}
+				</select>
+			</label>
+			@columnSelect("Amount (one signed column)", "amount", d.Header, d.Mapping.Amount, true)
+			<p class="muted small">Or, if the export has separate columns for money out and money in, leave Amount unset and choose both:</p>
+			@columnSelect("Debit (money out)", "debit", d.Header, d.Mapping.Debit, true)
+			@columnSelect("Credit (money in)", "credit", d.Header, d.Mapping.Credit, true)
+			<label>
+				In a single amount column, money received is
+				<select name="incoming">
+					<option value="positive" selected?={ !d.Mapping.IncomingNegative }>positive (a deposit is 150.00)</option>
+					<option value="negative" selected?={ d.Mapping.IncomingNegative }>negative (a deposit is -150.00)</option>
+				</select>
+			</label>
+			<label class="checkrow">
+				<input type="checkbox" name="decimal_comma" value="1" checked?={ d.Mapping.DecimalComma }/>
+				Amounts use a decimal comma (1.234,56)
+			</label>
+			@columnSelect("Description", "description", d.Header, d.Mapping.Description, false)
+			@columnSelect("Account (optional)", "account", d.Header, d.Mapping.Account, true)
+			@columnSelect("Note (optional)", "note", d.Header, d.Mapping.Note, true)
+			@columnSelect("Reference or check number (optional)", "reference", d.Header, d.Mapping.Reference, true)
+			<label>
+				Name for this layout
+				<input type="text" name="name" value={ d.Name } maxlength="120" required placeholder="Credit union, checking"/>
+			</label>
+			<div class="actions">
+				<button type="submit" name="action" value="preview">Preview</button>
+				if len(d.Preview) > 0 {
+					<button class="primary" type="submit" name="action" value="save">Save layout and import</button>
+				}
+			</div>
+		</form>
+		if len(d.Preview) > 0 {
+			<section class="card">
+				<h2>First { strconv.Itoa(len(d.Preview)) } rows, read this way</h2>
+				<ul class="banklines">
+					for _, row := range d.Preview {
+						<li class={ "bankline", "outcome-" + row.Outcome }>
+							<div class="bankline-head">
+								<span class="muted small">Row { strconv.Itoa(row.Row) }</span>
+								switch row.Outcome {
+									case "in":
+										<span class="pill pill-payment">in</span>
+										<span class="nowrap">{ row.Line.PostedOn.Format("Jan 2, 2006") }</span>
+										<span class="amount">{ row.Line.Amount.Display() }</span>
+									case "out":
+										<span class="pill">out, dropped</span>
+									default:
+										<span class="pill pill-fault">unreadable</span>
+								}
+							</div>
+							if row.Outcome == "in" {
+								@bankText(row.Line.Description, row.Line.Account, row.Line.Note, row.Line.Reference)
+							} else if row.Outcome == "refused" {
+								<p class="small">This row { row.Reason }.</p>
+							}
+						</li>
+					}
+				</ul>
+			</section>
+		}
+	}
+}
+
+// bankDate shows a stored "YYYY-MM-DD" the way the rest of the screens do.
+func bankDate(s string) string {
+	d, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		return s
+	}
+	return d.Format("Jan 2, 2006")
+}
+
+func mapURL(token string) templ.SafeURL {
+	return templ.SafeURL("/admin/reconcile/map/" + token)
+}
+
+// columnSelect offers the file's columns for one field, each labelled with its
+// header name so the choice is made by name, not by position.
+templ columnSelect(label, name string, header []string, selected int, optional bool) {
+	<label>
+		{ label }
+		<select name={ name }>
+			if optional {
+				<option value="-1" selected?={ selected == bankcsv.None }>(not in this file)</option>
+			}
+			for i, h := range header {
+				<option value={ strconv.Itoa(i) } selected?={ selected == i }>{ columnLabel(i, h) }</option>
+			}
+		</select>
+	</label>
+}
+
+func columnLabel(i int, h string) string {
+	h = strings.TrimSpace(h)
+	if h == "" {
+		h = "(untitled)"
+	}
+	return strconv.Itoa(i+1) + ". " + h
+}
+
+// bankText is a bank line's free text: description, then account, note and
+// reference when present. Line breaks are kept (the reference export puts the
+// sender on a description's second line), and the note is shown verbatim
+// wherever the line is shown (spec section 2).
+templ bankText(description, account, note, reference string) {
+	<p class="banktext">{ description }</p>
+	if account != "" || reference != "" {
+		<p class="muted small">
+			if account != "" {
+				{ account }
+			}
+			if account != "" && reference != "" {
+				&middot;
+			}
+			if reference != "" {
+				Ref { reference }
+			}
+		</p>
+	}
+	if note != "" {
+		<p class="banknote small"><span class="muted">Bank note:</span> { note }</p>
+	}
+}
+
+// ReconcileImport is one import: what happened to its rows, and the lines it
+// kept.
+templ ReconcileImport(p Page, imp store.BankImport, lines []store.BankLine) {
+	@Layout(p) {
+		<p class="muted small"><a href="/admin/reconcile">Reconciliation</a></p>
+		<h1>{ imp.FileName }</h1>
+		<section class="card">
 			<p>
-				Match a bank&#39;s CSV export against the payments recorded here, and post any
-				difference back to the tab.
+				{ imp.FormatName } &middot; uploaded { imp.UploadedAt.Format("Jan 2, 2006 15:04") } UTC by { imp.UploaderName }
 			</p>
-			<p class="muted small">Importing a bank statement is not available yet.</p>
+			<ul class="statuslist">
+				<li>{ strconv.Itoa(imp.Kept) } new lines kept</li>
+				<li>{ strconv.Itoa(imp.Duplicates) } already imported from another file</li>
+				<li>{ strconv.Itoa(imp.Ignored) } ignored by a rule</li>
+				<li>{ strconv.Itoa(imp.Outgoing) } outgoing (or zero), counted and dropped</li>
+				<li>{ strconv.Itoa(imp.Refused) } rows that could not be read</li>
+			</ul>
+			if imp.FirstDate != "" {
+				<p class="muted small">Incoming lines from { bankDate(imp.FirstDate) } to { bankDate(imp.LastDate) }.</p>
+			}
+			if imp.RefusedDetail != "" {
+				<details>
+					<summary>Why rows could not be read</summary>
+					<pre class="refused">{ imp.RefusedDetail }</pre>
+				</details>
+			}
+		</section>
+		<section class="card">
+			<h2>Lines kept</h2>
+			if len(lines) == 0 {
+				<p class="muted">No new lines in this file.</p>
+			} else {
+				<ul class="banklines">
+					for _, l := range lines {
+						<li class={ "bankline", "state-" + string(l.State) }>
+							<div class="bankline-head">
+								<span class="muted small">Row { strconv.Itoa(l.Row) }</span>
+								<span class="nowrap">{ bankDate(l.PostedOn) }</span>
+								<span class="amount">{ l.Amount.Display() }</span>
+								if l.State != store.BankLineOpen {
+									<span class="pill">{ string(l.State) }</span>
+								}
+							</div>
+							@bankText(l.Description, l.Account, l.Note, l.Reference)
+							if l.IgnoreReason != "" {
+								<p class="muted small">Ignored: { l.IgnoreReason }</p>
+							}
+							<details class="small">
+								<summary>Original row</summary>
+								<pre class="rawrow">{ l.Raw }</pre>
+							</details>
+						</li>
+					}
+				</ul>
+			}
 		</section>
 	}
 }

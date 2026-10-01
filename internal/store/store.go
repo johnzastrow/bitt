@@ -31,6 +31,9 @@ var (
 	// ErrLastAdmin is returned when deactivating an account would leave the
 	// instance with no active administrator.
 	ErrLastAdmin = errors.New("store: cannot deactivate the last administrator")
+	// ErrNotAdmin is returned when a permission that only an administrator may
+	// hold (Can reconcile) is granted to an account that is not one.
+	ErrNotAdmin = errors.New("store: the account is not an administrator")
 )
 
 // EntryCategory sub-types an entry within its kind. It is empty for ordinary
@@ -189,6 +192,10 @@ type Instance struct {
 	// secret come from the environment or a file and nowhere else -- see
 	// migration 0010 for why that line is drawn here.
 	Delivery Delivery
+	// ReconcileEnabled is the instance switch for bank reconciliation
+	// (RECON-01). Off, the feature is hidden from everyone, whatever
+	// permissions individual accounts hold.
+	ReconcileEnabled bool
 }
 
 // Delivery is the non-secret half of notification configuration: where mail
@@ -229,6 +236,16 @@ type User struct {
 	// NotifyEmail and NotifyNtfy are the per-channel delivery toggles.
 	NotifyEmail bool
 	NotifyNtfy  bool
+	// CanReconcile is the bank reconciliation permission (RECON-01). Only an
+	// administrator can hold it; the schema refuses it on any other account.
+	CanReconcile bool
+}
+
+// MayReconcile reports whether the account may use bank reconciliation, given
+// the instance switch. Both are required, and so is being an active
+// administrator: the permission alone is never enough.
+func (u User) MayReconcile(inst Instance) bool {
+	return inst.ReconcileEnabled && u.IsAdmin && u.CanReconcile && u.Active()
 }
 
 // HasAvatar reports whether the account has an uploaded picture. The image
@@ -465,6 +482,10 @@ type InstanceStore interface {
 	// transaction. An empty set clears them, which returns the instance to the
 	// environment's list or the built-in default.
 	SetInstanceReminders(ctx context.Context, rs []TabReminder) error
+
+	// SetReconcileEnabled turns bank reconciliation on or off for the whole
+	// instance (RECON-01).
+	SetReconcileEnabled(ctx context.Context, on bool) error
 }
 
 // UserStore covers accounts.
@@ -522,6 +543,12 @@ type UserStore interface {
 	// would let two concurrent requests each see a second admin and both
 	// proceed, locking everyone out of the instance.
 	SetUserActive(ctx context.Context, id int64, active bool) error
+
+	// SetCanReconcile grants or removes the bank reconciliation permission
+	// (RECON-01). Granting it to an account that is not an administrator fails
+	// with ErrNotAdmin; an unknown account is ErrNotFound. Removing it is
+	// always allowed.
+	SetCanReconcile(ctx context.Context, id int64, on bool) error
 }
 
 // SessionStore covers login state.

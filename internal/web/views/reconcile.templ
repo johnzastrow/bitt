@@ -1,0 +1,17 @@
+package views
+
+// Reconcile is the bank reconciliation screen (SPEC-BANK-RECONCILE). This is
+// the shell RECON-01 puts behind the permission; upload, review and the setup
+// controls are added from RECON-02 on.
+templ Reconcile(p Page) {
+	@Layout(p) {
+		<h1>Reconciliation</h1>
+		<section class="card">
+			<p>
+				Match a bank&#39;s CSV export against the payments recorded here, and post any
+				difference back to the tab.
+			</p>
+			<p class="muted small">Importing a bank statement is not available yet.</p>
+		</section>
+	}
+}

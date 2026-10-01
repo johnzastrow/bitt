@@ -278,6 +278,10 @@ button.link {
 
 /* ---------- Tables ---------- */
 
+/* A table too wide for a phone (People's accounts, with a form per row)
+   scrolls inside its card rather than widening the whole page. */
+.tablescroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
 table { width: 100%; border-collapse: collapse; }
 th { text-align: left; font-size: var(--t-sm); color: var(--fg-muted); font-weight: 600; }
 th, td { padding: var(--s2) var(--s1); border-bottom: 1px solid var(--border); }

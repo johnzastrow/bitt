@@ -27,17 +27,20 @@ func (d *DB) GetInstance(ctx context.Context) (store.Instance, error) {
 		inst      store.Instance
 		completed sql.NullString
 		created   string
+		reconcile int
 	)
 	err := d.db.QueryRowContext(ctx,
 		`SELECT timezone, setup_completed_at, created_at,
-		        smtp_host, smtp_port, smtp_username, email_from, ntfy_url
+		        smtp_host, smtp_port, smtp_username, email_from, ntfy_url,
+		        reconcile_enabled
 		   FROM instance WHERE id = 1`).
 		Scan(&inst.Timezone, &completed, &created,
 			&inst.Delivery.SMTPHost, &inst.Delivery.SMTPPort, &inst.Delivery.SMTPUsername,
-			&inst.Delivery.EmailFrom, &inst.Delivery.NtfyBaseURL)
+			&inst.Delivery.EmailFrom, &inst.Delivery.NtfyBaseURL, &reconcile)
 	if err != nil {
 		return store.Instance{}, translate(err)
 	}
+	inst.ReconcileEnabled = reconcile != 0
 
 	if inst.SetupCompletedAt, err = fromNullText(completed); err != nil {
 		return store.Instance{}, fmt.Errorf("sqlite: parse setup_completed_at: %w", err)
@@ -134,7 +137,7 @@ func (d *DB) CreateUser(ctx context.Context, u store.User) (store.User, error) {
 // user row on every authenticated request, and pulling an image through that
 // path would be a steady, pointless cost. Only GetAvatar touches the blob.
 const userColumns = `id, email, display_name, password_hash, is_admin, created_at, ` +
-	`deactivated_at, avatar_updated_at, ntfy_topic, notify_email, notify_ntfy`
+	`deactivated_at, avatar_updated_at, ntfy_topic, notify_email, notify_ntfy, can_reconcile`
 
 func scanUser(row interface{ Scan(...any) error }) (store.User, error) {
 	var (
@@ -143,11 +146,13 @@ func scanUser(row interface{ Scan(...any) error }) (store.User, error) {
 		created     string
 		deactivated sql.NullString
 	)
-	var notifyEmail, notifyNtfy int
+	var notifyEmail, notifyNtfy, canReconcile int
 	if err := row.Scan(&u.ID, &u.Email, &u.DisplayName, &u.PasswordHash, &isAdmin, &created,
-		&deactivated, &u.AvatarUpdatedAt, &u.NtfyTopic, &notifyEmail, &notifyNtfy); err != nil {
+		&deactivated, &u.AvatarUpdatedAt, &u.NtfyTopic, &notifyEmail, &notifyNtfy,
+		&canReconcile); err != nil {
 		return store.User{}, translate(err)
 	}
+	u.CanReconcile = canReconcile != 0
 	u.IsAdmin = isAdmin != 0
 	u.NotifyEmail = notifyEmail != 0
 	u.NotifyNtfy = notifyNtfy != 0
@@ -321,16 +326,17 @@ func (d *DB) CreateSession(ctx context.Context, s store.Session) error {
 // rather than a valid-looking result the caller might honor.
 func (d *DB) GetSession(ctx context.Context, tokenHash string) (store.Session, store.User, error) {
 	var (
-		s           store.Session
-		u           store.User
-		created     string
-		expires     string
-		lastSeen    string
-		isAdmin     int
-		uCreated    string
-		deactivated sql.NullString
-		notifyEmail int
-		notifyNtfy  int
+		s            store.Session
+		u            store.User
+		created      string
+		expires      string
+		lastSeen     string
+		isAdmin      int
+		uCreated     string
+		deactivated  sql.NullString
+		notifyEmail  int
+		notifyNtfy   int
+		canReconcile int
 	)
 	// This restates the user columns rather than reusing userColumns, because
 	// they need the "u." qualifier for the join. Any column added to a User
@@ -340,7 +346,8 @@ func (d *DB) GetSession(ctx context.Context, tokenHash string) (store.Session, s
 	err := d.db.QueryRowContext(ctx,
 		`SELECT s.token_hash, s.user_id, s.created_at, s.expires_at, s.last_seen_at,
                 u.id, u.email, u.display_name, u.password_hash, u.is_admin, u.created_at,
-                u.deactivated_at, u.avatar_updated_at, u.ntfy_topic, u.notify_email, u.notify_ntfy
+                u.deactivated_at, u.avatar_updated_at, u.ntfy_topic, u.notify_email, u.notify_ntfy,
+                u.can_reconcile
          FROM sessions s
          JOIN users u ON u.id = s.user_id
          WHERE s.token_hash = ?
@@ -349,10 +356,12 @@ func (d *DB) GetSession(ctx context.Context, tokenHash string) (store.Session, s
 		tokenHash, nowText()).
 		Scan(&s.TokenHash, &s.UserID, &created, &expires, &lastSeen,
 			&u.ID, &u.Email, &u.DisplayName, &u.PasswordHash, &isAdmin, &uCreated,
-			&deactivated, &u.AvatarUpdatedAt, &u.NtfyTopic, &notifyEmail, &notifyNtfy)
+			&deactivated, &u.AvatarUpdatedAt, &u.NtfyTopic, &notifyEmail, &notifyNtfy,
+			&canReconcile)
 	if err != nil {
 		return store.Session{}, store.User{}, translate(err)
 	}
+	u.CanReconcile = canReconcile != 0
 	u.NotifyEmail = notifyEmail != 0
 	u.NotifyNtfy = notifyNtfy != 0
 	u.IsAdmin = isAdmin != 0
@@ -632,4 +641,45 @@ func (d *DB) SetInstanceReminders(ctx context.Context, rs []store.TabReminder) e
 		return fmt.Errorf("sqlite: commit set instance reminders: %w", err)
 	}
 	return nil
+}
+
+// SetCanReconcile grants or removes the bank reconciliation permission.
+//
+// The UPDATE carries the rule itself: a grant matches only an administrator's
+// row, so the check and the write are one statement and no concurrent change
+// to the role can slip between them. The schema's CHECK (migration 0013) is
+// the second line. A grant that matches nothing is then told apart -- unknown
+// account or not an administrator -- by a read, which is only for the message.
+func (d *DB) SetCanReconcile(ctx context.Context, id int64, on bool) error {
+	q := `UPDATE users SET can_reconcile = 0 WHERE id = ?`
+	if on {
+		q = `UPDATE users SET can_reconcile = 1 WHERE id = ? AND is_admin = 1`
+	}
+	res, err := d.db.ExecContext(ctx, q, id)
+	if err != nil {
+		return translate(err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("%s: set can_reconcile rows: %w", d.dialect.name(), err)
+	}
+	if n > 0 {
+		return nil
+	}
+	var isAdmin int
+	if err := d.db.QueryRowContext(ctx,
+		`SELECT is_admin FROM users WHERE id = ?`, id).Scan(&isAdmin); err != nil {
+		return translate(err)
+	}
+	if on && isAdmin == 0 {
+		return store.ErrNotAdmin
+	}
+	return nil
+}
+
+// SetReconcileEnabled turns bank reconciliation on or off for the instance.
+func (d *DB) SetReconcileEnabled(ctx context.Context, on bool) error {
+	_, err := d.db.ExecContext(ctx,
+		`UPDATE instance SET reconcile_enabled = ? WHERE id = 1`, boolToInt(on))
+	return translate(err)
 }

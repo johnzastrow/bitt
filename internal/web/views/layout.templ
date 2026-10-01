@@ -21,6 +21,10 @@ type Page struct {
 	// Path is the request path, so the account menu can mark the page the
 	// person is on (aria-current).
 	Path string
+	// ShowReconcile puts Reconciliation in the account menu: the account holds
+	// Can reconcile and the instance switch is on. Display only; every
+	// reconciliation route checks both again.
+	ShowReconcile bool
 }
 
 // asset builds a cache-busting URL for an embedded asset. Every reference to
@@ -107,6 +111,9 @@ templ AccountMenu(p Page) {
 			if p.User.IsAdmin {
 				@menuLink(p, "/admin/users", "People")
 				@menuLink(p, "/admin/notifications", "Notifications")
+			}
+			if p.ShowReconcile {
+				@menuLink(p, "/admin/reconcile", "Reconciliation")
 			}
 			<form method="post" action="/logout">
 				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>

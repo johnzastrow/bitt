@@ -325,6 +325,9 @@ own.
    its own small release, since every account sees it. **Built in 1.7.0
    (2026-10-01).**
 1. RECON-01: the permission, the instance switch, the People control.
+   **Built 2026-10-01** (migration 0013; unreleased). The administrator role
+   cannot be removed in the app today, so "removing the role removes the
+   permission" is enforced as a schema CHECK.
 2. RECON-02 and 5: formats, import, fingerprints (migration).
 3. RECON-03: suggestions (pure function, heavily tested).
 4. RECON-04: confirm, delta posting, undo.

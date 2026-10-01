@@ -19,7 +19,9 @@ type AdminUser struct {
 // AdminUsers is the account management screen (AUTH-04). Deliberately minimal:
 // add a person, deactivate a person. Household instances provision people
 // rarely and do not need role matrices.
-templ AdminUsers(p Page, users []AdminUser) {
+//
+// reconcileOn is the instance's bank reconciliation switch (RECON-01).
+templ AdminUsers(p Page, users []AdminUser, reconcileOn bool) {
 	@Layout(p) {
 		<h1>People</h1>
 		<section class="card">
@@ -46,83 +48,89 @@ templ AdminUsers(p Page, users []AdminUser) {
 				<button class="primary" type="submit">Add person</button>
 			</form>
 		</section>
+		@reconcileSwitch(p, reconcileOn)
 		<section class="card">
 			<h2>Accounts</h2>
-			<table class="entries">
-				<thead>
-					<tr>
-						<th>Name</th>
-						<th>Email</th>
-						<th>Role</th>
-						<th>Notifications</th>
-						<th class="right"></th>
-					</tr>
-				</thead>
-				<tbody>
-					for _, row := range users {
-						<tr class={ userRowClass(row) }>
-							<td>
-								<span class="person">
-									@Avatar(row.User.ID, row.User.DisplayName, row.User.AvatarUpdatedAt, 28)
-									<span>
-										{ row.User.DisplayName }
-										if row.Self {
-											<span class="muted small">(you)</span>
-										}
-									</span>
-								</span>
-							</td>
-							<td class="muted">{ row.User.Email }</td>
-							<td>
-								if row.User.IsAdmin {
-									<span class="pill pill-provider">admin</span>
-								}
-								if !row.User.Active() {
-									<span class="pill">deactivated</span>
-								}
-							</td>
-							<td>
-								<form method="post" action={ userNotifyAction(row.User.ID) } class="notifyform">
-									<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
-									<input
-										type="text"
-										name="ntfy_topic"
-										value={ row.User.NtfyTopic }
-										placeholder="ntfy topic"
-										size="16"
-										autocomplete="off"
-									/>
-									<label class="checkrow small">
-										<input type="checkbox" name="notify_email" value="1" checked?={ row.User.NotifyEmail }/>
-										email
-									</label>
-									<label class="checkrow small">
-										<input type="checkbox" name="notify_ntfy" value="1" checked?={ row.User.NotifyNtfy }/>
-										ntfy
-									</label>
-									<button class="link" type="submit">Save</button>
-								</form>
-							</td>
-							<td class="right">
-								<form method="post" action={ userActiveAction(row.User.ID) } class="inline">
-									<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
-									if row.User.Active() {
-										<input type="hidden" name="active" value="false"/>
-										if row.LastAdmin {
-											<span class="muted small">last admin</span>
-										} else {
-											<button class="link" type="submit">Deactivate</button>
-										}
-									} else {
-										<input type="hidden" name="active" value="true"/>
-										<button class="link" type="submit">Reactivate</button>
-									}
-								</form>
-							</td>
+			<div class="tablescroll">
+				<table class="entries">
+					<thead>
+						<tr>
+							<th>Name</th>
+							<th>Email</th>
+							<th>Role</th>
+							<th>Notifications</th>
+							<th class="right"></th>
 						</tr>
-					}
-				</tbody>
-			</table>
+					</thead>
+					<tbody>
+						for _, row := range users {
+							<tr class={ userRowClass(row) }>
+								<td>
+									<span class="person">
+										@Avatar(row.User.ID, row.User.DisplayName, row.User.AvatarUpdatedAt, 28)
+										<span>
+											{ row.User.DisplayName }
+											if row.Self {
+												<span class="muted small">(you)</span>
+											}
+										</span>
+									</span>
+								</td>
+								<td class="muted">{ row.User.Email }</td>
+								<td>
+									if row.User.IsAdmin {
+										<span class="pill pill-provider">admin</span>
+									}
+									if !row.User.Active() {
+										<span class="pill">deactivated</span>
+									}
+									if row.User.IsAdmin {
+										@reconcileControl(p, row.User)
+									}
+								</td>
+								<td>
+									<form method="post" action={ userNotifyAction(row.User.ID) } class="notifyform">
+										<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+										<input
+											type="text"
+											name="ntfy_topic"
+											value={ row.User.NtfyTopic }
+											placeholder="ntfy topic"
+											size="16"
+											autocomplete="off"
+										/>
+										<label class="checkrow small">
+											<input type="checkbox" name="notify_email" value="1" checked?={ row.User.NotifyEmail }/>
+											email
+										</label>
+										<label class="checkrow small">
+											<input type="checkbox" name="notify_ntfy" value="1" checked?={ row.User.NotifyNtfy }/>
+											ntfy
+										</label>
+										<button class="link" type="submit">Save</button>
+									</form>
+								</td>
+								<td class="right">
+									<form method="post" action={ userActiveAction(row.User.ID) } class="inline">
+										<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+										if row.User.Active() {
+											<input type="hidden" name="active" value="false"/>
+											if row.LastAdmin {
+												<span class="muted small">last admin</span>
+											} else {
+												<button class="link" type="submit">Deactivate</button>
+											}
+										} else {
+											<input type="hidden" name="active" value="true"/>
+											<button class="link" type="submit">Reactivate</button>
+										}
+									</form>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
 			<p class="muted small">
 				Each person needs their OWN ntfy topic. Two accounts sharing one means either can
 				read the other&#39;s notices, and a topic nobody is subscribed to publishes into a
@@ -151,4 +159,47 @@ func userRowClass(row AdminUser) string {
 		return "reversed"
 	}
 	return ""
+}
+
+// reconcileSwitch is the instance-wide on/off for bank reconciliation. Off, the
+// feature is hidden from everyone whatever their permission.
+templ reconcileSwitch(p Page, on bool) {
+	<section class="card">
+		<h2>Bank reconciliation</h2>
+		<form method="post" action="/admin/reconcile-switch" class="inlineform">
+			<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+			if on {
+				<p>On. Administrators allowed to reconcile can import bank statements.</p>
+				<input type="hidden" name="enabled" value="false"/>
+				<button type="submit">Turn off</button>
+			} else {
+				<p>Off. Nobody sees the feature until it is turned on.</p>
+				<input type="hidden" name="enabled" value="true"/>
+				<button type="submit">Turn on</button>
+			}
+		</form>
+		<p class="muted small">
+			Reconciling matches a bank&#39;s CSV export against recorded payments, and can post the
+			difference to a tab. Only administrators given &ldquo;can reconcile&rdquo; below may use it.
+		</p>
+	</section>
+}
+
+// reconcileControl grants or removes Can reconcile on an administrator's row.
+templ reconcileControl(p Page, u store.User) {
+	<form method="post" action={ userReconcileAction(u.ID) } class="inline">
+		<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+		if u.CanReconcile {
+			<span class="pill">can reconcile</span>
+			<input type="hidden" name="can_reconcile" value="false"/>
+			<button class="link" type="submit">Remove</button>
+		} else {
+			<input type="hidden" name="can_reconcile" value="true"/>
+			<button class="link" type="submit">Allow reconciling</button>
+		}
+	</form>
+}
+
+func userReconcileAction(id int64) templ.SafeURL {
+	return templ.SafeURL("/admin/users/" + strconv.FormatInt(id, 10) + "/reconcile")
 }

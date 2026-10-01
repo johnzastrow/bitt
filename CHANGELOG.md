@@ -7,6 +7,34 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [Unreleased] — Bank reconciliation, in progress
+
+Built step by step from [SPEC-BANK-RECONCILE.md](docs/planning/SPEC-BANK-RECONCILE.md)
+and released together when the screens are done. Everything below is behind an
+instance switch that is off by default.
+
+### Added
+- **The "Can reconcile" permission (RECON-01).** Per account, off by default,
+  shown and changed on the People screen on each administrator's row. Any
+  administrator can grant or remove it; only an administrator can hold it, and
+  that is a CHECK in the schema (migration 0013), so a future "remove
+  administrator" action cannot leave the permission behind: the database refuses
+  the demotion unless the same write clears it. Each change is logged with both
+  user ids.
+- **An instance switch, "Bank reconciliation: on/off"**, on the People screen,
+  off by default. While it is off the feature is hidden from everyone.
+- **Reconciliation in the account menu** for a holder when the switch is on, and
+  a `/admin/reconcile` screen (a shell for now). Every reconciliation route
+  checks the switch and the permission on each request: 404 for a
+  non-administrator or with the switch off, 403 for an administrator without
+  the permission. The permission does not change who may post through the
+  ordinary payment form.
+
+### Fixed
+- **The People screen no longer scrolls sideways on a phone.** The accounts
+  table, with a notification form on every row, was 614 px wide at a 360 px
+  viewport; it now scrolls inside its card.
+
 ## [1.7.0] - 2026-10-01 — Navigation moves under the avatar
 
 ### Changed

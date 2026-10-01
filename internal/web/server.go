@@ -135,10 +135,16 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /admin/users", s.requireAdmin(http.HandlerFunc(s.postAdminUser)))
 	mux.Handle("POST /admin/users/{id}/notify", s.requireAdmin(http.HandlerFunc(s.postAdminUserNotify)))
 	mux.Handle("POST /admin/users/{id}/active", s.requireAdmin(http.HandlerFunc(s.postAdminUserActive)))
+	mux.Handle("POST /admin/users/{id}/reconcile", s.requireAdmin(http.HandlerFunc(s.postAdminUserReconcile)))
+	mux.Handle("POST /admin/reconcile-switch", s.requireAdmin(http.HandlerFunc(s.postReconcileSwitch)))
 	mux.Handle("GET /admin/notifications", s.requireAdmin(http.HandlerFunc(s.getAdminNotify)))
 	mux.Handle("POST /admin/notifications/delivery", s.requireAdmin(http.HandlerFunc(s.postAdminDelivery)))
 	mux.Handle("POST /admin/notifications/reminders", s.requireAdmin(http.HandlerFunc(s.postAdminReminders)))
 	mux.Handle("POST /admin/notifications/test", s.requireAdmin(http.HandlerFunc(s.postAdminNotifyTest)))
+
+	// Bank reconciliation (SPEC-BANK-RECONCILE). Every route goes through
+	// requireReconcile, which checks the switch and the permission per request.
+	mux.Handle("GET /admin/reconcile", s.requireReconcile(http.HandlerFunc(s.getReconcile)))
 
 	return s.securityHeaders(s.recoverPanic(mux))
 }
@@ -295,6 +301,13 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request, title string) view
 	}
 	if u := userFrom(r.Context()); u != nil {
 		p.User = u
+		// The instance is read only for an account that could see the item,
+		// so nobody else's page pays for the query.
+		if u.IsAdmin && u.CanReconcile {
+			if inst, err := s.store.GetInstance(r.Context()); err == nil {
+				p.ShowReconcile = u.MayReconcile(inst)
+			}
+		}
 	}
 	if msg := r.URL.Query().Get("err"); msg != "" {
 		p.Error = safeFlash(msg)

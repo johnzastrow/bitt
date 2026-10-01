@@ -40,7 +40,13 @@ func (s *Server) getAdminUsers(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	s.render(w, r, http.StatusOK, views.AdminUsers(s.page(w, r, "People"), rows))
+	inst, err := s.store.GetInstance(r.Context())
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	s.render(w, r, http.StatusOK,
+		views.AdminUsers(s.page(w, r, "People"), rows, inst.ReconcileEnabled))
 }
 
 // adminRows lists accounts and marks which ones cannot be deactivated.

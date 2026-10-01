@@ -291,6 +291,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request, title string) view
 		Title:        title,
 		CSRFToken:    auth.EnsureCSRFToken(w, r, s.cfg.SecureCookies),
 		AssetVersion: AssetVersion(),
+		Path:         r.URL.Path,
 	}
 	if u := userFrom(r.Context()); u != nil {
 		p.User = u

@@ -165,14 +165,14 @@ templ UserAvatar(u store.User, size int) {
 templ Avatar(id int64, name, avatarUpdatedAt string, size int) {
 	if avatarUpdatedAt != "" {
 		<img
-			class="avatar"
+			class={ "avatar", avatarSize(size) }
 			src={ "/users/" + strconv.FormatInt(id, 10) + "/avatar?v=" + avatarUpdatedAt }
 			alt={ name }
 			width={ strconv.Itoa(size) }
 			height={ strconv.Itoa(size) }
 		/>
 	} else {
-		<span class={ "avatar", "avatarfallback", avatarTone(id) } aria-hidden="true">
+		<span class={ "avatar", "avatarfallback", avatarSize(size), avatarTone(id) } aria-hidden="true">
 			{ initials(name) }
 		</span>
 	}
@@ -201,6 +201,30 @@ func initials(name string) string {
 		return "?"
 	}
 	return string(out)
+}
+
+// avatarSizes are the sizes with a stylesheet rule. The Content Security Policy
+// refuses inline styles, so a size has to be a class: without one the initials
+// fallback collapsed to the width of its two letters.
+var avatarSizes = []int{22, 26, 28, 72}
+
+// avatarSize names the size class, using the nearest defined size for any
+// other value so a new call site still gets a round box.
+func avatarSize(size int) string {
+	best := avatarSizes[0]
+	for _, s := range avatarSizes {
+		if abs(s-size) < abs(best-size) {
+			best = s
+		}
+	}
+	return "avatar-" + strconv.Itoa(best)
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }
 
 // avatarTone picks one of a few background tints from the account id, so two

@@ -103,7 +103,6 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
-.topbar nav { display: flex; align-items: center; gap: var(--s3); }
 
 .brand {
   display: inline-flex;
@@ -339,15 +338,19 @@ tfoot td { font-weight: 650; border-bottom: none; }
 
 .avatarfallback {
   font-weight: 600;
-  /* The initials scale with the box, so one class serves the 26px header and
-     the 72px profile header without a second rule per size. */
-  font-size: 0.42em;
   line-height: 1;
   color: var(--surface);
   text-transform: uppercase;
   letter-spacing: 0.02em;
   user-select: none;
 }
+
+/* Sizes (see avatarSizes in views): a class each, since the Content Security
+   Policy refuses inline styles. The initials are 0.42 of the box. */
+.avatar-22 { width: 22px; height: 22px; font-size: 9px; }
+.avatar-26 { width: 26px; height: 26px; font-size: 11px; }
+.avatar-28 { width: 28px; height: 28px; font-size: 12px; }
+.avatar-72 { width: 72px; height: 72px; font-size: 30px; }
 
 /* Tints derived from the account id, so two people rarely collide. */
 .tone-0 { background: var(--sky-deep); }
@@ -356,19 +359,81 @@ tfoot td { font-weight: 650; border-bottom: none; }
 .tone-3 { background: var(--slate-soft); }
 .tone-4 { background: #7a6a9c; }
 
-/* The header link is the whole name-plus-picture, so the target is easy to hit
-   on a phone rather than being a word of text. */
-a.who {
+/* ---------- The account menu (RECON-00) ----------
+   The avatar and name are the button for a <details> menu holding Profile, the
+   administrator pages and Log out, so the top bar stays brand plus avatar at
+   every width. The whole name-plus-picture is the target, easy to hit on a
+   phone. */
+.acctmenu { position: relative; min-width: 0; }
+
+.acctmenu > summary {
   display: inline-flex;
   align-items: center;
   gap: var(--s2);
+  max-width: 100%;
   color: inherit;
-  text-decoration: none;
   border-radius: 999px;
   padding: 2px var(--s2) 2px 2px;
+  min-height: 2.75rem;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
 }
+.acctmenu > summary::-webkit-details-marker { display: none; }
+/* The name gives way to a long display name; the picture never does. */
+.acctmenu > summary > :first-child { flex: none; }
+.acctmenu > summary:hover, .acctmenu[open] > summary { background: var(--chalk-sunk); }
+.acctmenu > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-a.who:hover { background: var(--chalk-sunk); }
+/* A long display name shortens rather than pushing the bar wider than a phone. */
+.who-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+.caret {
+  flex: none;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+}
+.acctmenu[open] .caret { transform: rotate(180deg); }
+
+.acctmenu-list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + var(--s1));
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  min-width: 12rem;
+  max-width: calc(100vw - 2 * var(--s4));
+  padding: var(--s1) 0;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.acctmenu-list form { display: contents; }
+
+.menuitem {
+  display: block;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: var(--s3) var(--s4);
+  font: inherit;
+  font-size: var(--t-base);
+  font-weight: 400;
+  text-align: left;
+  color: var(--fg);
+  background: none;
+  border: none;
+  border-radius: 0;
+  text-decoration: none;
+  cursor: pointer;
+}
+.menuitem:hover, .menuitem:focus-visible { background: var(--chalk-sunk); }
+.menuitem[aria-current="page"] { font-weight: 650; box-shadow: inset 3px 0 0 var(--accent); }
+.acctmenu-list form .menuitem { border-top: 1px solid var(--border); }
 
 /* A name preceded by its avatar, used in the participants and admin lists. */
 .person {
@@ -600,8 +665,6 @@ tr.reversal td { color: var(--fg-muted); }
 .checkrow { flex-direction: row !important; align-items: center; gap: var(--s2) !important; }
 .checkrow input { width: auto; min-height: auto; }
 
-.navlink { color: var(--fg-muted); text-decoration: none; font-size: var(--t-sm); }
-.navlink:hover { color: var(--fg); text-decoration: underline; }
 
 /* htmx swaps content into the page; keep the transition quiet for anyone who
    has asked the system to reduce motion. */

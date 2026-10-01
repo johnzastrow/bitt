@@ -7,6 +7,33 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [1.7.0] - 2026-10-01 — Navigation moves under the avatar
+
+### Changed
+- **The avatar and name are now the button for an account menu** holding
+  Profile, the administrator pages (People, Notifications) and Log out. The top
+  bar is brand and avatar only, at every width. Bank reconciliation
+  ([SPEC-BANK-RECONCILE.md](docs/planning/SPEC-BANK-RECONCILE.md), RECON-00)
+  will add a third administrator page, and a third link in the bar would have
+  overflowed a phone; this ships first, on its own, because every account sees
+  it.
+
+  The menu is a native `<details>` disclosure: no script, so nothing new for the
+  Content Security Policy, and keyboard and screen-reader support come with the
+  element. Following an item navigates, which closes it. The page you are on is
+  marked (`aria-current`), including pages beneath it. Log out is the same
+  CSRF-protected POST form, moved inside the menu. A long display name is
+  shortened with an ellipsis rather than widening the bar, and every item is a
+  44 px touch target.
+
+### Fixed
+- **The initials avatar (an account with no picture) had no size.** Only the
+  `<img>` received the requested size; the Content Security Policy refuses
+  inline styles, and no stylesheet rule set the fallback's box, so it shrank to
+  the width of its letters. Each size in use now has a class, applied to the
+  picture and the initials alike, and a test fails if a template asks for a size
+  the stylesheet lacks.
+
 ## [1.6.0] - 2026-08-11 — A notification's link opens a payment screen
 
 ### Added

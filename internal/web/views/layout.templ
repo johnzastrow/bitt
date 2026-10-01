@@ -1,6 +1,8 @@
 package views
 
 import (
+	"strings"
+
 	"github.com/johnzastrow/bitt/internal/store"
 	"github.com/johnzastrow/bitt/internal/version"
 )
@@ -16,6 +18,9 @@ type Page struct {
 	// so a browser cannot serve a stylesheet from before the change that
 	// mattered. The web package computes it; views cannot import web.
 	AssetVersion string
+	// Path is the request path, so the account menu can mark the page the
+	// person is on (aria-current).
+	Path string
 }
 
 // asset builds a cache-busting URL for an embedded asset. Every reference to
@@ -66,20 +71,7 @@ templ Layout(p Page) {
 						<img class="logo" src={ p.asset("logo.svg") } alt="" width="28" height="28"/>
 						<span>BitTabby</span>
 					</a>
-					<nav>
-						if p.User.IsAdmin {
-							<a class="navlink" href="/admin/users">People</a>
-							<a class="navlink" href="/admin/notifications">Notifications</a>
-						}
-						<a class="who" href="/profile" title="Your profile">
-							@UserAvatar(*p.User, 26)
-							<span>{ p.User.DisplayName }</span>
-						</a>
-						<form method="post" action="/logout" class="inline">
-							<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
-							<button class="link" type="submit">Log out</button>
-						</form>
-					</nav>
+					@AccountMenu(p)
 				</header>
 			}
 			<main class="wrap">
@@ -97,6 +89,45 @@ templ Layout(p Page) {
 			</footer>
 		</body>
 	</html>
+}
+
+// AccountMenu is the avatar button and the menu behind it (RECON-00). It is a
+// native <details> disclosure: no script, so nothing new for the Content
+// Security Policy, and keyboard and screen-reader support come with the
+// element. Following any item navigates, which closes it.
+templ AccountMenu(p Page) {
+	<details class="acctmenu">
+		<summary class="who" title="Your account">
+			@UserAvatar(*p.User, 26)
+			<span class="who-name">{ p.User.DisplayName }</span>
+			<span class="caret" aria-hidden="true"></span>
+		</summary>
+		<nav class="acctmenu-list" aria-label="Account">
+			@menuLink(p, "/profile", "Profile")
+			if p.User.IsAdmin {
+				@menuLink(p, "/admin/users", "People")
+				@menuLink(p, "/admin/notifications", "Notifications")
+			}
+			<form method="post" action="/logout">
+				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+				<button class="menuitem" type="submit">Log out</button>
+			</form>
+		</nav>
+	</details>
+}
+
+templ menuLink(p Page, href, label string) {
+	if isCurrent(p.Path, href) {
+		<a class="menuitem" href={ templ.SafeURL(href) } aria-current="page">{ label }</a>
+	} else {
+		<a class="menuitem" href={ templ.SafeURL(href) }>{ label }</a>
+	}
+}
+
+// isCurrent reports whether the request path is the menu item's page or one
+// beneath it, so /admin/users/7 still marks People.
+func isCurrent(path, href string) bool {
+	return path == href || strings.HasPrefix(path, href+"/")
 }
 
 func pageTitle(t string) string {

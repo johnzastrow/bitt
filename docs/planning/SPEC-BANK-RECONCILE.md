@@ -322,7 +322,8 @@ own.
 ## 14. Build order
 
 0. RECON-00: the avatar menu (People, Notifications and Log out move into it);
-   its own small release, since every account sees it.
+   its own small release, since every account sees it. **Built in 1.7.0
+   (2026-10-01).**
 1. RECON-01: the permission, the instance switch, the People control.
 2. RECON-02 and 5: formats, import, fingerprints (migration).
 3. RECON-03: suggestions (pure function, heavily tested).

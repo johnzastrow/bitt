@@ -109,8 +109,9 @@ func TestSuggestionsOnTheScreen(t *testing.T) {
 			t.Errorf("suggestions lack %q", want)
 		}
 	}
-	if strings.Count(sugg, "Confirming will post") != 2 {
-		t.Errorf("%d suggestions, want 2", strings.Count(sugg, "Confirming will post"))
+	// Two single suggestions; the tie's pairs are shown separately.
+	if n := strings.Count(sugg, `class="bankline matchcard"`); n != 2 {
+		t.Errorf("%d suggestions, want 2", n)
 	}
 	// Recorded dates are shown in the instance's timezone: the Garden payment
 	// at 16:00 UTC on 9/20 is still Sep 20 in New York; one at 02:00 UTC on

@@ -170,33 +170,45 @@ func (d *DB) DeleteIgnoreRule(ctx context.Context, id int64) error {
 	return nil
 }
 
+const bankLineSelect = `SELECT l.id, l.import_id, l.file_row, l.original_text, l.account, l.posted_on,
+	        l.amount_cents, l.description, l.note, l.reference, l.fingerprint, l.state,
+	        l.ignore_reason, i.format_id, i.file_name
+	   FROM bank_lines l
+	   JOIN bank_imports i ON i.id = l.import_id`
+
+func scanOpenBankLine(row interface{ Scan(...any) error }) (store.OpenBankLine, error) {
+	var (
+		l     store.OpenBankLine
+		cents int64
+		state string
+	)
+	if err := row.Scan(&l.ID, &l.ImportID, &l.Row, &l.Raw, &l.Account, &l.PostedOn, &cents,
+		&l.Description, &l.Note, &l.Reference, &l.Fingerprint, &state, &l.IgnoreReason,
+		&l.FormatID, &l.FileName); err != nil {
+		return store.OpenBankLine{}, translate(err)
+	}
+	l.Amount, l.State = money.Cents(cents), store.BankLineState(state)
+	return l, nil
+}
+
+// GetBankLine reads one line with its layout and file.
+func (d *DB) GetBankLine(ctx context.Context, id int64) (store.OpenBankLine, error) {
+	return scanOpenBankLine(d.db.QueryRowContext(ctx, bankLineSelect+` WHERE l.id = ?`, id))
+}
+
 // ListOpenBankLines returns every open line, oldest first.
 func (d *DB) ListOpenBankLines(ctx context.Context) ([]store.OpenBankLine, error) {
-	rows, err := d.db.QueryContext(ctx,
-		`SELECT l.id, l.import_id, l.file_row, l.original_text, l.account, l.posted_on,
-		        l.amount_cents, l.description, l.note, l.reference, l.fingerprint, l.state,
-		        l.ignore_reason, i.format_id, i.file_name
-		   FROM bank_lines l
-		   JOIN bank_imports i ON i.id = l.import_id
-		  WHERE l.state = 'open'
-		  ORDER BY l.posted_on, l.id`)
+	rows, err := d.db.QueryContext(ctx, bankLineSelect+` WHERE l.state = 'open' ORDER BY l.posted_on, l.id`)
 	if err != nil {
 		return nil, translate(err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []store.OpenBankLine
 	for rows.Next() {
-		var (
-			l     store.OpenBankLine
-			cents int64
-			state string
-		)
-		if err := rows.Scan(&l.ID, &l.ImportID, &l.Row, &l.Raw, &l.Account, &l.PostedOn, &cents,
-			&l.Description, &l.Note, &l.Reference, &l.Fingerprint, &state, &l.IgnoreReason,
-			&l.FormatID, &l.FileName); err != nil {
-			return nil, translate(err)
+		l, err := scanOpenBankLine(rows)
+		if err != nil {
+			return nil, err
 		}
-		l.Amount, l.State = money.Cents(cents), store.BankLineState(state)
 		out = append(out, l)
 	}
 	return out, translate(rows.Err())
@@ -206,7 +218,8 @@ func (d *DB) ListOpenBankLines(ctx context.Context) ([]store.OpenBankLine, error
 //
 // "Unreversed" is a NOT EXISTS against the reversal that points at the
 // payment; reversals are themselves kind 'reversal', so they never appear.
-// Matched payments are excluded once matches exist (RECON-04).
+// A payment with a standing match is excluded, and so is any payment
+// reconciliation posted itself (its delta, or one recorded from a line).
 func (d *DB) ListPaymentCandidates(ctx context.Context, from, to time.Time) ([]store.PaymentCandidate, error) {
 	rows, err := d.db.QueryContext(ctx,
 		`SELECT e.seq, e.tab_id, t.name, e.amount_cents, e.method, e.effective_at, e.memo,
@@ -217,7 +230,9 @@ func (d *DB) ListPaymentCandidates(ctx context.Context, from, to time.Time) ([]s
 		  WHERE e.kind = 'payment'
 		    AND e.effective_at >= ? AND e.effective_at < ?
 		    AND NOT EXISTS (SELECT 1 FROM entries r WHERE r.reverses_seq = e.seq)
-		  ORDER BY e.effective_at, e.seq`, toText(from), toText(to))
+		    AND NOT EXISTS (SELECT 1 FROM bank_matches m WHERE m.active_entry_seq = e.seq)
+		    AND e.idempotency_key NOT LIKE ?
+		  ORDER BY e.effective_at, e.seq`, toText(from), toText(to), store.ReconKeyPrefix+":%")
 	if err != nil {
 		return nil, translate(err)
 	}

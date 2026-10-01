@@ -574,3 +574,29 @@ func ordinal(n int) string {
 	}
 	return fmt.Sprintf("%d%s", n, suffix)
 }
+
+// DueBetween reports a due date d with earlier <= d < later: the two dates
+// fall on different sides of it, one on time and one late. Bank
+// reconciliation flags such a match, since it is the case that can move a
+// late fee (SPEC-BANK-RECONCILE section 8). The dates may be given in either
+// order; an unset schedule has no due dates.
+func (s Schedule) DueBetween(a, b Date) (Date, bool) {
+	s = s.Normalize() // older stored schedules predate the billing rule
+	if !s.Set() || s.Validate() != nil {
+		return Date{}, false
+	}
+	earlier, later := a, b
+	if later.Before(earlier) {
+		earlier, later = later, earlier
+	}
+	for n := 0; n < MaxPeriods; n++ {
+		due := s.Period(n).Due
+		if !due.Before(later) {
+			return Date{}, false
+		}
+		if !due.Before(earlier) {
+			return due, true
+		}
+	}
+	return Date{}, false
+}

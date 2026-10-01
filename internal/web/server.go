@@ -158,6 +158,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /admin/reconcile/settings", s.requireReconcile(http.HandlerFunc(s.postReconcileSettings)))
 	mux.Handle("POST /admin/reconcile/rules", s.requireReconcile(http.HandlerFunc(s.postIgnoreRule)))
 	mux.Handle("POST /admin/reconcile/rules/{id}/delete", s.requireReconcile(http.HandlerFunc(s.postIgnoreRuleDelete)))
+	mux.Handle("POST /admin/reconcile/confirm", s.requireReconcile(http.HandlerFunc(s.postReconcileConfirm)))
+	mux.Handle("POST /admin/reconcile/confirm-exact", s.requireReconcile(http.HandlerFunc(s.postReconcileConfirmExact)))
+	mux.Handle("POST /admin/reconcile/matches/{id}/undo", s.requireReconcile(http.HandlerFunc(s.postReconcileUndo)))
 
 	return s.securityHeaders(s.recoverPanic(mux))
 }

@@ -190,3 +190,31 @@ func TestNoAccountMenuSignedOut(t *testing.T) {
 		t.Error("account menu rendered on the sign-in page")
 	}
 }
+
+// htmx must not inject its indicator <style>: the CSP blocks it and logged an
+// error on every page.
+func TestHtmxIndicatorStylesDisabled(t *testing.T) {
+	h := newHarness(t)
+	for _, path := range []string{"/setup"} {
+		_, body := h.get(path)
+		if !strings.Contains(body, `<meta name="htmx-config" content='{"includeIndicatorStyles":false}'>`) {
+			t.Errorf("%s lacks the htmx-config meta", path)
+		}
+	}
+	h.completeSetup()
+	if _, body := h.get("/"); !strings.Contains(body, `"includeIndicatorStyles":false`) {
+		t.Error("signed-in pages lack the htmx-config meta")
+	}
+}
+
+// A fieldset must be able to shrink to a phone's width (min-content default).
+func TestFieldsetCanShrink(t *testing.T) {
+	css, err := staticFS.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?s)\nfieldset \{[^}]*\}`).Find(css)
+	if m == nil || !strings.Contains(string(m), "min-width: 0;") {
+		t.Errorf("fieldset rule lacks min-width: 0: %s", m)
+	}
+}

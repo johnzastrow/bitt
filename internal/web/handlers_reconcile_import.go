@@ -75,8 +75,16 @@ func (s *Server) getReconcile(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	s.render(w, r, http.StatusOK, views.Reconcile(s.page(w, r, "Reconciliation"), views.ReconcileData{
+	matches, err := s.store.ListBankMatches(ctx, store.BankMatchFilter{Limit: 20})
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	p := s.page(w, r, "Reconciliation")
+	p.Wide = true // worked mostly on a desktop: room for both sides of a match
+	s.render(w, r, http.StatusOK, views.Reconcile(p, views.ReconcileData{
 		Imports: imports, Formats: formats, Settings: set, Rules: rules, Suggestions: sugg,
+		Matches: matches,
 	}))
 }
 

@@ -25,6 +25,8 @@ type Page struct {
 	// Can reconcile and the instance switch is on. Display only; every
 	// reconciliation route checks both again.
 	ShowReconcile bool
+	// Wide lets a page use more of a desktop screen. Phones are unaffected.
+	Wide bool
 }
 
 // asset builds a cache-busting URL for an embedded asset. Every reference to
@@ -60,6 +62,11 @@ templ Layout(p Page) {
 			<meta name="apple-mobile-web-app-capable" content="yes"/>
 			<meta name="apple-mobile-web-app-title" content="BitTabby"/>
 			<meta name="bittabby-asset-version" content={ p.AssetVersion }/>
+			<!-- htmx injects a <style> for its loading indicators unless told not
+			     to. The Content Security Policy (style-src 'self') rightly blocks
+			     it, which logged an error on every page; nothing here uses
+			     htmx-indicator, so the styles are simply not wanted. -->
+			<meta name="htmx-config" content='{"includeIndicatorStyles":false}'/>
 			<script src={ p.asset("htmx.min.js") } defer></script>
 			<script src={ p.asset("counter.js") } defer></script>
 			<script src={ p.asset("sw-register.js") } defer></script>
@@ -78,7 +85,7 @@ templ Layout(p Page) {
 					@AccountMenu(p)
 				</header>
 			}
-			<main class="wrap">
+			<main class={ "wrap", templ.KV("wide", p.Wide) }>
 				if p.Error != "" {
 					<div class="banner banner-error" role="alert">{ p.Error }</div>
 				}

@@ -68,6 +68,28 @@ instance switch that is off by default.
   ignores matching lines still open. Lines below the minimum line amount (the
   monthly dividends) are not offered and are counted rather than listed.
 - Migration 0015: `reconcile_settings`, `bank_ignore_rules`.
+- **Confirming a match posts the difference (RECON-04).** Bank more than
+  recorded: a `payment` of the extra (method transfer, dated the bank date,
+  memo naming the line and file). Bank less: a debit `adjustment`. Equal:
+  nothing; the match is recorded. The recorded payment is never touched, and
+  dates are only flagged: further apart than the setting, or on either side of
+  one of the tab's due dates. The match row, its delta (key
+  `recon:<match id>`) and the line's state are written in one transaction, and
+  `active_line_id` / `active_entry_seq` (each UNIQUE, NULL once undone) make a
+  second active match of a line or a payment a constraint violation, tested
+  under concurrent confirms on SQLite and MariaDB. A hand-picked pair from a tie
+  is re-checked against the window and tolerance. "Confirm all exact matches"
+  confirms every equal-amount suggestion. **Undo** reverses the delta with a
+  normal reversal, marks the match undone (kept in the history) and reopens the
+  line, again in one transaction.
+- **"Include the bank note in the entry"**, off by default, offered only when
+  the line has a note and an entry will be posted.
+- Entries posted by reconciliation, and payments with a standing match, cannot
+  be undone from the tab page (the ledger refuses with `ErrReconciled`); they
+  are undone by undoing the match, so the match and the money cannot disagree.
+- The Reconciliation page uses more of a desktop screen, showing the bank and
+  recorded sides of a match next to each other; a phone is unaffected.
+- Migration 0016: `bank_matches`.
 - Migration 0014: `bank_formats`, `bank_imports`, `bank_lines`. Kept forever;
   nothing in them references or changes the ledger.
 
@@ -82,6 +104,13 @@ instance switch that is off by default.
   unbounded upload. The limit now goes on first; a test streams 64 MB and
   checks the server stops near the limit. The bank upload is built the same
   way.
+- **UI sweep at 360 px and 1280 px, every screen.** Pre-existing issues it
+  found, now fixed: htmx injected an indicator `<style>` that the Content
+  Security Policy blocked, logging an error on every page (disabled through
+  `htmx-config`; nothing used it); the new-tab form was 2 px wider than a phone
+  (a fieldset's default `min-width: min-content`); the People accounts table hid
+  its controls behind a sideways scroll on a phone (now one card per account);
+  pills could wrap mid-label.
 - **A flash message survives a redirect to a page anchor.** `redirectWith`
   appended `?ok=...` after a `#fragment`, putting the message where the server
   never sees it. The query now goes before the fragment.

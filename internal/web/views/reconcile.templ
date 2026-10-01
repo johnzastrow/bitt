@@ -18,6 +18,7 @@ type ReconcileData struct {
 	Settings    store.ReconcileSettings
 	Rules       []store.IgnoreRule
 	Suggestions Suggestions
+	Matches     []store.BankMatch
 }
 
 // Suggestions is a matching run joined back to its rows (RECON-03).
@@ -60,7 +61,8 @@ templ Reconcile(p Page, d ReconcileData) {
 				<button class="primary" type="submit">Upload</button>
 			</form>
 		</section>
-		@suggestionsSection(d.Suggestions, d.Settings)
+		@suggestionsSection(p, d.Suggestions, d.Settings)
+		@matchesSection(p, d.Matches)
 		<section class="card">
 			<h2>Recent imports</h2>
 			if len(d.Imports) == 0 {
@@ -340,17 +342,26 @@ templ ReconcileImport(p Page, imp store.BankImport, lines []store.BankLine) {
 
 // suggestionsSection is the open work: proposed matches, ties, and lines with
 // no candidate. Read-only until RECON-04 adds Confirm.
-templ suggestionsSection(sg Suggestions, set store.ReconcileSettings) {
+templ suggestionsSection(p Page, sg Suggestions, set store.ReconcileSettings) {
 	<section class="card">
 		<h2>Suggested matches</h2>
 		if len(sg.Matches) == 0 && len(sg.Ties) == 0 {
 			<p class="muted">No suggestions. Import a statement, or widen the setup below.</p>
 		}
+		if n := exactCount(sg.Matches); n > 0 {
+			<form method="post" action="/admin/reconcile/confirm-exact" class="confirmall">
+				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+				<button class="primary" type="submit">Confirm all { strconv.Itoa(n) } exact matches</button>
+				<span class="muted small">Same amount, so nothing is posted; each is only recorded.</span>
+			</form>
+		}
 		<ul class="banklines">
 			for _, m := range sg.Matches {
 				<li class="bankline matchcard">
-					@bankSide(m.Line)
-					@paymentSide(m.Payment)
+					<div class="matchsides">
+						@bankSide(m.Line)
+						@paymentSide(m.Payment)
+					</div>
 					<p class="small matchwhy">
 						if m.Suggestion.Exact {
 							Same amount.
@@ -368,6 +379,7 @@ templ suggestionsSection(sg Suggestions, set store.ReconcileSettings) {
 						<p class="small flag">Dates differ by more than { strconv.Itoa(set.DateFlagDays) } days; confirming will flag it.</p>
 					}
 					<p class="small"><strong>Confirming will post:</strong> { deltaText(m.Line.Amount, m.Payment.Amount) }</p>
+					@confirmForm(p, m.Line, m.Payment, "Confirm")
 				</li>
 			}
 		</ul>
@@ -376,10 +388,16 @@ templ suggestionsSection(sg Suggestions, set store.ReconcileSettings) {
 				<h3>{ tieTitle(len(t.Lines), len(t.Payments)) }</h3>
 				<p class="muted small">These scored the same, so none is suggested. Pick by hand.</p>
 				for _, l := range t.Lines {
-					@bankSide(l)
-				}
-				for _, p := range t.Payments {
-					@paymentSide(p)
+					for _, pay := range t.Payments {
+						<div class="tiepair">
+							<div class="matchsides">
+								@bankSide(l)
+								@paymentSide(pay)
+							</div>
+							<p class="small"><strong>Confirming will post:</strong> { deltaText(l.Amount, pay.Amount) }</p>
+							@confirmForm(p, l, pay, "Confirm this pair")
+						</div>
+					}
 				}
 			</div>
 		}
@@ -565,4 +583,90 @@ templ setupSection(p Page, d ReconcileData) {
 
 func ruleDeleteURL(id int64) templ.SafeURL {
 	return templ.SafeURL("/admin/reconcile/rules/" + strconv.FormatInt(id, 10) + "/delete")
+}
+
+func exactCount(ms []SuggestedMatch) int {
+	n := 0
+	for _, m := range ms {
+		if m.Suggestion.Exact {
+			n++
+		}
+	}
+	return n
+}
+
+// confirmForm confirms one pair. The bank-note checkbox appears only when the
+// line has a note and confirming would post an entry for it to go into; it is
+// off by default, since a memo is permanent and seen by everyone on the tab.
+templ confirmForm(p Page, l store.OpenBankLine, pay store.PaymentCandidate, label string) {
+	<form method="post" action="/admin/reconcile/confirm" class="confirmform">
+		<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+		<input type="hidden" name="line_id" value={ strconv.FormatInt(l.ID, 10) }/>
+		<input type="hidden" name="entry_seq" value={ strconv.FormatInt(pay.Seq, 10) }/>
+		if l.Note != "" && l.Amount != pay.Amount {
+			<label class="checkrow small">
+				<input type="checkbox" name="include_note" value="1"/>
+				Include the bank note in the entry (everyone on the tab will see it)
+			</label>
+		}
+		<button class="primary" type="submit">{ label }</button>
+	</form>
+}
+
+// matchesSection lists recent matches, undone ones included, with Undo on
+// those that stand.
+templ matchesSection(p Page, ms []store.BankMatch) {
+	if len(ms) > 0 {
+		<section class="card">
+			<h2>Recent matches</h2>
+			<ul class="banklines">
+				for _, m := range ms {
+					<li class={ "bankline", templ.KV("undone", !m.Active()) }>
+						<div class="bankline-head">
+							<a href={ tabURL(m.TabID) }>{ m.TabName }</a>
+							<span class="nowrap">{ bankDate(m.BankDate) }</span>
+							<span class="amount">{ m.BankAmount.Display() }</span>
+							if !m.Active() {
+								<span class="pill">undone</span>
+							}
+							if m.DateFlagged {
+								<span class="pill pill-fault">date flagged</span>
+							}
+						</div>
+						<p class="small">
+							Recorded { m.RecordedAmount.Display() } on { bankDate(m.RecordedDate) }.
+							{ matchDeltaText(m) }
+						</p>
+						if m.DateFlagged {
+							<p class="small flag">{ m.DateFlagReason }.</p>
+						}
+						<p class="muted small">
+							Row { strconv.Itoa(m.Row) } of { m.FileName } &middot; confirmed by { m.ConfirmedByName }
+							{ m.ConfirmedAt.Format("Jan 2, 2006 15:04") } UTC
+						</p>
+						if m.Active() {
+							<form method="post" action={ undoURL(m.ID) } class="inline">
+								<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+								<button class="link" type="submit">Undo this match</button>
+							</form>
+						}
+					</li>
+				}
+			</ul>
+		</section>
+	}
+}
+
+func undoURL(id int64) templ.SafeURL {
+	return templ.SafeURL("/admin/reconcile/matches/" + strconv.FormatInt(id, 10) + "/undo")
+}
+
+func matchDeltaText(m store.BankMatch) string {
+	switch m.DeltaKind {
+	case store.KindPayment:
+		return "Posted a payment of " + m.DeltaAmount.Display() + "."
+	case store.KindAdjustment:
+		return "Posted a debit adjustment of " + (-m.DeltaAmount).Display() + "."
+	}
+	return "Nothing posted."
 }

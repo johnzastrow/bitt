@@ -52,7 +52,7 @@ templ AdminUsers(p Page, users []AdminUser, reconcileOn bool) {
 		<section class="card">
 			<h2>Accounts</h2>
 			<div class="tablescroll">
-				<table class="entries">
+				<table class="entries accounts">
 					<thead>
 						<tr>
 							<th>Name</th>
@@ -65,7 +65,7 @@ templ AdminUsers(p Page, users []AdminUser, reconcileOn bool) {
 					<tbody>
 						for _, row := range users {
 							<tr class={ userRowClass(row) }>
-								<td>
+								<td data-label="Name">
 									<span class="person">
 										@Avatar(row.User.ID, row.User.DisplayName, row.User.AvatarUpdatedAt, 28)
 										<span>
@@ -76,8 +76,8 @@ templ AdminUsers(p Page, users []AdminUser, reconcileOn bool) {
 										</span>
 									</span>
 								</td>
-								<td class="muted">{ row.User.Email }</td>
-								<td>
+								<td data-label="Email" class="muted">{ row.User.Email }</td>
+								<td data-label="Role">
 									if row.User.IsAdmin {
 										<span class="pill pill-provider">admin</span>
 									}
@@ -88,7 +88,7 @@ templ AdminUsers(p Page, users []AdminUser, reconcileOn bool) {
 										@reconcileControl(p, row.User)
 									}
 								</td>
-								<td>
+								<td data-label="Notifications">
 									<form method="post" action={ userNotifyAction(row.User.ID) } class="notifyform">
 										<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
 										<input

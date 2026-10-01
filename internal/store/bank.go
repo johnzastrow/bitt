@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -125,9 +126,95 @@ type BankStore interface {
 	// ListOpenBankLines returns every line still open, with its layout, for
 	// suggestions.
 	ListOpenBankLines(ctx context.Context) ([]OpenBankLine, error)
+	// GetBankLine reads one line, in any state, with its layout and file.
+	GetBankLine(ctx context.Context, id int64) (OpenBankLine, error)
 	// ListPaymentCandidates returns every unreversed payment entry, on any
 	// tab, effective in [from, to), with its tab's name and participants.
 	ListPaymentCandidates(ctx context.Context, from, to time.Time) ([]PaymentCandidate, error)
+
+	// ConfirmBankMatch records a match and posts its delta entry, if any, in
+	// one transaction (RECON-04). Callers go through the ledger, which builds
+	// the delta; the delta's idempotency key is set here, from the new match's
+	// id. The line must be open and the payment an unreversed, unmatched,
+	// non-reconciliation payment on m.TabID.
+	//
+	// Confirming the same pair again returns the standing match with
+	// replayed=true and posts nothing. ErrLineNotOpen and ErrPaymentMatched
+	// report the line or payment taken by something else.
+	ConfirmBankMatch(ctx context.Context, m NewBankMatch, delta *NewEntry) (BankMatch, bool, error)
+	// UndoBankMatch marks a standing match undone, posts the reversal of its
+	// delta (built by the ledger; nil when there was none), and reopens the
+	// line, in one transaction. ErrMatchUndone when it was already undone.
+	UndoBankMatch(ctx context.Context, matchID, by int64, reversal *NewEntry) error
+	GetBankMatch(ctx context.Context, id int64) (BankMatch, error)
+	// EntryHasActiveMatch reports whether a payment has a standing match.
+	EntryHasActiveMatch(ctx context.Context, seq int64) (bool, error)
+	// ListBankMatches returns matches newest first, undone ones included,
+	// filtered by tab or import when the id is non-zero.
+	ListBankMatches(ctx context.Context, f BankMatchFilter) ([]BankMatch, error)
+}
+
+// Reconciliation errors.
+var (
+	ErrLineNotOpen    = errors.New("store: the bank line is not open")
+	ErrPaymentMatched = errors.New("store: the payment is already matched")
+	ErrNotAPayment    = errors.New("store: the entry is not an open payment on that tab")
+	ErrMatchUndone    = errors.New("store: the match is already undone")
+)
+
+// ReconKeyPrefix starts the idempotency key of every entry reconciliation
+// posts. Such entries are not offered for matching and are undone from the
+// Reconciliation screen, not the tab.
+const ReconKeyPrefix = "recon"
+
+// IsReconciliation reports whether an entry was posted by reconciliation.
+func IsReconciliation(e Entry) bool { return strings.HasPrefix(e.IdempotencyKey, ReconKeyPrefix+":") }
+
+// NewBankMatch is what confirming records.
+type NewBankMatch struct {
+	LineID         int64
+	EntrySeq       int64
+	TabID          int64
+	BankDate       string // YYYY-MM-DD
+	BankAmount     money.Cents
+	RecordedDate   string // YYYY-MM-DD, in the instance timezone
+	RecordedAmount money.Cents
+	DateFlagged    bool
+	DateFlagReason string
+	NoteInMemo     bool
+	ConfirmedBy    int64
+}
+
+// BankMatch is a confirmed match with what it points at.
+type BankMatch struct {
+	NewBankMatch
+	ID            int64
+	ImportID      int64
+	DeltaEntrySeq *int64
+	ConfirmedAt   time.Time
+	UndoneAt      *time.Time
+	UndoneBy      int64
+
+	// Joined for display.
+	ConfirmedByName string
+	TabName         string
+	FileName        string
+	Row             int
+	Raw             string
+	Description     string
+	Note            string
+	DeltaAmount     money.Cents // signed as posted; 0 when none
+	DeltaKind       EntryKind
+}
+
+// Active reports whether the match stands.
+func (m BankMatch) Active() bool { return m.UndoneAt == nil }
+
+// BankMatchFilter narrows ListBankMatches.
+type BankMatchFilter struct {
+	TabID    int64
+	ImportID int64
+	Limit    int
 }
 
 // ReconcileSettings is the stored setup with who changed it last.

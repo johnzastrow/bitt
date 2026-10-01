@@ -345,7 +345,12 @@ own.
    case); transfer 10, other 5, cash 0. A tie is the connected group of
    unused pairs sharing the top score. Adding an ignore rule also ignores
    matching lines still open; removing one reopens nothing.
-4. RECON-04: confirm, delta posting, undo.
+4. RECON-04: confirm, delta posting, undo. **Built 2026-10-01** (migration
+   0016; unreleased). Also: a hand-picked pair is re-checked against the
+   window and tolerance; reconciliation's entries, and matched payments, are
+   undone only from Reconciliation (the ledger refuses a tab-page undo); the
+   delta is dated noon on the bank date in the instance timezone; a due-date
+   straddle means one date on or before a due date and the other after it.
 5. RECON-05: record and ignore.
 6. Screens and an end-to-end walk on a phone width; a release.
 

@@ -39,17 +39,25 @@ var (
 	// Reported rather than wrapped silently, since a wrapped total is a wrong
 	// amount posted to a ledger that cannot be edited afterward.
 	ErrOverflow = errors.New("ledger: item total overflows")
+	// ErrReconciled is returned when asked to reverse an entry that bank
+	// reconciliation owns: one it posted, or a payment with a standing match.
+	// Those are undone by undoing the match.
+	ErrReconciled = errors.New("ledger: undo this from Reconciliation")
 )
 
 // Service posts entries and derives balances.
 type Service struct {
 	store store.EntryStore
-	now   func() time.Time
+	// matches is the store's bank-match half, when it has one (RECON-04).
+	matches matchStore
+	now     func() time.Time
 }
 
 // New builds a ledger over the given store.
 func New(s store.EntryStore) *Service {
-	return &Service{store: s, now: func() time.Time { return time.Now().UTC() }}
+	svc := &Service{store: s, now: func() time.Time { return time.Now().UTC() }}
+	svc.matches, _ = s.(matchStore)
+	return svc
 }
 
 // WithClock overrides the time source. Tests use it; production does not.
@@ -154,6 +162,18 @@ func (s *Service) Reverse(ctx context.Context, seq int64, actorUserID int64, mem
 	if original.Kind == store.KindReversal {
 		return store.Entry{}, false, ErrNotReversible
 	}
+	if store.IsReconciliation(original) {
+		return store.Entry{}, false, ErrReconciled
+	}
+	if s.matches != nil {
+		matched, err := s.matches.EntryHasActiveMatch(ctx, seq)
+		if err != nil {
+			return store.Entry{}, false, err
+		}
+		if matched {
+			return store.Entry{}, false, ErrReconciled
+		}
+	}
 	if memo == "" {
 		memo = fmt.Sprintf("Reversal of entry %d", seq)
 	}
@@ -229,7 +249,9 @@ func ReversedSeqs(entries []store.Entry) map[int64]bool {
 }
 
 // CanUndo reports whether an entry is eligible to be undone: it must not be a
-// reversal, and must not already have been reversed.
+// reversal, must not already have been reversed, and must not have been posted
+// by bank reconciliation -- those are undone by undoing their match, so the
+// match and the money cannot disagree.
 func CanUndo(e store.Entry, reversed map[int64]bool) bool {
-	return e.Kind != store.KindReversal && !reversed[e.Seq]
+	return e.Kind != store.KindReversal && !reversed[e.Seq] && !store.IsReconciliation(e)
 }

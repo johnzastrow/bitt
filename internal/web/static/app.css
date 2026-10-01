@@ -234,6 +234,10 @@ fieldset {
   border-radius: var(--radius);
   padding: var(--s4);
   margin: 0;
+  /* Browsers give a fieldset min-width: min-content, so it cannot shrink
+     below its widest field and pushed the new-tab form 2 px past a 360 px
+     screen. */
+  min-width: 0;
 }
 
 legend { font-weight: 600; padding: 0 var(--s2); }
@@ -291,6 +295,8 @@ tfoot td { font-weight: 650; border-bottom: none; }
 
 .pill {
   display: inline-block;
+  /* A pill is a short label; wrapping it ("Can / Reconcile") reads as two. */
+  white-space: nowrap;
   font-size: var(--t-sm);
   padding: 0 var(--s2);
   border-radius: 999px;
@@ -1085,3 +1091,43 @@ tr.reversal td { color: var(--fg-muted); }
 .tie h3 { margin-top: 0; }
 .tie .matchside + .matchside { margin-top: var(--s2); padding-top: var(--s2); border-top: 1px dashed var(--border); }
 details.card > summary { cursor: pointer; font-weight: 600; }
+
+/* People's accounts table becomes one card per account on a phone, so every
+   control -- notifications, reconcile, deactivate -- is in view rather than
+   off to the right of a sideways scroll. Wider screens keep the table. */
+@media (max-width: 39.99rem) {
+  table.accounts, table.accounts tbody, table.accounts tr, table.accounts td { display: block; width: 100%; }
+  table.accounts thead { display: none; }
+  table.accounts tr { padding: var(--s3) 0; border-bottom: 1px solid var(--border); }
+  table.accounts tr:last-child { border-bottom: none; }
+  table.accounts td { border: none; padding: var(--s1) 0; text-align: left; }
+  table.accounts td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    font-size: var(--t-sm);
+    color: var(--fg-muted);
+    font-weight: 600;
+  }
+  table.accounts td[data-label="Name"]::before { display: none; }
+  table.accounts td:empty, table.accounts td[data-label="Role"]:not(:has(*)) { display: none; }
+}
+
+/* Confirming (RECON-04). */
+.confirmall { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin-bottom: var(--s3); }
+.confirmform { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); margin-top: var(--s2); }
+.tiepair + .tiepair { margin-top: var(--s3); padding-top: var(--s3); border-top: 1px solid var(--border); }
+.bankline.undone { opacity: 0.7; }
+.matchsides .matchside + .matchside { margin-top: var(--s2); padding-top: var(--s2); border-top: 1px dashed var(--border); }
+
+/* A page that is worked on a desktop (Reconciliation) uses more of it, and
+   shows the bank side beside the recorded side. A phone is unaffected. */
+@media (min-width: 64rem) {
+  .wrap.wide { max-width: 72rem; }
+  .wide .matchsides { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s4); }
+  .wide .matchsides .matchside + .matchside {
+    margin-top: 0; padding-top: 0; border-top: none;
+    padding-left: var(--s4); border-left: 1px dashed var(--border);
+  }
+}
+/* Form fields do not need the wide page's full width. */
+.wide #setup form.stack { max-width: 36rem; }

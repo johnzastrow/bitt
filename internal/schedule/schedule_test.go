@@ -1004,3 +1004,39 @@ func TestDescribeIntervals(t *testing.T) {
 		}
 	}
 }
+
+func TestDueBetween(t *testing.T) {
+	// Monthly on the 5th, billed in advance: due on the 5th of each month.
+	s := Schedule{Kind: MonthlyDay, Anchor: d(2026, time.January, 5)}
+	cases := []struct {
+		a, b Date
+		want Date
+		ok   bool
+	}{
+		{d(2026, time.September, 5), d(2026, time.September, 6), d(2026, time.September, 5), true}, // on time vs a day late
+		{d(2026, time.September, 6), d(2026, time.September, 5), d(2026, time.September, 5), true}, // either order
+		{d(2026, time.September, 3), d(2026, time.September, 6), d(2026, time.September, 5), true},
+		{d(2026, time.September, 3), d(2026, time.September, 5), Date{}, false},                // both on time
+		{d(2026, time.September, 6), d(2026, time.September, 9), Date{}, false},                // both late
+		{d(2026, time.September, 5), d(2026, time.September, 5), Date{}, false},                // same day
+		{d(2025, time.December, 1), d(2025, time.December, 30), Date{}, false},                 // before the anchor
+		{d(2026, time.August, 30), d(2026, time.October, 2), d(2026, time.September, 5), true}, // the first one found
+	}
+	for _, c := range cases {
+		got, ok := s.DueBetween(c.a, c.b)
+		if ok != c.ok || got != c.want {
+			t.Errorf("DueBetween(%s, %s) = %s %v, want %s %v", c.a, c.b, got, ok, c.want, c.ok)
+		}
+	}
+	if _, ok := (Schedule{}).DueBetween(d(2026, time.January, 1), d(2026, time.December, 1)); ok {
+		t.Error("an unset schedule has a due date")
+	}
+	// In arrears: due at the period end.
+	arrears := Schedule{Kind: MonthlyDay, Anchor: d(2026, time.January, 5), Billing: InArrears}
+	if got, ok := arrears.DueBetween(d(2026, time.January, 5), d(2026, time.January, 10)); ok {
+		t.Errorf("arrears: first due is Feb 5, got %s", got)
+	}
+	if got, ok := arrears.DueBetween(d(2026, time.February, 4), d(2026, time.February, 6)); !ok || got != d(2026, time.February, 5) {
+		t.Errorf("arrears Feb 5: %s %v", got, ok)
+	}
+}

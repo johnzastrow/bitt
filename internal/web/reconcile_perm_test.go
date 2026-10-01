@@ -372,13 +372,14 @@ func TestCanReconcileDoesNotGrantTransact(t *testing.T) {
 	}
 }
 
-// The accounts table is wider than a phone; it must scroll inside its own
-// container, not widen the page (it measured 614 px at a 360 px viewport).
+// The accounts table is wider than a phone. On a phone it stacks into one card
+// per account (table.accounts); on wider screens it scrolls inside its own
+// container rather than widening the page (it measured 614 px at 360 px).
 func TestAccountsTableScrollsInItsCard(t *testing.T) {
 	h := newHarness(t)
 	h.completeSetup()
 	_, body := h.get("/admin/users")
-	if !regexp.MustCompile(`<div class="tablescroll">\s*<table class="entries">`).MatchString(body) {
+	if !regexp.MustCompile(`<div class="tablescroll">\s*<table class="entries accounts">`).MatchString(body) {
 		t.Error("the accounts table is not inside a .tablescroll container")
 	}
 }

@@ -53,18 +53,6 @@ func (h *harness) setReconcile(id int64, on bool) (*http.Response, string) {
 	})
 }
 
-func (h *harness) setSwitch(on bool) (*http.Response, string) {
-	h.t.Helper()
-	v := "false"
-	if on {
-		v = "true"
-	}
-	return h.post("/admin/reconcile-switch", url.Values{
-		"csrf_token": {h.csrfToken("/admin/users")},
-		"enabled":    {v},
-	})
-}
-
 func (h *harness) holds(id int64) bool {
 	h.t.Helper()
 	u, err := h.db.GetUser(h.t.Context(), id)
@@ -72,75 +60,6 @@ func (h *harness) holds(id int64) bool {
 		h.t.Fatalf("get user: %v", err)
 	}
 	return u.CanReconcile
-}
-
-func (h *harness) switchOn() bool {
-	h.t.Helper()
-	inst, err := h.db.GetInstance(h.t.Context())
-	if err != nil {
-		h.t.Fatalf("get instance: %v", err)
-	}
-	return inst.ReconcileEnabled
-}
-
-func TestReconcileSwitch(t *testing.T) {
-	h := newHarness(t)
-	h.completeSetup()
-	logs := h.captureLog()
-
-	_, body := h.get("/admin/users")
-	if !strings.Contains(body, "Bank reconciliation") || !strings.Contains(body, "Turn on") {
-		t.Fatalf("People screen lacks the switch: %s", truncate(body))
-	}
-
-	if _, body := h.setSwitch(true); !strings.Contains(body, "Bank reconciliation is on.") {
-		t.Errorf("turning on: %s", truncate(body))
-	}
-	if !h.switchOn() {
-		t.Fatal("switch did not turn on")
-	}
-	// Again: a no-op save must still succeed (the MariaDB no-op class).
-	if resp, _ := h.setSwitch(true); resp.StatusCode != http.StatusOK || !h.switchOn() {
-		t.Errorf("repeating on: %d", resp.StatusCode)
-	}
-	if _, body := h.get("/admin/users"); !strings.Contains(body, "Turn off") {
-		t.Error("switch does not show as on")
-	}
-	if _, body := h.setSwitch(false); !strings.Contains(body, "Bank reconciliation is off.") || h.switchOn() {
-		t.Errorf("turning off: %s", truncate(body))
-	}
-	if !strings.Contains(logs.String(), "bank reconciliation switched") ||
-		!strings.Contains(logs.String(), "by_user_id=1") {
-		t.Errorf("switch change not logged with the actor: %s", logs.String())
-	}
-}
-
-func TestReconcileSwitchRefusals(t *testing.T) {
-	h := newHarness(t)
-	h.completeSetup()
-
-	// No or forged CSRF token, or a value that is neither true nor false.
-	for _, form := range []url.Values{
-		{"enabled": {"true"}},
-		{"enabled": {"true"}, "csrf_token": {"forged"}},
-		{"enabled": {"1"}, "csrf_token": {h.csrfToken("/admin/users")}},
-		{"csrf_token": {h.csrfToken("/admin/users")}},
-	} {
-		h.post("/admin/reconcile-switch", form)
-		if h.switchOn() {
-			t.Fatalf("switch turned on by %v", form)
-		}
-	}
-
-	// A non-administrator gets 404 and changes nothing.
-	h.addUser("sam@example.com", "Sam", false)
-	h.loginAs("sam@example.com", "a-long-enough-password")
-	resp, _ := h.post("/admin/reconcile-switch", url.Values{
-		"csrf_token": {h.csrfToken("/")}, "enabled": {"true"},
-	})
-	if resp.StatusCode != http.StatusNotFound || h.switchOn() {
-		t.Errorf("non-admin: status %d, switch %v", resp.StatusCode, h.switchOn())
-	}
 }
 
 func TestGrantAndRemoveCanReconcile(t *testing.T) {
@@ -152,7 +71,7 @@ func TestGrantAndRemoveCanReconcile(t *testing.T) {
 
 	_, body := h.get("/admin/users")
 	// Offered on each administrator's row, not on Sam's.
-	if n := strings.Count(body, "Allow reconciling"); n != 2 {
+	if n := strings.Count(body, ">Allow reconciling</button>"); n != 2 {
 		t.Errorf("%d grant controls, want 2 (one per administrator)", n)
 	}
 	if strings.Contains(body, "/admin/users/"+itoa(sam.ID)+"/reconcile") {
@@ -233,9 +152,8 @@ func TestGrantCanReconcileRefusals(t *testing.T) {
 	}
 }
 
-// The guard on /admin/reconcile, across every combination that matters, and
-// re-evaluated on each request: removing the permission or the switch takes
-// effect on the very next page.
+// The guard on /admin/reconcile, re-evaluated on each request: the permission
+// alone decides, and removing it takes effect on the very next page.
 func TestReconcileRouteGuard(t *testing.T) {
 	h := newHarness(t)
 	h.completeSetup() // Jane, id 1, administrator
@@ -246,43 +164,25 @@ func TestReconcileRouteGuard(t *testing.T) {
 		resp, _ := h.get("/admin/reconcile")
 		return resp.StatusCode
 	}
-
-	// Switch off, no permission: hidden.
-	if got := status(); got != http.StatusNotFound {
-		t.Errorf("switch off, no permission: %d, want 404", got)
-	}
-	// Permission but switch off: still hidden.
-	h.setReconcile(1, true)
-	if got := status(); got != http.StatusNotFound {
-		t.Errorf("switch off, holder: %d, want 404", got)
-	}
-	// Both: allowed.
-	h.setSwitch(true)
-	if got := status(); got != http.StatusOK {
-		t.Errorf("switch on, holder: %d, want 200", got)
-	}
-	// Permission removed: 403 on the next request.
-	h.setReconcile(1, false)
 	if got := status(); got != http.StatusForbidden {
-		t.Errorf("switch on, permission removed: %d, want 403", got)
+		t.Errorf("administrator without permission: %d, want 403", got)
 	}
 	if !strings.Contains(logs.String(), "reconciliation route denied") {
 		t.Error("a denied reconciliation request was not logged")
 	}
-	// Restored, then the switch turned off: 404 again.
 	h.setReconcile(1, true)
-	h.setSwitch(false)
-	if got := status(); got != http.StatusNotFound {
-		t.Errorf("switch turned off: %d, want 404", got)
+	if got := status(); got != http.StatusOK {
+		t.Errorf("holder: %d, want 200", got)
 	}
-
-	// A non-administrator: 404 whatever the switch says.
-	h.setSwitch(true)
+	h.setReconcile(1, false)
+	if got := status(); got != http.StatusForbidden {
+		t.Errorf("permission removed: %d, want 403", got)
+	}
+	// A non-administrator: 404.
 	h.loginAs("sam@example.com", "a-long-enough-password")
 	if got := status(); got != http.StatusNotFound {
-		t.Errorf("non-admin, switch on: %d, want 404", got)
+		t.Errorf("non-admin: %d, want 404", got)
 	}
-
 	// Signed out: sent to sign in, never the page.
 	h.post("/logout", url.Values{"csrf_token": {h.csrfToken("/")}})
 	if _, body := h.get("/admin/reconcile"); strings.Contains(body, "<h1>Reconciliation</h1>") {
@@ -290,7 +190,8 @@ func TestReconcileRouteGuard(t *testing.T) {
 	}
 }
 
-// The menu shows Reconciliation only to a holder with the switch on.
+// The menu shows Reconciliation exactly to holders of the permission: no
+// other setting is involved (owner's decision, 2026-10-01).
 func TestReconcileMenuItem(t *testing.T) {
 	h := newHarness(t)
 	h.completeSetup()
@@ -304,31 +205,31 @@ func TestReconcileMenuItem(t *testing.T) {
 		}
 		return false
 	}
-
-	if hasItem() {
-		t.Error("shown with neither permission nor switch")
-	}
-	h.setSwitch(true)
 	if hasItem() {
 		t.Error("shown to an administrator without the permission")
 	}
-	h.setReconcile(1, true)
+	if _, body := h.setReconcile(1, true); !strings.Contains(body, "Reconciliation is in their account menu") {
+		t.Errorf("grant message: %s", truncate(body))
+	}
 	if !hasItem() {
-		t.Fatal("not shown to a holder with the switch on")
+		t.Fatal("not shown to a holder")
 	}
 	_, body := h.get("/")
 	if got, want := strings.Join(menuItems(t, body), ","),
 		"Profile,People,Notifications,Reconciliation,Log out"; got != want {
 		t.Errorf("menu = %q, want %q", got, want)
 	}
-	// Marked current on its own page.
 	if _, body := h.get("/admin/reconcile"); !strings.Contains(menu(t, body),
 		`href="/admin/reconcile" aria-current="page"`) {
 		t.Error("Reconciliation not marked current on its page")
 	}
-	h.setSwitch(false)
+	h.setReconcile(1, false)
 	if hasItem() {
-		t.Error("still shown after the switch was turned off")
+		t.Error("still shown after the permission was removed")
+	}
+	// The People page has no instance switch any more.
+	if _, body := h.get("/admin/users"); strings.Contains(body, "Turn on") || strings.Contains(body, "reconcile-switch") {
+		t.Error("the People page still offers an instance switch")
 	}
 }
 
@@ -337,7 +238,6 @@ func TestReconcileMenuItem(t *testing.T) {
 func TestCanReconcileDoesNotGrantTransact(t *testing.T) {
 	h := newHarness(t)
 	h.completeSetup()
-	h.setSwitch(true)
 	h.setReconcile(1, true)
 
 	h.addUser("sam@example.com", "Sam Provider", false)

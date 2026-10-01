@@ -19,9 +19,7 @@ type AdminUser struct {
 // AdminUsers is the account management screen (AUTH-04). Deliberately minimal:
 // add a person, deactivate a person. Household instances provision people
 // rarely and do not need role matrices.
-//
-// reconcileOn is the instance's bank reconciliation switch (RECON-01).
-templ AdminUsers(p Page, users []AdminUser, reconcileOn bool) {
+templ AdminUsers(p Page, users []AdminUser) {
 	@Layout(p) {
 		<h1>People</h1>
 		<section class="card">
@@ -48,7 +46,6 @@ templ AdminUsers(p Page, users []AdminUser, reconcileOn bool) {
 				<button class="primary" type="submit">Add person</button>
 			</form>
 		</section>
-		@reconcileSwitch(p, reconcileOn)
 		<section class="card">
 			<h2>Accounts</h2>
 			<div class="tablescroll">
@@ -138,6 +135,11 @@ templ AdminUsers(p Page, users []AdminUser, reconcileOn bool) {
 				here is so that is visible at a glance rather than buried in separate profiles.
 			</p>
 			<p class="muted small">
+				&ldquo;Allow reconciling&rdquo; gives an administrator Bank reconciliation: importing
+				a bank&#39;s CSV export, matching it to recorded payments, and posting any difference
+				to the tab. It appears in their account menu; nobody else sees it.
+			</p>
+			<p class="muted small">
 				Accounts are deactivated rather than deleted, because they are referenced by
 				ledger entries that must stay readable. Deactivating ends their sessions immediately.
 			</p>
@@ -159,30 +161,6 @@ func userRowClass(row AdminUser) string {
 		return "reversed"
 	}
 	return ""
-}
-
-// reconcileSwitch is the instance-wide on/off for bank reconciliation. Off, the
-// feature is hidden from everyone whatever their permission.
-templ reconcileSwitch(p Page, on bool) {
-	<section class="card">
-		<h2>Bank reconciliation</h2>
-		<form method="post" action="/admin/reconcile-switch" class="inlineform">
-			<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
-			if on {
-				<p>On. Administrators allowed to reconcile can import bank statements.</p>
-				<input type="hidden" name="enabled" value="false"/>
-				<button type="submit">Turn off</button>
-			} else {
-				<p>Off. Nobody sees the feature until it is turned on.</p>
-				<input type="hidden" name="enabled" value="true"/>
-				<button type="submit">Turn on</button>
-			}
-		</form>
-		<p class="muted small">
-			Reconciling matches a bank&#39;s CSV export against recorded payments, and can post the
-			difference to a tab. Only administrators given &ldquo;can reconcile&rdquo; below may use it.
-		</p>
-	</section>
 }
 
 // reconcileControl grants or removes Can reconcile on an administrator's row.

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/johnzastrow/bitt/internal/auth"
 	"github.com/johnzastrow/bitt/internal/ledger"
@@ -454,6 +455,12 @@ func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 	// cannot disagree with the figure above it.
 	running := balance
 
+	marks, recon, err := s.tabBankMarks(r, tab.ID)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+
 	rows := make([]views.HistoryRow, 0, len(entries))
 	for _, e := range entries {
 		canUndo := ledger.CanUndo(e, reversed) &&
@@ -466,9 +473,26 @@ func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 			ActorAvatar: actor.AvatarKey,
 			CanUndo:     canUndo,
 			Reversed:    reversed[e.Seq],
+			BankMark:    marks[e.Seq],
+			BankAside:   marks[e.Seq] == asideMark,
 			Balance:     running,
 		})
 		running -= e.Amount
+	}
+
+	// "Show only unreconciled payments" (holders of Can reconcile): standing
+	// payments that reconciliation has not touched. Each row keeps its own
+	// running balance, so the figures still read true when filtered.
+	canFilter := user.MayReconcile()
+	unreconciled := canFilter && r.URL.Query().Get("unreconciled") == "1"
+	if unreconciled {
+		kept := rows[:0]
+		for _, row := range rows {
+			if row.Entry.Kind == store.KindPayment && !row.Reversed && row.BankMark == "" {
+				kept = append(kept, row)
+			}
+		}
+		rows = kept
 	}
 
 	participants, err := s.store.ListParticipants(r.Context(), tab.ID)
@@ -530,6 +554,9 @@ func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 		CanManage:      access.CanManage(),
 		CanTransact:    access.CanTransact(),
 		AsAdmin:        access.Admin,
+		Recon:          recon,
+		CanFilterRecon: canFilter,
+		Unreconciled:   unreconciled,
 		Upcoming:       s.upcoming(tab, acc, itemTotal),
 		// REM-01: what each reminder would actually say, and who would get it.
 		ReminderPreviews: s.reminderPreviews(r.Context(), tab),
@@ -899,4 +926,64 @@ func itemAmounts(items []store.TabItem) []money.Cents {
 
 func tabPath(id int64) string {
 	return "/tabs/" + strconv.FormatInt(id, 10)
+}
+
+// tabBankMarks says, per entry, how bank reconciliation touched it, and builds
+// the tab's reconciliation history when the viewer may see bank text.
+//
+// The marks are for everyone on the tab and carry only the bank date and
+// amount. Descriptions, original rows and notes stay with holders of Can
+// reconcile (spec section 11), so the history is nil for anyone else.
+func (s *Server) tabBankMarks(r *http.Request, tabID int64) (map[int64]string, *views.TabRecon, error) {
+	ctx := r.Context()
+	matches, err := s.store.ListBankMatches(ctx, store.BankMatchFilter{TabID: tabID})
+	if err != nil {
+		return nil, nil, err
+	}
+	recorded, err := s.store.ListRecordedLinesForTab(ctx, tabID)
+	if err != nil {
+		return nil, nil, err
+	}
+	marks := map[int64]string{}
+	for _, m := range matches {
+		if !m.Active() {
+			continue
+		}
+		marks[m.EntrySeq] = "matched to bank: " + bankDay(m.BankDate) + ", " + m.BankAmount.Display()
+		if m.DeltaEntrySeq != nil {
+			marks[*m.DeltaEntrySeq] = "bank reconciliation difference"
+		}
+	}
+	for _, l := range recorded {
+		if l.RecordedEntrySeq != nil {
+			marks[*l.RecordedEntrySeq] = "recorded from bank: " + bankDay(l.PostedOn)
+		}
+	}
+	reviews, err := s.store.ListPaymentReviews(ctx, tabID, 500)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, rv := range reviews {
+		if rv.Active() {
+			marks[rv.EntrySeq] = asideMark
+		}
+	}
+
+	user := userFrom(ctx)
+	if user == nil || !user.MayReconcile() || (len(matches) == 0 && len(recorded) == 0) {
+		return marks, nil, nil
+	}
+	return marks, &views.TabRecon{Matches: matches, Recorded: recorded}, nil
+}
+
+// asideMark is the mark on a payment set aside as not in the bank.
+const asideMark = "not in the bank (set aside)"
+
+// bankDay shows a stored "YYYY-MM-DD" as "Sep 2".
+func bankDay(s string) string {
+	d, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		return s
+	}
+	return d.Format("Jan 2")
 }

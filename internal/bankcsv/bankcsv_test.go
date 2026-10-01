@@ -472,3 +472,9 @@ func TestPreview(t *testing.T) {
 		t.Errorf("mismatched apply = %+v", res)
 	}
 }
+
+func TestOverlongHeaderRefused(t *testing.T) {
+	if _, err := Read([]byte("Date," + strings.Repeat("x", 17<<10) + ",Amount\n9/1/2026,a,5\n")); !errors.Is(err, ErrRefused) {
+		t.Errorf("overlong header: %v", err)
+	}
+}

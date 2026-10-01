@@ -98,6 +98,12 @@ type BankStore interface {
 	// already saved (two people mapping the same new layout at once).
 	CreateBankFormat(ctx context.Context, f BankFormat) (BankFormat, error)
 	ListBankFormats(ctx context.Context) ([]BankFormat, error)
+	// RenameBankFormat changes a saved layout's name. Only the name: the
+	// mapping a past import used is never changed under it.
+	RenameBankFormat(ctx context.Context, id int64, name string) error
+	// CountOpenBankLines counts lines not yet addressed: not matched,
+	// recorded, or set aside.
+	CountOpenBankLines(ctx context.Context) (int, error)
 
 	// SaveBankImport stores an import and its lines in one transaction. A line
 	// whose fingerprint is already stored is skipped and counted in
@@ -165,6 +171,24 @@ type BankStore interface {
 	// an ignored one again. Both record who and when.
 	IgnoreBankLine(ctx context.Context, lineID, by int64, note string) error
 	UnignoreBankLine(ctx context.Context, lineID, by int64) error
+	// SetPaymentNotInBank marks a payment with no bank transaction as set
+	// aside -- cash, another account -- with who, when and a note. The payment
+	// must stand, be unmatched and not already set aside (ErrPaymentMatched).
+	SetPaymentNotInBank(ctx context.Context, seq, by int64, note string) (PaymentReview, error)
+	// UndoPaymentReview puts a set-aside payment back among the unaddressed.
+	UndoPaymentReview(ctx context.Context, reviewID, by int64) error
+	// ListPaymentReviews returns reviews newest first, undone ones included,
+	// for one tab when tabID is non-zero.
+	ListPaymentReviews(ctx context.Context, tabID int64, limit int) ([]PaymentReview, error)
+	// BankCoverage is the first and last date of every imported bank line,
+	// "" when there are none: the period the statements speak for.
+	BankCoverage(ctx context.Context) (string, string, error)
+	// ListUnaddressedPayments returns standing payments effective in [from,
+	// to) with no standing match, review, or recording from a bank line.
+	ListUnaddressedPayments(ctx context.Context, from, to time.Time) ([]PaymentCandidate, error)
+	// ListRecordedLinesForTab returns the lines currently recorded as
+	// payments on a tab.
+	ListRecordedLinesForTab(ctx context.Context, tabID int64) ([]OpenBankLine, error)
 	// ListBankLineEvents returns what was done to a line, oldest first.
 	ListBankLineEvents(ctx context.Context, lineID int64) ([]BankLineEvent, error)
 	GetBankMatch(ctx context.Context, id int64) (BankMatch, error)
@@ -200,6 +224,25 @@ type ReconLink struct {
 	MatchID int64 // for a matched payment or a difference
 	LineID  int64 // for a payment recorded from a line
 }
+
+// PaymentReview is a payment set aside as not in the bank.
+type PaymentReview struct {
+	ID           int64
+	EntrySeq     int64
+	TabID        int64
+	TabName      string
+	Amount       money.Cents
+	EffectiveAt  time.Time
+	Note         string
+	By           int64
+	ByName       string
+	At           time.Time
+	UndoneAt     *time.Time
+	UndoneByName string
+}
+
+// Active reports whether the review stands.
+func (r PaymentReview) Active() bool { return r.UndoneAt == nil }
 
 // BankLineEvent is one thing done to a line, with who and when.
 type BankLineEvent struct {

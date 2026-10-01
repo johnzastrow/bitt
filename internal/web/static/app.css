@@ -1159,3 +1159,114 @@ details.card > summary { cursor: pointer; font-weight: 600; }
   table.history td:nth-child(5)::before { content: "bal. "; color: var(--fg-muted); font-family: var(--font); }
   table.history td:nth-child(6) { grid-area: undo; text-align: right; }
 }
+
+/* A payment matched to, or recorded from, a bank line (RECON-06). */
+.bankmark {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: var(--s2);
+  margin-top: var(--s1);
+  padding: 2px var(--s2) 2px 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--credit) 14%, transparent);
+  color: var(--credit);
+  font-size: var(--t-sm);
+  font-weight: 650;
+  max-width: 100%;
+}
+/* The check is the thing to spot at a glance: a bold mark in a filled circle. */
+.bankmark::before {
+  content: "\2713";
+  display: inline-grid;
+  place-items: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 50%;
+  background: var(--credit);
+  color: var(--surface);
+  font-size: 0.9rem;
+  font-weight: 800;
+  line-height: 1;
+  flex: none;
+}
+
+/* Reconciliation tabs: plain links, one page each, so they need no script. */
+.tabbar {
+  display: flex;
+  gap: var(--s1);
+  border-bottom: 1px solid var(--border);
+  margin: 0 0 var(--s4);
+  overflow-x: auto;
+}
+.tabbar .tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s3) var(--s4);
+  min-height: 2.75rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -1px;
+  white-space: nowrap;
+}
+.tabbar .tab:hover { color: var(--fg); }
+.tabbar .tab[aria-current="page"] { color: var(--fg); font-weight: 650; border-bottom-color: var(--accent); }
+.tabcount {
+  font-size: var(--t-sm);
+  font-weight: 600;
+  padding: 0 var(--s2);
+  border-radius: 999px;
+  background: var(--chalk-sunk);
+  border: 1px solid var(--border);
+}
+.card.summary p { margin: var(--s1) 0; }
+
+/* Collapsible panels (Reconcile tab). The heading is the toggle. */
+details.panel > summary {
+  display: flex; align-items: center; gap: var(--s2);
+  cursor: pointer; list-style: none;
+}
+details.panel > summary::-webkit-details-marker { display: none; }
+details.panel > summary::before {
+  content: ""; width: 0; height: 0; flex: none;
+  border-top: 5px solid transparent; border-bottom: 5px solid transparent;
+  border-left: 6px solid currentColor;
+  transition: transform 0.15s;
+}
+details.panel[open] > summary::before { transform: rotate(90deg); }
+details.panel > summary h2 { margin: 0; font-size: var(--t-lg); }
+details.panel[open] > summary { margin-bottom: var(--s3); }
+
+/* Data grids. A real table on wider screens; on a phone each row stacks into
+   a labelled block, so no column is lost off the right edge. */
+table.grid { width: 100%; border-collapse: collapse; }
+table.grid th, table.grid td { vertical-align: top; text-align: left; }
+table.grid td.right, table.grid th.right { text-align: right; }
+table.grid tr.undone td { opacity: 0.7; }
+table.grid .block { display: block; }
+table.grid .banktext { white-space: pre-line; overflow-wrap: anywhere; }
+table.grid .actions-cell { text-align: right; }
+table.grid .actions-cell .confirmform { justify-content: flex-end; margin-top: 0; }
+table.grid h3 { margin-top: var(--s4); }
+@media (max-width: 39.99rem) {
+  table.grid, table.grid tbody, table.grid tr, table.grid td { display: block; width: 100%; }
+  table.grid thead { display: none; }
+  table.grid tr { padding: var(--s3) 0; border-bottom: 1px solid var(--border); }
+  table.grid td { border: none; padding: var(--s1) 0; text-align: left !important; }
+  table.grid td[data-label]::before {
+    content: attr(data-label); display: block;
+    font-size: var(--t-sm); color: var(--fg-muted); font-weight: 600;
+  }
+  table.grid .actions-cell .confirmform { justify-content: flex-start; }
+}
+.counts { list-style: none; margin: 0; padding: 0; }
+.counts li { margin: var(--s1) 0; }
+.counts strong { font-size: var(--t-lg); }
+.confirmform input[name="note"] { flex: 1 1 10rem; width: auto; min-width: 0; }
+/* A payment set aside as not in the bank: noticeable, but not the green of a
+   bank match. */
+.bankmark.aside { background: var(--chalk-sunk); color: var(--fg-muted); }
+.bankmark.aside::before { content: "\2014"; background: var(--slate-soft); }
+.historyfilter { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin: 0 0 var(--s3); }

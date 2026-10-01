@@ -542,6 +542,12 @@ type HistoryRow struct {
 	ActorID     int64
 	ActorAvatar string
 	CanUndo     bool
+	// BankMark says how bank reconciliation touched the entry, for everyone on
+	// the tab: matched to a bank line (with its date and amount), the
+	// difference a match posted, or recorded from a bank line. Empty otherwise.
+	BankMark string
+	// BankAside marks a payment set aside as not in the bank.
+	BankAside bool
 	// Reversed is whether the entry has been undone. It is not !CanUndo: that
 	// also folds in whether this viewer may undo it, which struck through every
 	// entry a payee did not record themselves.
@@ -617,6 +623,20 @@ type TabDetailData struct {
 	// AsAdmin reports that the viewer is here on the administrator role rather
 	// than as a participant, which the page says out loud.
 	AsAdmin bool
+	// Recon is the tab's bank reconciliation history, set only for a viewer
+	// who may reconcile: it shows bank descriptions, original rows and notes,
+	// which the spec keeps to holders of Can reconcile.
+	Recon *TabRecon
+	// CanFilterRecon offers "Show only unreconciled payments"; Unreconciled
+	// is whether the history is filtered that way now.
+	CanFilterRecon bool
+	Unreconciled   bool
+}
+
+// TabRecon is a tab's reconciliation history.
+type TabRecon struct {
+	Matches  []store.BankMatch
+	Recorded []store.OpenBankLine
 }
 
 // IsProvider reports whether the viewer bills on this tab.
@@ -1032,8 +1052,22 @@ templ TabDetail(p Page, d TabDetailData) {
 				</section>
 				<section class="card">
 					<h2>History</h2>
+					if d.CanFilterRecon {
+						<p class="historyfilter">
+							if d.Unreconciled {
+								<span>Showing only unreconciled payments.</span>
+								<a class="button" href={ templ.SafeURL("/tabs/" + strconv.FormatInt(d.Tab.ID, 10)) }>Show all entries</a>
+							} else {
+								<a class="button" href={ templ.SafeURL("/tabs/" + strconv.FormatInt(d.Tab.ID, 10) + "?unreconciled=1") }>Show only unreconciled payments</a>
+							}
+						</p>
+					}
 					if len(d.Rows) == 0 {
-						<p class="muted">Nothing posted yet.</p>
+						if d.Unreconciled {
+							<p class="muted">Every payment on this tab is reconciled.</p>
+						} else {
+							<p class="muted">Nothing posted yet.</p>
+						}
 					} else {
 						<div class="tablescroll">
 						<table class="entries history">
@@ -1058,6 +1092,9 @@ templ TabDetail(p Page, d TabDetailData) {
 											}
 											if row.Entry.Memo != "" {
 												<span class="memo">{ row.Entry.Memo }</span>
+											}
+											if row.BankMark != "" {
+												<span class={ "bankmark", templ.KV("aside", row.BankAside) }>{ row.BankMark }</span>
 											}
 										</td>
 										<td class="muted">
@@ -1095,6 +1132,9 @@ templ TabDetail(p Page, d TabDetailData) {
 						</p>
 					}
 				</section>
+				if d.Recon != nil {
+					@tabReconSection(d.Recon)
+				}
 			</div>
 		</details>
 		// Setup: how the tab is configured. Collapsed by default so a provider is
@@ -2136,3 +2176,70 @@ templ TabPay(p Page, d TabPayData) {
 
 // tabPathOf mirrors the server's tabPath for use in the view.
 func tabPathOf(id int64) string { return "/tabs/" + strconv.FormatInt(id, 10) }
+
+// reconMatchLine is a match's recorded side and provenance in one line.
+func reconMatchLine(m store.BankMatch) string {
+	return "Recorded " + m.RecordedAmount.Display() + " on " + bankDate(m.RecordedDate) + ". Row " +
+		strconv.Itoa(m.Row) + " of " + m.FileName + ". Confirmed by " + m.ConfirmedByName + ", " +
+		m.ConfirmedAt.Format("Jan 2, 2006 15:04") + " UTC."
+}
+
+// tabReconSection is the tab's bank reconciliation history, for holders of Can
+// reconcile only: which file row matched which payment, with the original row
+// and the bank note, undone matches included.
+templ tabReconSection(r *TabRecon) {
+	<section class="card" id="bank">
+		<h2>Bank reconciliation</h2>
+		<ul class="banklines">
+			for _, m := range r.Matches {
+				<li class={ "bankline", templ.KV("undone", !m.Active()) }>
+					<div class="bankline-head">
+						<span class="pill">matched</span>
+						if !m.Active() {
+							<span class="pill">unmade</span>
+						}
+						if m.DateFlagged {
+							<span class="pill pill-fault">date flagged</span>
+						}
+						<span class="nowrap">bank { bankDate(m.BankDate) }</span>
+						<span class="amount">{ m.BankAmount.Display() }</span>
+					</div>
+					<p class="small">{ reconMatchLine(m) }</p>
+					if !m.Active() {
+						<p class="muted small">Unmade { m.UndoneAt.Format("Jan 2, 2006 15:04") } UTC by { m.UndoneByName }: { m.UndoReason }.</p>
+					}
+					if m.DateFlagged {
+						<p class="small flag">{ m.DateFlagReason }.</p>
+					}
+					if m.Note != "" {
+						<p class="banknote small"><span class="muted">Bank note:</span> { m.Note }</p>
+					}
+					<details class="small">
+						<summary>Original row</summary>
+						<pre class="rawrow">{ m.Raw }</pre>
+					</details>
+					<p class="small"><a href={ templ.SafeURL("/admin/reconcile/lines/" + strconv.FormatInt(m.LineID, 10)) }>Line details and history</a></p>
+				</li>
+			}
+			for _, l := range r.Recorded {
+				<li class="bankline">
+					<div class="bankline-head">
+						<span class="pill">recorded from bank</span>
+						<span class="nowrap">bank { bankDate(l.PostedOn) }</span>
+						<span class="amount">{ l.Amount.Display() }</span>
+					</div>
+					<p class="small">Row { strconv.Itoa(l.Row) } of { l.FileName }.</p>
+					if l.Note != "" {
+						<p class="banknote small"><span class="muted">Bank note:</span> { l.Note }</p>
+					}
+					<details class="small">
+						<summary>Original row</summary>
+						<pre class="rawrow">{ l.Raw }</pre>
+					</details>
+					<p class="small"><a href={ templ.SafeURL("/admin/reconcile/lines/" + strconv.FormatInt(l.ID, 10)) }>Line details and history</a></p>
+				</li>
+			}
+		</ul>
+		<p class="muted small">Shown to administrators who may reconcile. Others on the tab see only the bank date and amount beside each matched payment.</p>
+	</section>
+}

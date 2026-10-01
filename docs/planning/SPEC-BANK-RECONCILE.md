@@ -1,6 +1,8 @@
 # Spec — Reconciling payments against bank statements
 
-**Status:** draft for approval (revised 2026-10-01 with the owner's answers and the reference export)
+**Status:** built and released in 1.8.0 (2026-10-01). Changes made while
+building, at the owner's direction, are recorded in the build order (section
+14) and section 16.
 **Drafted:** 2026-10-01
 **Requested by:** the owner: "upload a CSV of bank transactions and match them to
 payments recorded in BitTabby. The amounts and dates will differ, and the CSV
@@ -239,7 +241,7 @@ too wide on a phone. Instead the avatar and name become the button for a menu:
 |---|---|
 | Profile | everyone (today the avatar itself links here) |
 | People, Notifications | administrators (moved from the top bar) |
-| **Reconciliation** | administrators holding Can reconcile, when the instance switch is on |
+| **Reconciliation** | administrators holding Can reconcile |
 | Log out | everyone (the existing POST form with its CSRF token, moved into the menu) |
 
 Built as a native `<details>`/`<summary>` disclosure: no JavaScript, so nothing
@@ -316,7 +318,7 @@ own.
   and still cannot use the ordinary payment form on a tab they are not on.
 - The avatar menu: a non-admin sees Profile and Log out only; an administrator
   also People and Notifications; Reconciliation only with the permission and the
-  switch on. Log out still requires the CSRF token. Nothing overflows at 360 px.
+  permission. Log out still requires the CSRF token. Nothing overflows at 360 px.
 - Deep tests on both backends, per the working agreement.
 
 ## 14. Build order
@@ -324,7 +326,8 @@ own.
 0. RECON-00: the avatar menu (People, Notifications and Log out move into it);
    its own small release, since every account sees it. **Built in 1.7.0
    (2026-10-01).**
-1. RECON-01: the permission, the instance switch, the People control.
+1. RECON-01: the permission and the People control. (An instance switch was
+   built too, and removed before release: the permission is the only control.)
    **Built 2026-10-01** (migration 0013; unreleased). The administrator role
    cannot be removed in the app today, so "removing the role removes the
    permission" is enforced as a schema CHECK.
@@ -369,3 +372,20 @@ records which file row matched which payment on which tab.
 The **ignore rules** and **minimum line amount** in section 7, added after the
 reference file showed monthly dividends arriving as deposits, were confirmed by
 the owner on 2026-10-01.
+
+## 16. Changes during the build (2026-10-01, owner's direction)
+
+- **No instance switch.** The "Can reconcile" permission on the People screen
+  is the only control.
+- **Manual undo unmakes.** Undoing on its tab a matched payment, a posted
+  difference, or a payment recorded from a line unmakes the match or reopens
+  the line in one transaction, recording who, when and why.
+- **Who and when for everything:** matches (confirmed and unmade), line
+  actions (bank_line_events), and payment reviews.
+- **Tabbed screen:** Reconcile (counts, collapsible grids), Upload, Setup.
+- **Saved layouts are renamable** (name only).
+- **Unaddressed counts** for bank lines and for recorded payments.
+- **Payments with no bank transaction** within the imported statements are
+  counted until matched or set aside as "Not in the bank" (migration 0018).
+- **Tab history:** prominent bank badges, and "Show only unreconciled
+  payments" for holders.

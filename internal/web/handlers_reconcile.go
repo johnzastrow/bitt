@@ -11,25 +11,16 @@ import (
 // requireReconcile guards every bank reconciliation route (RECON-01), checked
 // on each request rather than trusted from the menu:
 //
-//   - not an administrator, or the instance switch off: 404, as for any admin
-//     route, so the feature is not confirmed to exist;
+//   - not an administrator: 404, as for any admin route;
 //   - an administrator without Can reconcile: 403, since they can already see
 //     on the People screen that the feature exists.
 //
-// It fails closed: an error reading the instance is a 500, never a pass.
+// The permission is read from the account loaded for this request, so
+// removing it takes effect on the very next request.
 func (s *Server) requireReconcile(next http.Handler) http.Handler {
 	return s.requireAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := userFrom(r.Context())
-		inst, err := s.store.GetInstance(r.Context())
-		if err != nil {
-			s.serverError(w, r, err)
-			return
-		}
-		if !inst.ReconcileEnabled {
-			http.NotFound(w, r)
-			return
-		}
-		if !user.MayReconcile(inst) {
+		if !user.MayReconcile() {
 			s.log.Warn("reconciliation route denied",
 				"path", r.URL.Path, "user_id", user.ID, "remote", clientIP(r))
 			http.Error(w, "You do not have the Can reconcile permission.", http.StatusForbidden)
@@ -86,44 +77,9 @@ func (s *Server) postAdminUserReconcile(w http.ResponseWriter, r *http.Request) 
 	s.log.Info("reconcile permission changed",
 		"target_user_id", id, "can_reconcile", on, "by_user_id", actor.ID)
 	if on {
-		redirectWith(w, r, "/admin/users", "ok", "They can now reconcile bank statements.")
+		redirectWith(w, r, "/admin/users", "ok",
+			"They can now reconcile bank statements: Reconciliation is in their account menu.")
 		return
 	}
 	redirectWith(w, r, "/admin/users", "ok", "They can no longer reconcile bank statements.")
-}
-
-// postReconcileSwitch turns bank reconciliation on or off for the instance.
-// Any administrator may; it is logged with who did it.
-func (s *Server) postReconcileSwitch(w http.ResponseWriter, r *http.Request) {
-	actor := userFrom(r.Context())
-
-	if err := r.ParseForm(); err != nil {
-		redirectWith(w, r, "/admin/users", "err", "Could not read that form.")
-		return
-	}
-	if !auth.CheckCSRF(r) {
-		redirectWith(w, r, "/admin/users", "err", "Your session expired. Please try again.")
-		return
-	}
-
-	var on bool
-	switch r.PostFormValue("enabled") {
-	case "true":
-		on = true
-	case "false":
-	default:
-		redirectWith(w, r, "/admin/users", "err", "Could not read that form.")
-		return
-	}
-
-	if err := s.store.SetReconcileEnabled(r.Context(), on); err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	s.log.Info("bank reconciliation switched", "enabled", on, "by_user_id", actor.ID)
-	if on {
-		redirectWith(w, r, "/admin/users", "ok", "Bank reconciliation is on.")
-		return
-	}
-	redirectWith(w, r, "/admin/users", "ok", "Bank reconciliation is off.")
 }

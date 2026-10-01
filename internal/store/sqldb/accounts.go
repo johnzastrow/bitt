@@ -27,20 +27,17 @@ func (d *DB) GetInstance(ctx context.Context) (store.Instance, error) {
 		inst      store.Instance
 		completed sql.NullString
 		created   string
-		reconcile int
 	)
 	err := d.db.QueryRowContext(ctx,
 		`SELECT timezone, setup_completed_at, created_at,
-		        smtp_host, smtp_port, smtp_username, email_from, ntfy_url,
-		        reconcile_enabled
+		        smtp_host, smtp_port, smtp_username, email_from, ntfy_url
 		   FROM instance WHERE id = 1`).
 		Scan(&inst.Timezone, &completed, &created,
 			&inst.Delivery.SMTPHost, &inst.Delivery.SMTPPort, &inst.Delivery.SMTPUsername,
-			&inst.Delivery.EmailFrom, &inst.Delivery.NtfyBaseURL, &reconcile)
+			&inst.Delivery.EmailFrom, &inst.Delivery.NtfyBaseURL)
 	if err != nil {
 		return store.Instance{}, translate(err)
 	}
-	inst.ReconcileEnabled = reconcile != 0
 
 	if inst.SetupCompletedAt, err = fromNullText(completed); err != nil {
 		return store.Instance{}, fmt.Errorf("sqlite: parse setup_completed_at: %w", err)
@@ -675,11 +672,4 @@ func (d *DB) SetCanReconcile(ctx context.Context, id int64, on bool) error {
 		return store.ErrNotAdmin
 	}
 	return nil
-}
-
-// SetReconcileEnabled turns bank reconciliation on or off for the instance.
-func (d *DB) SetReconcileEnabled(ctx context.Context, on bool) error {
-	_, err := d.db.ExecContext(ctx,
-		`UPDATE instance SET reconcile_enabled = ? WHERE id = 1`, boolToInt(on))
-	return translate(err)
 }

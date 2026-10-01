@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -48,51 +49,152 @@ func (s *Server) allowReconcileUpload(userID int64) bool {
 	return true
 }
 
+// The Reconciliation screen has three tabs, each its own page so they work
+// without script and can be bookmarked: Reconcile (the actions), Upload, and
+// Setup. Each loads only what it shows.
+const (
+	reconTabReconcile = "reconcile"
+	reconTabUpload    = "upload"
+	reconTabSetup     = "setup"
+)
+
 func (s *Server) getReconcile(w http.ResponseWriter, r *http.Request) {
+	s.renderReconcile(w, r, reconTabReconcile)
+}
+
+func (s *Server) getReconcileUpload(w http.ResponseWriter, r *http.Request) {
+	s.renderReconcile(w, r, reconTabUpload)
+}
+
+func (s *Server) getReconcileSetup(w http.ResponseWriter, r *http.Request) {
+	s.renderReconcile(w, r, reconTabSetup)
+}
+
+func (s *Server) renderReconcile(w http.ResponseWriter, r *http.Request, tab string) {
 	ctx := r.Context()
-	imports, err := s.store.ListBankImports(ctx, 20)
-	if err != nil {
+	d := views.ReconcileData{Tab: tab}
+	var err error
+	if d.Unaddressed, err = s.store.CountOpenBankLines(ctx); err != nil {
 		s.serverError(w, r, err)
 		return
 	}
-	formats, err := s.store.ListBankFormats(ctx)
-	if err != nil {
+	if d.UnaddressedPayments, err = s.unaddressedPayments(ctx); err != nil {
 		s.serverError(w, r, err)
 		return
 	}
-	set, err := s.store.GetReconcileSettings(ctx)
-	if err != nil {
+	if d.Settings, err = s.store.GetReconcileSettings(ctx); err != nil {
 		s.serverError(w, r, err)
 		return
 	}
-	rules, err := s.store.ListIgnoreRules(ctx)
-	if err != nil {
-		s.serverError(w, r, err)
-		return
+	switch tab {
+	case reconTabReconcile:
+		if d.Suggestions, err = s.buildSuggestions(ctx, d.Settings.Settings); err == nil {
+			d.Matches, err = s.store.ListBankMatches(ctx, store.BankMatchFilter{Limit: 20})
+		}
+		if err == nil {
+			d.Reviews, err = s.store.ListPaymentReviews(ctx, 0, 20)
+		}
+		if err == nil {
+			// Payments with no bank transaction: those the statements cover
+			// and no suggestion or tie already shows.
+			d.Suggestions.UnmatchedPayments = s.inCoverage(ctx, d.Suggestions.UnmatchedPayments)
+		}
+	case reconTabUpload:
+		d.Imports, err = s.store.ListBankImports(ctx, 20)
+	case reconTabSetup:
+		if d.Formats, err = s.store.ListBankFormats(ctx); err == nil {
+			d.Rules, err = s.store.ListIgnoreRules(ctx)
+		}
 	}
-	sugg, err := s.buildSuggestions(ctx, set.Settings)
-	if err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	matches, err := s.store.ListBankMatches(ctx, store.BankMatchFilter{Limit: 20})
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
 	p := s.page(w, r, "Reconciliation")
 	p.Wide = true // worked mostly on a desktop: room for both sides of a match
-	s.render(w, r, http.StatusOK, views.Reconcile(p, views.ReconcileData{
-		Imports: imports, Formats: formats, Settings: set, Rules: rules, Suggestions: sugg,
-		Matches: matches,
-	}))
+	s.render(w, r, http.StatusOK, views.Reconcile(p, d))
+}
+
+// coverage is the period the imported statements speak for, as instants in the
+// instance timezone: [first day, the day after the last). ok is false when
+// nothing is imported.
+func (s *Server) coverage(ctx context.Context) (time.Time, time.Time, bool, error) {
+	first, last, err := s.store.BankCoverage(ctx)
+	if err != nil || first == "" {
+		return time.Time{}, time.Time{}, false, err
+	}
+	a, err1 := time.Parse("2006-01-02", first)
+	b, err2 := time.Parse("2006-01-02", last)
+	if err1 != nil || err2 != nil {
+		return time.Time{}, time.Time{}, false, fmt.Errorf("bank coverage %q..%q", first, last)
+	}
+	loc := s.location(ctx)
+	return civil(a, loc), civil(b.AddDate(0, 0, 1), loc), true, nil
+}
+
+// unaddressedPayments counts payments the statements cover with no bank
+// transaction decided: not matched, not recorded from a line, not set aside.
+func (s *Server) unaddressedPayments(ctx context.Context) (int, error) {
+	from, to, ok, err := s.coverage(ctx)
+	if err != nil || !ok {
+		return 0, err
+	}
+	ps, err := s.store.ListUnaddressedPayments(ctx, from, to)
+	return len(ps), err
+}
+
+// inCoverage keeps the payments dated within the statements' period. One
+// dated after the last bank line may simply not have cleared yet.
+func (s *Server) inCoverage(ctx context.Context, ps []store.PaymentCandidate) []store.PaymentCandidate {
+	from, to, ok, err := s.coverage(ctx)
+	if err != nil || !ok {
+		return nil
+	}
+	var out []store.PaymentCandidate
+	for _, p := range ps {
+		if !p.EffectiveAt.Before(from) && p.EffectiveAt.Before(to) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// postRenameFormat renames a saved layout. Only the name changes.
+func (s *Server) postRenameFormat(w http.ResponseWriter, r *http.Request) {
+	user := userFrom(r.Context())
+	const back = "/admin/reconcile/setup"
+	id, ok := pathID(r, "id")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if err := r.ParseForm(); err != nil || !auth.CheckCSRF(r) {
+		redirectWith(w, r, back, "err", "Your session expired. Please try again.")
+		return
+	}
+	name := strings.TrimSpace(r.PostFormValue("name"))
+	if name == "" || len([]rune(name)) > 120 {
+		redirectWith(w, r, back, "err", "Give the layout a name of up to 120 characters.")
+		return
+	}
+	err := s.store.RenameBankFormat(r.Context(), id, name)
+	if errors.Is(err, store.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	s.log.Info("bank layout renamed", "format_id", id, "by_user_id", user.ID)
+	redirectWith(w, r, back, "ok", "Layout renamed.")
 }
 
 // postReconcileUpload takes one CSV. A known layout imports at once; an
 // unknown one is held in memory and the mapping screen opens.
 func (s *Server) postReconcileUpload(w http.ResponseWriter, r *http.Request) {
 	user := userFrom(r.Context())
-	const back = "/admin/reconcile"
+	const back = "/admin/reconcile/upload"
 
 	// The limit goes on before anything reads the body: CheckCSRF parses the
 	// form, and with no limit in place that parse has none either.
@@ -166,7 +268,13 @@ func (s *Server) importWith(w http.ResponseWriter, r *http.Request, format store
 			imp.RefusedDetail += fmt.Sprintf("... and %d more\n", len(res.Refused)-i)
 			break
 		}
-		imp.RefusedDetail += fmt.Sprintf("Row %d %s\n", ref.Row, ref.Reason)
+		// A reason can quote a cell of up to 16 KB; bound each so ten of them
+		// fit a MariaDB TEXT column.
+		reason := ref.Reason
+		if r := []rune(reason); len(r) > 200 {
+			reason = string(r[:197]) + "..."
+		}
+		imp.RefusedDetail += fmt.Sprintf("Row %d %s\n", ref.Row, reason)
 	}
 	lines := bankLinesFrom(format.ID, res.Incoming)
 	rules, err := s.store.ListIgnoreRules(r.Context())
@@ -271,7 +379,7 @@ func cleanFileName(name string) string {
 func (s *Server) pendingFor(w http.ResponseWriter, r *http.Request) (*pendingUpload, bankcsv.File, bool) {
 	up, ok := s.pending.get(r.PathValue("token"), userFrom(r.Context()).ID)
 	if !ok {
-		redirectWith(w, r, "/admin/reconcile", "err",
+		redirectWith(w, r, "/admin/reconcile/upload", "err",
 			"That upload has expired or was already imported. Upload the file again.")
 		return nil, bankcsv.File{}, false
 	}
@@ -320,7 +428,7 @@ func (s *Server) renderMap(w http.ResponseWriter, r *http.Request, status int, u
 func (s *Server) postReconcileMap(w http.ResponseWriter, r *http.Request) {
 	user := userFrom(r.Context())
 	if err := r.ParseForm(); err != nil || !auth.CheckCSRF(r) {
-		redirectWith(w, r, "/admin/reconcile", "err", "Your session expired. Please try again.")
+		redirectWith(w, r, "/admin/reconcile/upload", "err", "Your session expired. Please try again.")
 		return
 	}
 	up, parsed, ok := s.pendingFor(w, r)

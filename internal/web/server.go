@@ -142,15 +142,19 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /admin/users/{id}/notify", s.requireAdmin(http.HandlerFunc(s.postAdminUserNotify)))
 	mux.Handle("POST /admin/users/{id}/active", s.requireAdmin(http.HandlerFunc(s.postAdminUserActive)))
 	mux.Handle("POST /admin/users/{id}/reconcile", s.requireAdmin(http.HandlerFunc(s.postAdminUserReconcile)))
-	mux.Handle("POST /admin/reconcile-switch", s.requireAdmin(http.HandlerFunc(s.postReconcileSwitch)))
 	mux.Handle("GET /admin/notifications", s.requireAdmin(http.HandlerFunc(s.getAdminNotify)))
 	mux.Handle("POST /admin/notifications/delivery", s.requireAdmin(http.HandlerFunc(s.postAdminDelivery)))
 	mux.Handle("POST /admin/notifications/reminders", s.requireAdmin(http.HandlerFunc(s.postAdminReminders)))
 	mux.Handle("POST /admin/notifications/test", s.requireAdmin(http.HandlerFunc(s.postAdminNotifyTest)))
 
 	// Bank reconciliation (SPEC-BANK-RECONCILE). Every route goes through
-	// requireReconcile, which checks the switch and the permission per request.
+	// requireReconcile, which checks the permission per request.
 	mux.Handle("GET /admin/reconcile", s.requireReconcile(http.HandlerFunc(s.getReconcile)))
+	mux.Handle("GET /admin/reconcile/upload", s.requireReconcile(http.HandlerFunc(s.getReconcileUpload)))
+	mux.Handle("GET /admin/reconcile/setup", s.requireReconcile(http.HandlerFunc(s.getReconcileSetup)))
+	mux.Handle("POST /admin/reconcile/formats/{id}/rename", s.requireReconcile(http.HandlerFunc(s.postRenameFormat)))
+	mux.Handle("POST /admin/reconcile/payments/{seq}/not-in-bank", s.requireReconcile(http.HandlerFunc(s.postPaymentNotInBank)))
+	mux.Handle("POST /admin/reconcile/reviews/{id}/undo", s.requireReconcile(http.HandlerFunc(s.postUndoPaymentReview)))
 	mux.Handle("POST /admin/reconcile/upload", s.requireReconcile(http.HandlerFunc(s.postReconcileUpload)))
 	mux.Handle("GET /admin/reconcile/map/{token}", s.requireReconcile(http.HandlerFunc(s.getReconcileMap)))
 	mux.Handle("POST /admin/reconcile/map/{token}", s.requireReconcile(http.HandlerFunc(s.postReconcileMap)))
@@ -322,13 +326,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request, title string) view
 	}
 	if u := userFrom(r.Context()); u != nil {
 		p.User = u
-		// The instance is read only for an account that could see the item,
-		// so nobody else's page pays for the query.
-		if u.IsAdmin && u.CanReconcile {
-			if inst, err := s.store.GetInstance(r.Context()); err == nil {
-				p.ShowReconcile = u.MayReconcile(inst)
-			}
-		}
+		p.ShowReconcile = u.MayReconcile()
 	}
 	if msg := r.URL.Query().Get("err"); msg != "" {
 		p.Error = safeFlash(msg)

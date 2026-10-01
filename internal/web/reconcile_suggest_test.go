@@ -102,16 +102,19 @@ func TestSuggestionsOnTheScreen(t *testing.T) {
 		// $1,200 in the bank against $1,190 recorded: the extra is a payment.
 		"Insurance", "$1,190.00", "$1,200.00", "Differs by $10.00.", "Bank date 1 day earlier",
 		"a payment of $10.00 for the extra the bank received.",
-		// The three $50 lines on 9/5 and the one $50 payment: not guessed.
-		"3 possible bank lines for one payment",
 	} {
 		if !strings.Contains(sugg, want) {
 			t.Errorf("suggestions lack %q", want)
 		}
 	}
 	// Two single suggestions; the tie's pairs are shown separately.
-	if n := strings.Count(sugg, `class="bankline matchcard"`); n != 2 {
+	if n := strings.Count(sugg, `class="matchrow"`); n != 2 {
 		t.Errorf("%d suggestions, want 2", n)
+	}
+	// The three $50 lines on 9/5 and the one $50 payment: not guessed, shown
+	// in their own panel.
+	if !strings.Contains(body, "3 possible bank lines for one payment") {
+		t.Error("the tie is not shown")
 	}
 	// Recorded dates are shown in the instance's timezone: the Garden payment
 	// at 16:00 UTC on 9/20 is still Sep 20 in New York; one at 02:00 UTC on
@@ -128,7 +131,8 @@ func TestSuggestionsOnTheScreen(t *testing.T) {
 	if !strings.Contains(unmatched, "Check Deposit") || !strings.Contains(unmatched, "$75.25") {
 		t.Error("the check deposit is not listed as unmatched")
 	}
-	if !strings.Contains(unmatched, "2 open lines below the $1.00 minimum are not offered.") {
+	if !strings.Contains(unmatched, "2 open lines below the minimum are not offered here.") ||
+		!strings.Contains(body, "below the\n") && !strings.Contains(body, "$1.00 minimum") {
 		t.Errorf("the dividends are not counted as small: %s", unmatched)
 	}
 	if strings.Contains(unmatched, "Dividend") {
@@ -137,7 +141,8 @@ func TestSuggestionsOnTheScreen(t *testing.T) {
 	if !strings.Contains(body, "Sep 21, 2026") || strings.Contains(body, "Sep 22, 2026") {
 		t.Error("an evening payment is shown on its UTC date, not the instance's")
 	}
-	if !strings.Contains(body, "2 recorded payments with no bank line nearby") || !strings.Contains(body, "Garden") {
+	if !strings.Contains(body, `<h2>Recorded payments with no bank transaction</h2><span class="tabcount">2</span>`) ||
+		!strings.Contains(body, "Garden") || !strings.Contains(body, "Not in the bank") {
 		t.Error("the garden cash payment is not listed as unmatched")
 	}
 }
@@ -178,7 +183,7 @@ func TestSetupControlsChangeSuggestions(t *testing.T) {
 	if strings.Contains(section(t, body, "<h2>Suggested matches</h2>"), "Insurance") {
 		t.Error("the cap did not take Insurance out")
 	}
-	if !strings.Contains(body, "Last changed") || !strings.Contains(body, "by Jane Provider") {
+	if _, sb := h.get("/admin/reconcile/setup"); !strings.Contains(sb, "Last changed") || !strings.Contains(sb, "by Jane Provider") {
 		t.Error("who changed the setup is not shown")
 	}
 
@@ -348,10 +353,12 @@ func TestSetupRoutesAreGuarded(t *testing.T) {
 			t.Errorf("POST %s without permission: %d", p, r.StatusCode)
 		}
 	}
-	h.setSwitch(false)
+	// A non-administrator: 404.
+	h.addUser("sam@example.com", "Sam", false)
+	h.loginAs("sam@example.com", "a-long-enough-password")
 	for _, p := range []string{"/admin/reconcile/settings", "/admin/reconcile/rules"} {
 		if r, _ := h.post(p, url.Values{"csrf_token": {h.csrfToken("/")}}); r.StatusCode != http.StatusNotFound {
-			t.Errorf("POST %s with the switch off: %d", p, r.StatusCode)
+			t.Errorf("POST %s as non-admin: %d", p, r.StatusCode)
 		}
 	}
 }

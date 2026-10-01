@@ -106,7 +106,7 @@ func TestConfirmOnTheWeb(t *testing.T) {
 	}
 	// Only the $50 tie is left among the suggestions: no single-pair cards.
 	sugg := section(t, body, "<h2>Suggested matches</h2>")
-	if strings.Contains(sugg, `class="bankline matchcard"`) || strings.Contains(sugg, "Insurance") {
+	if strings.Contains(sugg, `class="matchrow"`) || strings.Contains(sugg, "Insurance") {
 		t.Error("confirmed pairs are still suggested")
 	}
 	// The tab shows the delta as an ordinary entry with its memo.

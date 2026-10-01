@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/johnzastrow/bitt/internal/auth"
@@ -246,4 +247,68 @@ func (s *Server) postReconcileUndo(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log.Info("bank match undone", "match_id", id, "by_user_id", user.ID)
 	redirectWith(w, r, back, "ok", "Match undone. Any difference it posted is reversed, and both sides are unmatched again.")
+}
+
+// postPaymentNotInBank sets a recorded payment aside as not in the bank --
+// cash, another account -- recording who, when and an optional note.
+func (s *Server) postPaymentNotInBank(w http.ResponseWriter, r *http.Request) {
+	user := userFrom(r.Context())
+	const back = "/admin/reconcile"
+	seq, ok := pathID(r, "seq")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if err := r.ParseForm(); err != nil || !auth.CheckCSRF(r) {
+		redirectWith(w, r, back, "err", "Your session expired. Please try again.")
+		return
+	}
+	note := strings.TrimSpace(r.PostFormValue("note"))
+	if len([]rune(note)) > 500 {
+		redirectWith(w, r, back, "err", "Keep the note under 500 characters.")
+		return
+	}
+	rev, err := s.store.SetPaymentNotInBank(r.Context(), seq, user.ID, note)
+	switch {
+	case errors.Is(err, store.ErrNotAPayment):
+		redirectWith(w, r, back, "err", "That is not a payment that stands; nothing changed.")
+		return
+	case errors.Is(err, store.ErrPaymentMatched):
+		redirectWith(w, r, back, "err", "That payment is already matched or set aside.")
+		return
+	case err != nil:
+		s.serverError(w, r, err)
+		return
+	}
+	s.log.Info("payment set aside as not in the bank", "review_id", rev.ID, "entry_seq", seq,
+		"tab_id", rev.TabID, "by_user_id", user.ID)
+	redirectWith(w, r, back, "ok", "Set aside: "+rev.Amount.Display()+" on "+rev.TabName+" is not expected in the bank.")
+}
+
+func (s *Server) postUndoPaymentReview(w http.ResponseWriter, r *http.Request) {
+	user := userFrom(r.Context())
+	const back = "/admin/reconcile"
+	id, ok := pathID(r, "id")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if err := r.ParseForm(); err != nil || !auth.CheckCSRF(r) {
+		redirectWith(w, r, back, "err", "Your session expired. Please try again.")
+		return
+	}
+	err := s.store.UndoPaymentReview(r.Context(), id, user.ID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		http.NotFound(w, r)
+		return
+	case errors.Is(err, store.ErrMatchUndone):
+		redirectWith(w, r, back, "err", "That was already undone.")
+		return
+	case err != nil:
+		s.serverError(w, r, err)
+		return
+	}
+	s.log.Info("payment review undone", "review_id", id, "by_user_id", user.ID)
+	redirectWith(w, r, back, "ok", "The payment is back among those to account for.")
 }

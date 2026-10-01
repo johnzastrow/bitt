@@ -284,3 +284,23 @@ func (d *DB) ListBankLines(ctx context.Context, importID int64) ([]store.BankLin
 	}
 	return out, translate(rows.Err())
 }
+
+// RenameBankFormat changes a saved layout's name.
+func (d *DB) RenameBankFormat(ctx context.Context, id int64, name string) error {
+	res, err := d.db.ExecContext(ctx, `UPDATE bank_formats SET name = ? WHERE id = ?`, name, id)
+	if err != nil {
+		return translate(err)
+	}
+	// clientFoundRows (MariaDB) makes a same-name save count as matched.
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+// CountOpenBankLines counts lines still open.
+func (d *DB) CountOpenBankLines(ctx context.Context) (int, error) {
+	var n int
+	err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM bank_lines WHERE state = 'open'`).Scan(&n)
+	return n, translate(err)
+}

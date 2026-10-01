@@ -176,3 +176,24 @@ func (d *DB) ListBankLineEvents(ctx context.Context, lineID int64) ([]store.Bank
 	}
 	return out, translate(rows.Err())
 }
+
+// ListRecordedLinesForTab returns the lines currently recorded on a tab.
+func (d *DB) ListRecordedLinesForTab(ctx context.Context, tabID int64) ([]store.OpenBankLine, error) {
+	rows, err := d.db.QueryContext(ctx, bankLineSelect+`
+		  JOIN entries re ON re.seq = l.recorded_entry_seq
+		 WHERE l.state = 'recorded' AND re.tab_id = ?
+		 ORDER BY l.posted_on DESC, l.id DESC`, tabID)
+	if err != nil {
+		return nil, translate(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []store.OpenBankLine
+	for rows.Next() {
+		l, err := scanOpenBankLine(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, translate(rows.Err())
+}

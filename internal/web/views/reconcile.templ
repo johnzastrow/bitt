@@ -13,7 +13,17 @@ import (
 
 // ReconcileData is the Reconciliation screen (SPEC-BANK-RECONCILE section 10).
 type ReconcileData struct {
-	Imports     []store.BankImport
+	// Tab is the one being shown: "reconcile", "upload" or "setup".
+	Tab string
+	// Unaddressed counts bank lines not yet matched, recorded, or set aside
+	// (Not BitTabby or an ignore rule), small ones included.
+	Unaddressed int
+	// UnaddressedPayments counts recorded payments within the statements'
+	// period with no bank transaction decided: not matched, not recorded from a
+	// line, not set aside as not in the bank.
+	UnaddressedPayments int
+	Reviews             []store.PaymentReview
+	Imports             []store.BankImport
 	Formats     []store.BankFormat
 	Settings    store.ReconcileSettings
 	Rules       []store.IgnoreRule
@@ -49,53 +59,144 @@ type SuggestedTie struct {
 templ Reconcile(p Page, d ReconcileData) {
 	@Layout(p) {
 		<h1>Reconciliation</h1>
-		<section class="card">
-			<h2>Import a bank statement</h2>
-			<form method="post" action="/admin/reconcile/upload" enctype="multipart/form-data" class="stack">
-				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
-				<label>
-					CSV export from your bank
-					<input type="file" name="statement" accept=".csv,text/csv" required/>
-					<small>One file at a time, up to 5 MB. Only money received is kept; payments out are counted and dropped. Lines already imported from another file are skipped.</small>
-				</label>
-				<button class="primary" type="submit">Upload</button>
-			</form>
-		</section>
-		@suggestionsSection(p, d.Suggestions, d.Settings)
-		@matchesSection(p, d.Matches)
-		<section class="card">
-			<h2>Recent imports</h2>
-			if len(d.Imports) == 0 {
-				<p class="muted">Nothing imported yet.</p>
-			} else {
-				<ul class="importlist">
-					for _, imp := range d.Imports {
-						<li>
-							<a href={ importURL(imp.ID) }>{ imp.FileName }</a>
-							<span class="muted small">
-								{ imp.FormatName } &middot; { imp.UploadedAt.Format("Jan 2, 2006") } by { imp.UploaderName }
-							</span>
-							<span class="small">{ importCounts(imp) }</span>
-						</li>
-					}
-				</ul>
-			}
-		</section>
-		@setupSection(p, d)
-		if len(d.Formats) > 0 {
-			<section class="card">
-				<h2>Saved layouts</h2>
-				<ul class="importlist">
-					for _, f := range d.Formats {
-						<li>
-							<span>{ f.Name }</span>
-							<span class="muted small mono">{ f.HeaderText }</span>
-						</li>
-					}
-				</ul>
-			</section>
+		<nav class="tabbar" aria-label="Reconciliation">
+			@reconTab(d.Tab, "reconcile", "/admin/reconcile", "Reconcile", d.Unaddressed+d.UnaddressedPayments)
+			@reconTab(d.Tab, "upload", "/admin/reconcile/upload", "Upload", -1)
+			@reconTab(d.Tab, "setup", "/admin/reconcile/setup", "Setup", -1)
+		</nav>
+		switch d.Tab {
+			case "upload":
+				@uploadTab(p, d)
+			case "setup":
+				@setupSection(p, d)
+				@layoutsSection(p, d.Formats)
+			default:
+				@unaddressedSummary(d)
+				@suggestionsGrid(p, d.Suggestions, d.Settings)
+				@tiesGrid(p, d.Suggestions.Ties)
+				@unmatchedLinesGrid(d.Suggestions)
+				@matchesGrid(p, d.Matches)
+				@unmatchedPaymentsGrid(p, d.Suggestions.UnmatchedPayments)
+				@reviewsGrid(p, d.Reviews)
 		}
 	}
+}
+
+// reconTab is one tab link; count < 0 shows none.
+templ reconTab(current, key, href, label string, count int) {
+	if current == key {
+		<a class="tab" href={ templ.SafeURL(href) } aria-current="page">
+			{ label }
+			if count >= 0 {
+				<span class="tabcount">{ strconv.Itoa(count) }</span>
+			}
+		</a>
+	} else {
+		<a class="tab" href={ templ.SafeURL(href) }>
+			{ label }
+			if count >= 0 {
+				<span class="tabcount">{ strconv.Itoa(count) }</span>
+			}
+		</a>
+	}
+}
+
+// unaddressedSummary is how many bank lines still need a decision.
+templ unaddressedSummary(d ReconcileData) {
+	<section class="card summary">
+		if d.Unaddressed == 0 && d.UnaddressedPayments == 0 {
+			<p><strong>Everything is accounted for.</strong></p>
+		} else {
+			<ul class="counts">
+				<li>
+					<strong>{ strconv.Itoa(d.Unaddressed) }</strong> { plural(d.Unaddressed, "bank line", "bank lines") } not yet addressed
+					if d.Suggestions.Small > 0 {
+						<span class="muted small">
+							({ strconv.Itoa(d.Suggestions.Small) } below the { d.Settings.MinLineAmount.Display() } minimum; set them aside with an ignore rule on Setup)
+						</span>
+					}
+				</li>
+				<li>
+					<strong>{ strconv.Itoa(d.UnaddressedPayments) }</strong> recorded { plural(d.UnaddressedPayments, "payment", "payments") } with no bank transaction yet
+					if n := d.UnaddressedPayments - len(d.Suggestions.UnmatchedPayments); n > 0 {
+						<span class="muted small">
+							({ strconv.Itoa(n) } { plural(n, "has a suggested match", "have a suggested match or a possible pair") } above)
+						</span>
+					}
+				</li>
+			</ul>
+		}
+		<p class="muted small">
+			A bank line is addressed once matched to a payment, recorded as one, or set aside (Not BitTabby, or an
+			ignore rule). A recorded payment is addressed once matched to a bank line or set aside as not in the bank.
+			Only payments dated within the imported statements are counted.
+		</p>
+	</section>
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+// uploadTab is the import form and the recent imports.
+templ uploadTab(p Page, d ReconcileData) {
+	<section class="card">
+		<h2>Import a bank statement</h2>
+		<form method="post" action="/admin/reconcile/upload" enctype="multipart/form-data" class="stack">
+			<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+			<label>
+				CSV export from your bank
+				<input type="file" name="statement" accept=".csv,text/csv" required/>
+				<small>One file at a time, up to 5 MB. Only money received is kept; payments out are counted and dropped. Lines already imported from another file are skipped.</small>
+			</label>
+			<button class="primary" type="submit">Upload</button>
+		</form>
+	</section>
+	<section class="card">
+		<h2>Recent imports</h2>
+		if len(d.Imports) == 0 {
+			<p class="muted">Nothing imported yet.</p>
+		} else {
+			<ul class="importlist">
+				for _, imp := range d.Imports {
+					<li>
+						<a href={ importURL(imp.ID) }>{ imp.FileName }</a>
+						<span class="muted small">
+							{ imp.FormatName } &middot; { imp.UploadedAt.Format("Jan 2, 2006") } by { imp.UploaderName }
+						</span>
+						<span class="small">{ importCounts(imp) }</span>
+					</li>
+				}
+			</ul>
+		}
+	</section>
+}
+
+// layoutsSection lists saved layouts, each renamable. Only the name can be
+// changed: the column mapping is what past imports were read with.
+templ layoutsSection(p Page, formats []store.BankFormat) {
+	<section class="card">
+		<h2>Saved layouts</h2>
+		if len(formats) == 0 {
+			<p class="muted">None yet. A layout is saved the first time a new kind of export is uploaded.</p>
+		} else {
+			<ul class="importlist">
+				for _, f := range formats {
+					<li>
+						<form method="post" action={ templ.SafeURL("/admin/reconcile/formats/" + strconv.FormatInt(f.ID, 10) + "/rename") } class="inlineform">
+							<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+							<input type="text" name="name" value={ f.Name } maxlength="120" required aria-label="Layout name"/>
+							<button type="submit">Rename</button>
+						</form>
+						<span class="muted small mono">{ f.HeaderText }</span>
+					</li>
+				}
+			</ul>
+		}
+	</section>
 }
 
 func importURL(id int64) templ.SafeURL {
@@ -341,132 +442,6 @@ templ ReconcileImport(p Page, imp store.BankImport, lines []store.BankLine) {
 	}
 }
 
-// suggestionsSection is the open work: proposed matches, ties, and lines with
-// no candidate. Read-only until RECON-04 adds Confirm.
-templ suggestionsSection(p Page, sg Suggestions, set store.ReconcileSettings) {
-	<section class="card">
-		<h2>Suggested matches</h2>
-		if len(sg.Matches) == 0 && len(sg.Ties) == 0 {
-			<p class="muted">No suggestions. Import a statement, or widen the setup below.</p>
-		}
-		if n := exactCount(sg.Matches); n > 0 {
-			<form method="post" action="/admin/reconcile/confirm-exact" class="confirmall">
-				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
-				<button class="primary" type="submit">Confirm all { strconv.Itoa(n) } exact matches</button>
-				<span class="muted small">Same amount, so nothing is posted; each is only recorded.</span>
-			</form>
-		}
-		<ul class="banklines">
-			for _, m := range sg.Matches {
-				<li class="bankline matchcard">
-					<div class="matchsides">
-						@bankSide(m.Line)
-						@paymentSide(m.Payment)
-					</div>
-					<p class="small matchwhy">
-						if m.Suggestion.Exact {
-							Same amount.
-						} else {
-							Differs by { m.Suggestion.AmountDiff.Display() }.
-						}
-						if m.Suggestion.DateDiff != 0 {
-							{ daysApart(m.Suggestion.DateDiff) }.
-						}
-						if m.Suggestion.NameHit {
-							A name matches.
-						}
-					</p>
-					if m.DateFlagged {
-						<p class="small flag">Dates differ by more than { strconv.Itoa(set.DateFlagDays) } days; confirming will flag it.</p>
-					}
-					<p class="small"><strong>Confirming will post:</strong> { deltaText(m.Line.Amount, m.Payment.Amount) }</p>
-					@confirmForm(p, m.Line, m.Payment, "Confirm")
-				</li>
-			}
-		</ul>
-		for _, t := range sg.Ties {
-			<div class="tie">
-				<h3>{ tieTitle(len(t.Lines), len(t.Payments)) }</h3>
-				<p class="muted small">These scored the same, so none is suggested. Pick by hand.</p>
-				for _, l := range t.Lines {
-					for _, pay := range t.Payments {
-						<div class="tiepair">
-							<div class="matchsides">
-								@bankSide(l)
-								@paymentSide(pay)
-							</div>
-							<p class="small"><strong>Confirming will post:</strong> { deltaText(l.Amount, pay.Amount) }</p>
-							@confirmForm(p, l, pay, "Confirm this pair")
-						</div>
-					}
-				}
-			</div>
-		}
-	</section>
-	<section class="card">
-		<h2>Bank lines with no matching payment</h2>
-		if len(sg.UnmatchedLines) == 0 {
-			<p class="muted">None.</p>
-		} else {
-			<ul class="banklines">
-				for _, l := range sg.UnmatchedLines {
-					<li class="bankline">
-						@bankSide(l)
-					</li>
-				}
-			</ul>
-		}
-		if sg.Small > 0 {
-			<p class="muted small">{ strconv.Itoa(sg.Small) } open lines below the { set.MinLineAmount.Display() } minimum are not offered.</p>
-		}
-	</section>
-	if len(sg.UnmatchedPayments) > 0 {
-		<details class="card">
-			<summary>{ strconv.Itoa(len(sg.UnmatchedPayments)) } recorded payments with no bank line nearby</summary>
-			<p class="muted small">Cash, or a bank that has not been imported. For information only.</p>
-			<ul class="banklines">
-				for _, p := range sg.UnmatchedPayments {
-					<li class="bankline">
-						@paymentSide(p)
-					</li>
-				}
-			</ul>
-		</details>
-	}
-}
-
-templ bankSide(l store.OpenBankLine) {
-	<div class="matchside">
-		<div class="bankline-head">
-			<span class="pill">bank</span>
-			<span class="nowrap">{ bankDate(l.PostedOn) }</span>
-			<span class="amount">{ l.Amount.Display() }</span>
-		</div>
-		@bankText(l.Description, l.Account, l.Note, l.Reference)
-		<p class="muted small">
-			Row { strconv.Itoa(l.Row) } of { l.FileName } &middot;
-			<a href={ lineURL(l.ID) }>Line details, record or ignore</a>
-		</p>
-	</div>
-}
-
-templ paymentSide(p store.PaymentCandidate) {
-	<div class="matchside">
-		<div class="bankline-head">
-			<span class="pill pill-payment">recorded</span>
-			<span class="nowrap">{ p.EffectiveAt.Format("Jan 2, 2006") }</span>
-			<span class="amount">{ p.Amount.Display() }</span>
-		</div>
-		<p>
-			<a href={ tabURL(p.TabID) }>{ p.TabName }</a>
-			<span class="muted small">&middot; { string(p.Method) } &middot; recorded by { p.ActorName }</span>
-		</p>
-		if p.Memo != "" {
-			<p class="muted small banktext">{ p.Memo }</p>
-		}
-	</div>
-}
-
 func tabURL(id int64) templ.SafeURL {
 	return templ.SafeURL("/tabs/" + strconv.FormatInt(id, 10))
 }
@@ -615,55 +590,6 @@ templ confirmForm(p Page, l store.OpenBankLine, pay store.PaymentCandidate, labe
 		}
 		<button class="primary" type="submit">{ label }</button>
 	</form>
-}
-
-// matchesSection lists recent matches, undone ones included, with Undo on
-// those that stand.
-templ matchesSection(p Page, ms []store.BankMatch) {
-	if len(ms) > 0 {
-		<section class="card">
-			<h2>Recent matches</h2>
-			<ul class="banklines">
-				for _, m := range ms {
-					<li class={ "bankline", templ.KV("undone", !m.Active()) }>
-						<div class="bankline-head">
-							<a href={ tabURL(m.TabID) }>{ m.TabName }</a>
-							<span class="nowrap">{ bankDate(m.BankDate) }</span>
-							<span class="amount">{ m.BankAmount.Display() }</span>
-							if !m.Active() {
-								<span class="pill">unmade</span>
-							}
-							if m.DateFlagged {
-								<span class="pill pill-fault">date flagged</span>
-							}
-						</div>
-						<p class="small">
-							Recorded { m.RecordedAmount.Display() } on { bankDate(m.RecordedDate) }.
-							{ matchDeltaText(m) }
-						</p>
-						if m.DateFlagged {
-							<p class="small flag">{ m.DateFlagReason }.</p>
-						}
-						<p class="muted small">
-							Row { strconv.Itoa(m.Row) } of { m.FileName } &middot; confirmed by { m.ConfirmedByName }
-							{ m.ConfirmedAt.Format("Jan 2, 2006 15:04") } UTC
-						</p>
-						if !m.Active() {
-							<p class="muted small">
-								Unmade { m.UndoneAt.Format("Jan 2, 2006 15:04") } UTC by { m.UndoneByName }: { m.UndoReason }.
-							</p>
-						}
-						if m.Active() {
-							<form method="post" action={ undoURL(m.ID) } class="inline">
-								<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
-								<button class="link" type="submit">Undo this match</button>
-							</form>
-						}
-					</li>
-				}
-			</ul>
-		</section>
-	}
 }
 
 func undoURL(id int64) templ.SafeURL {
@@ -873,4 +799,352 @@ func tabChoiceLabel(t TabChoice) string {
 		label += " -- likely"
 	}
 	return label
+}
+
+// The Reconcile tab: each section is a collapsible panel (a native <details>,
+// no script) holding a data grid. On a phone each grid row stacks into a
+// labelled block (table.grid, data-label), so nothing scrolls sideways.
+
+templ panel(title string, count int, open bool) {
+	<details class="card panel" open?={ open }>
+		<summary><h2>{ title }</h2> <span class="tabcount">{ strconv.Itoa(count) }</span></summary>
+		{ children... }
+	</details>
+}
+
+templ suggestionsGrid(p Page, sg Suggestions, set store.ReconcileSettings) {
+	@panel("Suggested matches", len(sg.Matches), true) {
+		if len(sg.Matches) == 0 {
+			<p class="muted">No suggestions. Import a statement on Upload, or widen the window and tolerance on Setup.</p>
+		} else {
+			if n := exactCount(sg.Matches); n > 0 {
+				<form method="post" action="/admin/reconcile/confirm-exact" class="confirmall">
+					<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+					<button class="primary" type="submit">Confirm all { strconv.Itoa(n) } exact matches</button>
+					<span class="muted small">Same amount, so nothing is posted; each is only recorded.</span>
+				</form>
+			}
+			<table class="grid">
+				<thead>
+					<tr>
+						<th>Bank</th>
+						<th>Bank line</th>
+						<th>Recorded payment</th>
+						<th>Why</th>
+						<th>Confirming will post</th>
+						<th></th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, m := range sg.Matches {
+						<tr class="matchrow">
+							<td data-label="Bank">
+								<span class="nowrap">{ bankDate(m.Line.PostedOn) }</span>
+								<span class="amount">{ m.Line.Amount.Display() }</span>
+							</td>
+							<td data-label="Bank line">
+								@lineCell(m.Line)
+							</td>
+							<td data-label="Recorded payment">
+								@paymentCell(m.Payment)
+							</td>
+							<td data-label="Why" class="small">
+								@whyCell(m, set)
+							</td>
+							<td data-label="Confirming will post" class="small">{ deltaText(m.Line.Amount, m.Payment.Amount) }</td>
+							<td class="actions-cell">
+								@confirmForm(p, m.Line, m.Payment, "Confirm")
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
+}
+
+templ whyCell(m SuggestedMatch, set store.ReconcileSettings) {
+	if m.Suggestion.Exact {
+		Same amount.
+	} else {
+		Differs by { m.Suggestion.AmountDiff.Display() }.
+	}
+	if m.Suggestion.DateDiff != 0 {
+		{ daysApart(m.Suggestion.DateDiff) }.
+	}
+	if m.Suggestion.NameHit {
+		A name matches.
+	}
+	if m.DateFlagged {
+		<span class="flag">Dates differ by more than { strconv.Itoa(set.DateFlagDays) } days; confirming will flag it.</span>
+	}
+}
+
+// lineCell is a bank line's text in a grid cell.
+templ lineCell(l store.OpenBankLine) {
+	<span class="banktext">{ l.Description }</span>
+	if l.Account != "" || l.Reference != "" {
+		<span class="muted small block">
+			{ l.Account }
+			if l.Reference != "" {
+				&middot; Ref { l.Reference }
+			}
+		</span>
+	}
+	if l.Note != "" {
+		<span class="banknote small block"><span class="muted">Bank note:</span> { l.Note }</span>
+	}
+	<span class="muted small block">
+		Row { strconv.Itoa(l.Row) } of { l.FileName } &middot;
+		<a href={ lineURL(l.ID) }>Line details, record or ignore</a>
+	</span>
+}
+
+// paymentCell is a recorded payment in a grid cell.
+templ paymentCell(pay store.PaymentCandidate) {
+	<a href={ tabURL(pay.TabID) }>{ pay.TabName }</a>
+	<span class="block">
+		<span class="nowrap">{ pay.EffectiveAt.Format("Jan 2, 2006") }</span>
+		<span class="amount">{ pay.Amount.Display() }</span>
+	</span>
+	<span class="muted small block">{ string(pay.Method) } &middot; recorded by { pay.ActorName }</span>
+	if pay.Memo != "" {
+		<span class="muted small block banktext">{ pay.Memo }</span>
+	}
+}
+
+// tiesGrid: groups that scored the same, so none is suggested; each possible
+// pair can be confirmed by hand.
+templ tiesGrid(p Page, ties []SuggestedTie) {
+	if len(ties) > 0 {
+		@panel("Possible pairs, pick by hand", len(ties), true) {
+			for _, t := range ties {
+				<h3>{ tieTitle(len(t.Lines), len(t.Payments)) }</h3>
+				<table class="grid">
+					<thead>
+						<tr>
+							<th>Bank</th>
+							<th>Bank line</th>
+							<th>Recorded payment</th>
+							<th>Confirming will post</th>
+							<th></th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, l := range t.Lines {
+							for _, pay := range t.Payments {
+								<tr class="tiepair">
+									<td data-label="Bank">
+										<span class="nowrap">{ bankDate(l.PostedOn) }</span>
+										<span class="amount">{ l.Amount.Display() }</span>
+									</td>
+									<td data-label="Bank line">
+										@lineCell(l)
+									</td>
+									<td data-label="Recorded payment">
+										@paymentCell(pay)
+									</td>
+									<td data-label="Confirming will post" class="small">{ deltaText(l.Amount, pay.Amount) }</td>
+									<td class="actions-cell">
+										@confirmForm(p, l, pay, "Confirm this pair")
+									</td>
+								</tr>
+							}
+						}
+					</tbody>
+				</table>
+			}
+		}
+	}
+}
+
+templ unmatchedLinesGrid(sg Suggestions) {
+	@panel("Bank lines with no matching payment", len(sg.UnmatchedLines), true) {
+		if len(sg.UnmatchedLines) == 0 {
+			<p class="muted">None.</p>
+		} else {
+			<table class="grid">
+				<thead>
+					<tr>
+						<th>Date</th>
+						<th class="right">Amount</th>
+						<th>Bank line</th>
+						<th></th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, l := range sg.UnmatchedLines {
+						<tr>
+							<td data-label="Date" class="nowrap">{ bankDate(l.PostedOn) }</td>
+							<td data-label="Amount" class="right amount">{ l.Amount.Display() }</td>
+							<td data-label="Bank line">
+								@lineCell(l)
+							</td>
+							<td class="actions-cell"><a class="button" href={ lineURL(l.ID) }>Record or ignore</a></td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+		if sg.Small > 0 {
+			<p class="muted small">{ strconv.Itoa(sg.Small) } open lines below the minimum are not offered here.</p>
+		}
+	}
+}
+
+// unmatchedPaymentsGrid: payments the statements cover with no bank
+// transaction. Each is matched by hand (a suggestion, if one appears), or set
+// aside as not in the bank.
+templ unmatchedPaymentsGrid(p Page, ps []store.PaymentCandidate) {
+	@panel("Recorded payments with no bank transaction", len(ps), true) {
+		if len(ps) == 0 {
+			<p class="muted">None within the imported statements.</p>
+		} else {
+			<p class="muted small">Recorded in the app, dated within the statements, with no bank line to match. Cash, or another account: set it aside.</p>
+			<table class="grid">
+				<thead>
+					<tr>
+						<th>Date</th>
+						<th class="right">Amount</th>
+						<th>Tab</th>
+						<th>How</th>
+						<th>Recorded by</th>
+						<th></th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, pay := range ps {
+						<tr>
+							<td data-label="Date" class="nowrap">{ pay.EffectiveAt.Format("Jan 2, 2006") }</td>
+							<td data-label="Amount" class="right amount">{ pay.Amount.Display() }</td>
+							<td data-label="Tab">
+								<a href={ tabURL(pay.TabID) }>{ pay.TabName }</a>
+								if pay.Memo != "" {
+									<span class="muted small block banktext">{ pay.Memo }</span>
+								}
+							</td>
+							<td data-label="How">{ string(pay.Method) }</td>
+							<td data-label="Recorded by">{ pay.ActorName }</td>
+							<td class="actions-cell">
+								<form method="post" action={ templ.SafeURL("/admin/reconcile/payments/" + strconv.FormatInt(pay.Seq, 10) + "/not-in-bank") } class="confirmform">
+									<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+									<input type="text" name="note" maxlength="500" placeholder="Note (optional)" aria-label="Note"/>
+									<button type="submit">Not in the bank</button>
+								</form>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
+}
+
+// reviewsGrid: payments set aside as not in the bank, with who and when.
+templ reviewsGrid(p Page, rs []store.PaymentReview) {
+	if len(rs) > 0 {
+		@panel("Set aside: not in the bank", len(rs), false) {
+			<table class="grid">
+				<thead>
+					<tr>
+						<th>Payment</th>
+						<th>Tab</th>
+						<th>Note</th>
+						<th>Who and when</th>
+						<th></th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, rv := range rs {
+						<tr class={ templ.KV("undone", !rv.Active()) }>
+							<td data-label="Payment">
+								<span class="nowrap">{ rv.EffectiveAt.Format("Jan 2, 2006") }</span>
+								<span class="amount">{ rv.Amount.Display() }</span>
+							</td>
+							<td data-label="Tab"><a href={ tabURL(rv.TabID) }>{ rv.TabName }</a></td>
+							<td data-label="Note" class="small banktext">{ rv.Note }</td>
+							<td data-label="Who and when" class="small">
+								{ rv.ByName } { rv.At.Format("Jan 2, 2006 15:04") } UTC
+								if !rv.Active() {
+									<span class="muted block">Undone { rv.UndoneAt.Format("Jan 2, 2006 15:04") } UTC by { rv.UndoneByName }.</span>
+								}
+							</td>
+							<td class="actions-cell">
+								if rv.Active() {
+									<form method="post" action={ templ.SafeURL("/admin/reconcile/reviews/" + strconv.FormatInt(rv.ID, 10) + "/undo") } class="inline">
+										<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+										<button class="link" type="submit">Undo</button>
+									</form>
+								}
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
+}
+
+// matchesGrid lists recent matches, unmade ones included, with who and when.
+templ matchesGrid(p Page, ms []store.BankMatch) {
+	if len(ms) > 0 {
+		@panel("Recent matches", len(ms), true) {
+			<table class="grid">
+				<thead>
+					<tr>
+						<th>Tab</th>
+						<th>Bank</th>
+						<th>Recorded</th>
+						<th>Posted</th>
+						<th>Who and when</th>
+						<th></th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, m := range ms {
+						<tr class={ templ.KV("undone", !m.Active()) }>
+							<td data-label="Tab">
+								<a href={ tabURL(m.TabID) }>{ m.TabName }</a>
+								if !m.Active() {
+									<span class="pill">unmade</span>
+								}
+								if m.DateFlagged {
+									<span class="pill pill-fault">date flagged</span>
+								}
+							</td>
+							<td data-label="Bank">
+								<span class="nowrap">{ bankDate(m.BankDate) }</span>
+								<span class="amount">{ m.BankAmount.Display() }</span>
+								<span class="muted small block">Row { strconv.Itoa(m.Row) } of { m.FileName }</span>
+							</td>
+							<td data-label="Recorded">
+								<span class="nowrap">{ bankDate(m.RecordedDate) }</span>
+								<span class="amount">{ m.RecordedAmount.Display() }</span>
+							</td>
+							<td data-label="Posted" class="small">
+								{ matchDeltaText(m) }
+								if m.DateFlagged {
+									<span class="flag block">{ m.DateFlagReason }.</span>
+								}
+							</td>
+							<td data-label="Who and when" class="small">
+								confirmed by { m.ConfirmedByName } { m.ConfirmedAt.Format("Jan 2, 2006 15:04") } UTC
+								if !m.Active() {
+									<span class="muted block">Unmade { m.UndoneAt.Format("Jan 2, 2006 15:04") } UTC by { m.UndoneByName }: { m.UndoReason }.</span>
+								}
+							</td>
+							<td class="actions-cell">
+								if m.Active() {
+									<form method="post" action={ undoURL(m.ID) } class="inline">
+										<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+										<button class="link" type="submit">Undo this match</button>
+									</form>
+								}
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	}
 }

@@ -107,8 +107,11 @@ func (s *Server) recordChoices(r *http.Request, line store.OpenBankLine) ([]view
 }
 
 func recordMemo(l store.OpenBankLine) string {
-	return fmt.Sprintf("Bank reconciliation: %s (line %d of %s)",
-		strings.Join(strings.Fields(l.Description), " "), l.Row, l.FileName)
+	desc := []rune(strings.Join(strings.Fields(l.Description), " "))
+	if len(desc) > 300 { // the ledger caps the whole memo; keep the provenance
+		desc = append(desc[:297], []rune("...")...)
+	}
+	return fmt.Sprintf("Bank reconciliation: %s (line %d of %s)", string(desc), l.Row, l.FileName)
 }
 
 // lineForm reads the line id and checks the CSRF token; false means a

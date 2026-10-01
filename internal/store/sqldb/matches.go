@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/johnzastrow/bitt/internal/money"
 	"github.com/johnzastrow/bitt/internal/store"
@@ -70,23 +69,23 @@ func (d *DB) confirmBankMatch(ctx context.Context, m store.NewBankMatch, delta *
 		return store.BankMatch{}, false, store.ErrLineNotOpen
 	}
 
-	// The payment: a payment, on the stated tab, not reversed, not itself
-	// posted by reconciliation.
-	var (
-		kind  string
-		tabID int64
-		key   string
-	)
-	if err := tx.QueryRowContext(ctx,
-		`SELECT e.kind, e.tab_id, e.idempotency_key FROM entries e
-		  WHERE e.seq = ? AND NOT EXISTS (SELECT 1 FROM entries r WHERE r.reverses_seq = e.seq)`,
-		m.EntrySeq).Scan(&kind, &tabID, &key); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return store.BankMatch{}, false, store.ErrNotAPayment
+	// The payment: locked, a payment, on the stated tab, not reversed, not
+	// posted by reconciliation, not matched, and not set aside as not in the
+	// bank (lockPayment). Setting aside takes the same lock, so the two
+	// cannot both win.
+	tabID, err := d.lockPayment(ctx, tx, m.EntrySeq)
+	if err != nil {
+		if errors.Is(err, store.ErrPaymentMatched) {
+			// Reversed counts as not a payment; matched or set aside, taken.
+			var reversed int
+			_ = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM entries WHERE reverses_seq = ?`, m.EntrySeq).Scan(&reversed)
+			if reversed > 0 {
+				return store.BankMatch{}, false, store.ErrNotAPayment
+			}
 		}
-		return store.BankMatch{}, false, translate(err)
+		return store.BankMatch{}, false, err
 	}
-	if kind != string(store.KindPayment) || tabID != m.TabID || strings.HasPrefix(key, store.ReconKeyPrefix) {
+	if tabID != m.TabID {
 		return store.BankMatch{}, false, store.ErrNotAPayment
 	}
 

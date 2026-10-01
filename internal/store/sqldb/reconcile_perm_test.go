@@ -36,7 +36,6 @@ func canReconcile(t *testing.T, db *DB, id int64) bool {
 
 func TestCanReconcileDefaultsOff(t *testing.T) {
 	db := newTestDB(t)
-	ctx := context.Background()
 	admin := mustAdmin(t, db, "admin@example.com")
 	plain := mustUser(t, db, "plain@example.com")
 
@@ -44,13 +43,6 @@ func TestCanReconcileDefaultsOff(t *testing.T) {
 		if canReconcile(t, db, u.ID) {
 			t.Errorf("%s holds Can reconcile by default", u.Email)
 		}
-	}
-	inst, err := db.GetInstance(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if inst.ReconcileEnabled {
-		t.Error("reconciliation is on by default")
 	}
 }
 
@@ -175,34 +167,6 @@ func TestSessionUserCarriesCanReconcile(t *testing.T) {
 	}
 }
 
-func TestSetReconcileEnabled(t *testing.T) {
-	db := newTestDB(t)
-	ctx := context.Background()
-	for _, on := range []bool{true, true, false, false, true} {
-		if err := db.SetReconcileEnabled(ctx, on); err != nil {
-			t.Fatalf("set %v: %v", on, err)
-		}
-		inst, err := db.GetInstance(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if inst.ReconcileEnabled != on {
-			t.Errorf("switch = %v, want %v", inst.ReconcileEnabled, on)
-		}
-	}
-	// The other instance settings are untouched by the switch.
-	if err := db.SetDelivery(ctx, store.Delivery{SMTPHost: "mail.example.com"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.SetReconcileEnabled(ctx, false); err != nil {
-		t.Fatal(err)
-	}
-	inst, _ := db.GetInstance(ctx)
-	if inst.Delivery.SMTPHost != "mail.example.com" {
-		t.Error("switching reconciliation changed the delivery settings")
-	}
-}
-
 // Concurrent grants and removals on one account leave it in one of the two
 // states, never an error; this is mostly for MariaDB's parallel writers.
 func TestSetCanReconcileConcurrent(t *testing.T) {
@@ -229,27 +193,22 @@ func TestSetCanReconcileConcurrent(t *testing.T) {
 }
 
 func TestMayReconcile(t *testing.T) {
-	on := store.Instance{ReconcileEnabled: true}
-	off := store.Instance{}
 	holder := store.User{IsAdmin: true, CanReconcile: true}
 	gone := holder
 	gone.DeactivatedAt = new(time.Time)
-
 	cases := []struct {
 		name string
 		u    store.User
-		inst store.Instance
 		want bool
 	}{
-		{"holder, switch on", holder, on, true},
-		{"holder, switch off", holder, off, false},
-		{"admin without permission", store.User{IsAdmin: true}, on, false},
-		{"permission without admin (impossible in schema)", store.User{CanReconcile: true}, on, false},
-		{"deactivated holder", gone, on, false},
-		{"plain account", store.User{}, on, false},
+		{"holder", holder, true},
+		{"admin without permission", store.User{IsAdmin: true}, false},
+		{"permission without admin (impossible in schema)", store.User{CanReconcile: true}, false},
+		{"deactivated holder", gone, false},
+		{"plain account", store.User{}, false},
 	}
 	for _, c := range cases {
-		if got := c.u.MayReconcile(c.inst); got != c.want {
+		if got := c.u.MayReconcile(); got != c.want {
 			t.Errorf("%s: MayReconcile = %v, want %v", c.name, got, c.want)
 		}
 	}

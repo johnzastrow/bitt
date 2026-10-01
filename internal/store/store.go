@@ -192,10 +192,6 @@ type Instance struct {
 	// secret come from the environment or a file and nowhere else -- see
 	// migration 0010 for why that line is drawn here.
 	Delivery Delivery
-	// ReconcileEnabled is the instance switch for bank reconciliation
-	// (RECON-01). Off, the feature is hidden from everyone, whatever
-	// permissions individual accounts hold.
-	ReconcileEnabled bool
 }
 
 // Delivery is the non-secret half of notification configuration: where mail
@@ -241,11 +237,11 @@ type User struct {
 	CanReconcile bool
 }
 
-// MayReconcile reports whether the account may use bank reconciliation, given
-// the instance switch. Both are required, and so is being an active
-// administrator: the permission alone is never enough.
-func (u User) MayReconcile(inst Instance) bool {
-	return inst.ReconcileEnabled && u.IsAdmin && u.CanReconcile && u.Active()
+// MayReconcile reports whether the account may use bank reconciliation: an
+// active administrator holding Can reconcile. The permission is the only
+// control; there is no instance switch (owner's decision, 2026-10-01).
+func (u User) MayReconcile() bool {
+	return u.IsAdmin && u.CanReconcile && u.Active()
 }
 
 // HasAvatar reports whether the account has an uploaded picture. The image
@@ -483,10 +479,6 @@ type InstanceStore interface {
 	// transaction. An empty set clears them, which returns the instance to the
 	// environment's list or the built-in default.
 	SetInstanceReminders(ctx context.Context, rs []TabReminder) error
-
-	// SetReconcileEnabled turns bank reconciliation on or off for the whole
-	// instance (RECON-01).
-	SetReconcileEnabled(ctx context.Context, on bool) error
 }
 
 // UserStore covers accounts.

@@ -106,7 +106,7 @@ func civil(d time.Time, loc *time.Location) time.Time {
 // a value out of range refuses the whole save, with which one and why.
 func (s *Server) postReconcileSettings(w http.ResponseWriter, r *http.Request) {
 	user := userFrom(r.Context())
-	const back = "/admin/reconcile#setup"
+	const back = "/admin/reconcile/setup"
 	if err := r.ParseForm(); err != nil || !auth.CheckCSRF(r) {
 		redirectWith(w, r, back, "err", "Your session expired. Please try again.")
 		return
@@ -182,7 +182,7 @@ func settingsFromForm(r *http.Request) (reconcile.Settings, error) {
 // that layout's open lines that match it.
 func (s *Server) postIgnoreRule(w http.ResponseWriter, r *http.Request) {
 	user := userFrom(r.Context())
-	const back = "/admin/reconcile#setup"
+	const back = "/admin/reconcile/setup"
 	if err := r.ParseForm(); err != nil || !auth.CheckCSRF(r) {
 		redirectWith(w, r, back, "err", "Your session expired. Please try again.")
 		return
@@ -224,7 +224,7 @@ func (s *Server) postIgnoreRule(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) postIgnoreRuleDelete(w http.ResponseWriter, r *http.Request) {
 	user := userFrom(r.Context())
-	const back = "/admin/reconcile#setup"
+	const back = "/admin/reconcile/setup"
 	id, ok := pathID(r, "id")
 	if !ok {
 		http.NotFound(w, r)

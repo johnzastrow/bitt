@@ -7,28 +7,63 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
-## [Unreleased] — Bank reconciliation, in progress
+## [1.8.0] - 2026-10-01 — Bank reconciliation
 
-Built step by step from [SPEC-BANK-RECONCILE.md](docs/planning/SPEC-BANK-RECONCILE.md)
-and released together when the screens are done. Everything below is behind an
-instance switch that is off by default.
+Built from [SPEC-BANK-RECONCILE.md](docs/planning/SPEC-BANK-RECONCILE.md).
+An administrator given "Allow reconciling" on the People screen can import a
+bank's CSV export, match it against the payments recorded here, post any
+difference to the tab, and account for every bank line and every recorded
+payment. Nobody else sees any of it, and nothing changes on upgrade until
+someone is given the permission.
+
+**Upgrading:** migrations 0013 to 0018 run on start. Back up first (the
+release adds tables and columns; no existing row is changed). Rehearsed on a
+copy of production data: every tab's balance and entry count identical before
+and after.
+
+### Security
+- **Built with Go 1.26.8.** Releases up to 1.7.0 were built with Go 1.26.5,
+  which govulncheck shows reachable by five standard-library vulnerabilities
+  fixed in 1.26.6, including `net/http` not applying `ReadHeaderTimeout` to the
+  unencrypted HTTP/2 check (a slow-header denial of service) and an unbounded
+  post-handshake message in `crypto/tls` (the SMTP client). `golang.org/x/crypto`
+  is updated past its `ssh`/`openpgp` advisories (not called here). CI now runs
+  govulncheck and fails if the Dockerfile's Go version drifts from `go.mod`'s.
+- **The avatar upload's 2 MB limit now applies** (see Fixed).
 
 ### Added
-- **The "Can reconcile" permission (RECON-01).** Per account, off by default,
+- **The "Can reconcile" permission (RECON-01)** is the only control (owner's
+  decision, 2026-10-01: no instance switch). Per account, off by default,
   shown and changed on the People screen on each administrator's row. Any
   administrator can grant or remove it; only an administrator can hold it, and
   that is a CHECK in the schema (migration 0013), so a future "remove
-  administrator" action cannot leave the permission behind: the database refuses
-  the demotion unless the same write clears it. Each change is logged with both
-  user ids.
-- **An instance switch, "Bank reconciliation: on/off"**, on the People screen,
-  off by default. While it is off the feature is hidden from everyone.
-- **Reconciliation in the account menu** for a holder when the switch is on, and
-  a `/admin/reconcile` screen (a shell for now). Every reconciliation route
-  checks the switch and the permission on each request: 404 for a
-  non-administrator or with the switch off, 403 for an administrator without
-  the permission. The permission does not change who may post through the
-  ordinary payment form.
+  administrator" action cannot leave the permission behind. Each change is
+  logged with both user ids.
+- **Reconciliation in the account menu** for a holder. Every reconciliation
+  route checks the permission on each request: 404 for a non-administrator,
+  403 for an administrator without it. The permission does not change who may
+  post through the ordinary payment form.
+- **A tabbed Reconciliation screen.** *Reconcile* holds the work: how many bank
+  lines and recorded payments are not yet addressed (also on the tab's label),
+  then collapsible panels of data grids -- suggested matches, possible pairs,
+  unmatched bank lines, recent matches, payments with no bank transaction, and
+  payments set aside. *Upload* holds the import and recent imports; *Setup*
+  the controls, ignore rules and saved layouts. Grids stack into labelled
+  blocks on a phone; the page uses a desktop's width.
+- **Saved layouts can be renamed** on Setup. Only the name changes; the column
+  mapping past imports were read with is never altered.
+- **Payments with no bank transaction are accounted for.** A standing payment
+  dated within the imported statements, not matched, counts as unaddressed
+  until it is matched or set aside as **Not in the bank** (cash, another
+  account) with an optional note, who and when; that can be undone. A payment
+  is never both matched and set aside: both lock the payment's entry row and
+  check the other, tested under concurrency on both backends.
+- **On a tab**, every payment reconciliation touched carries a clear badge:
+  matched to bank (with the bank date and amount), the difference a match
+  posted, recorded from bank, or not in the bank. Holders also get the tab's
+  **Bank reconciliation** history (file, row, original row, bank note, who and
+  when, unmade matches included) and a **"Show only unreconciled payments"**
+  toggle on the history. Others on the tab see the badges only.
 
 - **Importing a bank statement (RECON-02).** Upload one CSV (5 MB, 10,000
   rows; UTF-8 or Windows-1252; comma or semicolon; quoted fields with line
@@ -114,6 +149,11 @@ instance switch that is off by default.
   nothing in them references or changes the ledger.
 
 ### Fixed
+- **Long bank text no longer breaks a confirm on MariaDB.** A memo is
+  VARCHAR(1000) there and a bank description or note can be 16 KB; the memo now
+  shortens the description (keeping "line N of file") and is capped. Likewise
+  an over-long header row is refused, and refusal reasons are bounded so ten
+  of them fit their column. Found in the pre-release security review.
 - **The People screen no longer scrolls sideways on a phone.** The accounts
   table, with a notification form on every row, was 614 px wide at a 360 px
   viewport; it now scrolls inside its card.

@@ -27,13 +27,11 @@ func referenceCSV(t *testing.T) []byte {
 	return data
 }
 
-// reconcileReady completes setup and gives Jane (id 1) the permission with
-// the switch on.
+// reconcileReady completes setup and gives Jane (id 1) the permission.
 func reconcileReady(t *testing.T) *harness {
 	t.Helper()
 	h := newHarness(t)
 	h.completeSetup()
-	h.setSwitch(true)
 	h.setReconcile(1, true)
 	return h
 }
@@ -564,5 +562,34 @@ func TestImportWindows1252(t *testing.T) {
 	_, body = h.post(resp.Request.URL.Path, form)
 	if !strings.Contains(body, "Café L’Ours") {
 		t.Errorf("decoded text missing: %s", truncate(body))
+	}
+}
+
+// Refusal reasons quote cells; ten long ones must still fit the import's
+// refused_detail (a MariaDB TEXT column), so each is bounded.
+func TestRefusedDetailIsBounded(t *testing.T) {
+	h := reconcileReady(t)
+	var b strings.Builder
+	b.WriteString("Date,Description,Amount\n")
+	for i := 0; i < 12; i++ {
+		b.WriteString("9/1/2026,x," + strings.Repeat("9", 15000) + "z\n")
+	}
+	resp, body := h.upload(t, "bad.csv", []byte(b.String()))
+	po := previewOfRe.FindStringSubmatch(body)
+	if po == nil {
+		t.Fatalf("no mapping: %s", truncate(body))
+	}
+	_, body = h.post(resp.Request.URL.Path, url.Values{
+		"csrf_token": {h.csrfToken(resp.Request.URL.Path)}, "preview_of": {po[1]},
+		"date": {"0"}, "date_layout": {"m/d/yyyy"}, "amount": {"2"}, "debit": {"-1"}, "credit": {"-1"},
+		"incoming": {"positive"}, "description": {"1"}, "account": {"-1"}, "note": {"-1"},
+		"reference": {"-1"}, "name": {"Bad"}, "action": {"save"},
+	})
+	if !strings.Contains(body, "12 rows could not be read") {
+		t.Fatalf("import: %s", truncate(body))
+	}
+	imps, _ := h.db.ListBankImports(t.Context(), 1)
+	if n := len(imps[0].RefusedDetail); n > 4000 {
+		t.Errorf("refused detail is %d bytes", n)
 	}
 }

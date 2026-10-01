@@ -76,7 +76,7 @@ func (s *Service) ConfirmMatch(ctx context.Context, c Confirmation) (store.BankM
 
 	kind, amount := DeltaFor(m.BankAmount, m.RecordedAmount)
 	var delta *store.NewEntry
-	desc := oneLine(c.Description)
+	desc := clip(oneLine(c.Description), maxMemoDescription)
 	switch kind {
 	case store.KindPayment:
 		memo := fmt.Sprintf("Bank reconciliation: %s (line %d of %s)", desc, c.Row, c.FileName)
@@ -105,10 +105,31 @@ func (s *Service) ConfirmMatch(ctx context.Context, c Confirmation) (store.BankM
 // ledger memo is permanent and seen by everyone on the tab).
 func (s *Service) withNote(memo string, c Confirmation) string {
 	if !c.Match.NoteInMemo || strings.TrimSpace(c.Note) == "" {
-		return memo
+		return fitMemo(memo)
 	}
-	return memo + "\nBank note: " + c.Note
+	return fitMemo(memo + "\nBank note: " + c.Note)
 }
+
+// Memo bounds. A memo is VARCHAR(1000) on MariaDB, and bank text is free text
+// up to 16 KB a row: unbounded, a long description or note made a confirm fail
+// there (and only there). The description is shortened inside the memo so the
+// "(line N of file)" provenance always survives; the full text stays on the
+// bank line and the match.
+const (
+	maxMemo            = 1000
+	maxMemoDescription = 300
+)
+
+// clip shortens s to n runes, marking the cut.
+func clip(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-3]) + "..."
+}
+
+func fitMemo(s string) string { return clip(s, maxMemo) }
 
 // Reasons recorded on an unmade match.
 const (
@@ -228,7 +249,7 @@ func (s *Service) RecordLine(ctx context.Context, lineID, tabID, actorUserID int
 		return store.Entry{}, err
 	}
 	return s.matches.RecordBankLine(ctx, lineID, actorUserID, store.NewEntry{
-		TabID: tabID, Kind: store.KindPayment, Amount: line.Amount, Method: method, Memo: memo,
+		TabID: tabID, Kind: store.KindPayment, Amount: line.Amount, Method: method, Memo: fitMemo(memo),
 		EffectiveAt: at, ActorUserID: actorUserID,
 		IdempotencyKey: fmt.Sprintf("%s:line:%d:%s", store.ReconKeyPrefix, lineID, key),
 	})

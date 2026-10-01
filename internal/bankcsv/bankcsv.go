@@ -130,6 +130,10 @@ func Read(data []byte) (File, error) {
 
 		row++
 		if row == 1 {
+			// The header is stored with a saved layout; bound it like a row.
+			if len(raw) > 16<<10 {
+				return File{}, refuse("the header row is longer than 16 KB")
+			}
 			f.Header = rec
 			continue
 		}

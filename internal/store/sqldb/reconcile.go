@@ -236,6 +236,7 @@ func (d *DB) ListPaymentCandidates(ctx context.Context, from, to time.Time) ([]s
 		    AND e.effective_at >= ? AND e.effective_at < ?
 		    AND NOT EXISTS (SELECT 1 FROM entries r WHERE r.reverses_seq = e.seq)
 		    AND NOT EXISTS (SELECT 1 FROM bank_matches m WHERE m.active_entry_seq = e.seq)
+		    AND NOT EXISTS (SELECT 1 FROM payment_reviews pr WHERE pr.active_entry_seq = e.seq)
 		    AND e.idempotency_key NOT LIKE ?
 		  ORDER BY e.effective_at, e.seq`, toText(from), toText(to), store.ReconKeyPrefix+":%")
 	if err != nil {

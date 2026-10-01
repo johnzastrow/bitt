@@ -155,6 +155,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /admin/reconcile/map/{token}", s.requireReconcile(http.HandlerFunc(s.getReconcileMap)))
 	mux.Handle("POST /admin/reconcile/map/{token}", s.requireReconcile(http.HandlerFunc(s.postReconcileMap)))
 	mux.Handle("GET /admin/reconcile/imports/{id}", s.requireReconcile(http.HandlerFunc(s.getReconcileImport)))
+	mux.Handle("POST /admin/reconcile/settings", s.requireReconcile(http.HandlerFunc(s.postReconcileSettings)))
+	mux.Handle("POST /admin/reconcile/rules", s.requireReconcile(http.HandlerFunc(s.postIgnoreRule)))
+	mux.Handle("POST /admin/reconcile/rules/{id}/delete", s.requireReconcile(http.HandlerFunc(s.postIgnoreRuleDelete)))
 
 	return s.securityHeaders(s.recoverPanic(mux))
 }
@@ -356,11 +359,17 @@ func (s *Server) serverError(w http.ResponseWriter, r *http.Request, err error) 
 // redirectWith sends the user onward carrying a short message.
 func redirectWith(w http.ResponseWriter, r *http.Request, path, param, msg string) {
 	if msg != "" {
+		// The query goes before any fragment: "/x#setup?ok=..." would put
+		// the message inside the fragment, which never reaches the server.
+		base, frag, hasFrag := strings.Cut(path, "#")
 		sep := "?"
-		if strings.Contains(path, "?") {
+		if strings.Contains(base, "?") {
 			sep = "&"
 		}
-		path += sep + param + "=" + url.QueryEscape(msg)
+		path = base + sep + param + "=" + url.QueryEscape(msg)
+		if hasFrag {
+			path += "#" + frag
+		}
 	}
 	http.Redirect(w, r, path, http.StatusSeeOther)
 }

@@ -337,7 +337,14 @@ own.
    exports; an unmapped upload is held in memory for 30 minutes, bound to its
    uploader, so its outgoing lines never reach the database. Ignore rules and
    the minimum line amount arrive with RECON-03's setup controls.
-3. RECON-03: suggestions (pure function, heavily tested).
+3. RECON-03: suggestions (pure function, heavily tested). **Built
+   2026-10-01** (migration 0015; unreleased). Ignore rules and the minimum
+   line amount confirmed by the owner. Scoring: exact amount 100, otherwise up
+   to 60 falling to 0 at the tolerance; date up to 30 falling to 0 at the
+   window; name 40 (a word of three or more letters, whole-word, ignoring
+   case); transfer 10, other 5, cash 0. A tie is the connected group of
+   unused pairs sharing the top score. Adding an ignore rule also ignores
+   matching lines still open; removing one reopens nothing.
 4. RECON-04: confirm, delta posting, undo.
 5. RECON-05: record and ignore.
 6. Screens and an end-to-end walk on a phone width; a release.
@@ -348,6 +355,6 @@ None blocking. Answered 2026-10-01: dates are flagged only; match parameters are
 adjustable in the setup controls; bank lines are kept forever; the database
 records which file row matched which payment on which tab.
 
-One proposal to confirm while building: the **ignore rules** and **minimum line
-amount** in section 7 were added after the reference file showed monthly
-dividends arriving as deposits.
+The **ignore rules** and **minimum line amount** in section 7, added after the
+reference file showed monthly dividends arriving as deposits, were confirmed by
+the owner on 2026-10-01.

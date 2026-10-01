@@ -49,18 +49,34 @@ func (s *Server) allowReconcileUpload(userID int64) bool {
 }
 
 func (s *Server) getReconcile(w http.ResponseWriter, r *http.Request) {
-	imports, err := s.store.ListBankImports(r.Context(), 20)
+	ctx := r.Context()
+	imports, err := s.store.ListBankImports(ctx, 20)
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
-	formats, err := s.store.ListBankFormats(r.Context())
+	formats, err := s.store.ListBankFormats(ctx)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	set, err := s.store.GetReconcileSettings(ctx)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	rules, err := s.store.ListIgnoreRules(ctx)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	sugg, err := s.buildSuggestions(ctx, set.Settings)
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
 	s.render(w, r, http.StatusOK, views.Reconcile(s.page(w, r, "Reconciliation"), views.ReconcileData{
-		Imports: imports, Formats: formats,
+		Imports: imports, Formats: formats, Settings: set, Rules: rules, Suggestions: sugg,
 	}))
 }
 
@@ -145,6 +161,21 @@ func (s *Server) importWith(w http.ResponseWriter, r *http.Request, format store
 		imp.RefusedDetail += fmt.Sprintf("Row %d %s\n", ref.Row, ref.Reason)
 	}
 	lines := bankLinesFrom(format.ID, res.Incoming)
+	rules, err := s.store.ListIgnoreRules(r.Context())
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	// A line matching one of this layout's ignore rules is stored as ignored,
+	// with the rule as its reason (spec section 7).
+	for i := range lines {
+		for _, rule := range rules {
+			if rule.FormatID == format.ID && rule.Matches(lines[i].Description) {
+				lines[i].State, lines[i].IgnoreReason = store.BankLineIgnored, rule.Reason()
+				break
+			}
+		}
+	}
 	for _, l := range lines {
 		if imp.FirstDate == "" || l.PostedOn < imp.FirstDate {
 			imp.FirstDate = l.PostedOn

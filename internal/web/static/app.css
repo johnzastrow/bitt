@@ -1076,3 +1076,12 @@ tr.reversal td { color: var(--fg-muted); }
   border-radius: 6px;
   margin: var(--s1) 0 0;
 }
+
+/* A suggested match: the bank side above the recorded side. */
+.matchcard .matchside + .matchside { margin-top: var(--s2); padding-top: var(--s2); border-top: 1px dashed var(--border); }
+.matchwhy { color: var(--fg-muted); margin: var(--s2) 0 0; }
+.flag { color: var(--caution); font-weight: 600; }
+.tie { border: 1px solid var(--border); border-radius: var(--radius); padding: var(--s3); margin-top: var(--s3); }
+.tie h3 { margin-top: 0; }
+.tie .matchside + .matchside { margin-top: var(--s2); padding-top: var(--s2); border-top: 1px dashed var(--border); }
+details.card > summary { cursor: pointer; font-weight: 600; }

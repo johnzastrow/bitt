@@ -6,13 +6,41 @@ import (
 	"time"
 
 	"github.com/johnzastrow/bitt/internal/bankcsv"
+	"github.com/johnzastrow/bitt/internal/money"
+	"github.com/johnzastrow/bitt/internal/reconcile"
 	"github.com/johnzastrow/bitt/internal/store"
 )
 
 // ReconcileData is the Reconciliation screen (SPEC-BANK-RECONCILE section 10).
 type ReconcileData struct {
-	Imports []store.BankImport
-	Formats []store.BankFormat
+	Imports     []store.BankImport
+	Formats     []store.BankFormat
+	Settings    store.ReconcileSettings
+	Rules       []store.IgnoreRule
+	Suggestions Suggestions
+}
+
+// Suggestions is a matching run joined back to its rows (RECON-03).
+type Suggestions struct {
+	Matches           []SuggestedMatch
+	Ties              []SuggestedTie
+	UnmatchedLines    []store.OpenBankLine
+	Small             int // open lines below the minimum, not offered
+	UnmatchedPayments []store.PaymentCandidate
+}
+
+// SuggestedMatch is one proposed pair.
+type SuggestedMatch struct {
+	Line        store.OpenBankLine
+	Payment     store.PaymentCandidate
+	Suggestion  reconcile.Suggestion
+	DateFlagged bool
+}
+
+// SuggestedTie is a group that scored the same: a person picks.
+type SuggestedTie struct {
+	Lines    []store.OpenBankLine
+	Payments []store.PaymentCandidate
 }
 
 // Reconcile is the bank reconciliation home: upload, and the recent imports.
@@ -32,6 +60,7 @@ templ Reconcile(p Page, d ReconcileData) {
 				<button class="primary" type="submit">Upload</button>
 			</form>
 		</section>
+		@suggestionsSection(d.Suggestions, d.Settings)
 		<section class="card">
 			<h2>Recent imports</h2>
 			if len(d.Imports) == 0 {
@@ -50,6 +79,7 @@ templ Reconcile(p Page, d ReconcileData) {
 				</ul>
 			}
 		</section>
+		@setupSection(p, d)
 		if len(d.Formats) > 0 {
 			<section class="card">
 				<h2>Saved layouts</h2>
@@ -306,4 +336,233 @@ templ ReconcileImport(p Page, imp store.BankImport, lines []store.BankLine) {
 			}
 		</section>
 	}
+}
+
+// suggestionsSection is the open work: proposed matches, ties, and lines with
+// no candidate. Read-only until RECON-04 adds Confirm.
+templ suggestionsSection(sg Suggestions, set store.ReconcileSettings) {
+	<section class="card">
+		<h2>Suggested matches</h2>
+		if len(sg.Matches) == 0 && len(sg.Ties) == 0 {
+			<p class="muted">No suggestions. Import a statement, or widen the setup below.</p>
+		}
+		<ul class="banklines">
+			for _, m := range sg.Matches {
+				<li class="bankline matchcard">
+					@bankSide(m.Line)
+					@paymentSide(m.Payment)
+					<p class="small matchwhy">
+						if m.Suggestion.Exact {
+							Same amount.
+						} else {
+							Differs by { m.Suggestion.AmountDiff.Display() }.
+						}
+						if m.Suggestion.DateDiff != 0 {
+							{ daysApart(m.Suggestion.DateDiff) }.
+						}
+						if m.Suggestion.NameHit {
+							A name matches.
+						}
+					</p>
+					if m.DateFlagged {
+						<p class="small flag">Dates differ by more than { strconv.Itoa(set.DateFlagDays) } days; confirming will flag it.</p>
+					}
+					<p class="small"><strong>Confirming will post:</strong> { deltaText(m.Line.Amount, m.Payment.Amount) }</p>
+				</li>
+			}
+		</ul>
+		for _, t := range sg.Ties {
+			<div class="tie">
+				<h3>{ tieTitle(len(t.Lines), len(t.Payments)) }</h3>
+				<p class="muted small">These scored the same, so none is suggested. Pick by hand.</p>
+				for _, l := range t.Lines {
+					@bankSide(l)
+				}
+				for _, p := range t.Payments {
+					@paymentSide(p)
+				}
+			</div>
+		}
+	</section>
+	<section class="card">
+		<h2>Bank lines with no matching payment</h2>
+		if len(sg.UnmatchedLines) == 0 {
+			<p class="muted">None.</p>
+		} else {
+			<ul class="banklines">
+				for _, l := range sg.UnmatchedLines {
+					<li class="bankline">
+						@bankSide(l)
+					</li>
+				}
+			</ul>
+		}
+		if sg.Small > 0 {
+			<p class="muted small">{ strconv.Itoa(sg.Small) } open lines below the { set.MinLineAmount.Display() } minimum are not offered.</p>
+		}
+	</section>
+	if len(sg.UnmatchedPayments) > 0 {
+		<details class="card">
+			<summary>{ strconv.Itoa(len(sg.UnmatchedPayments)) } recorded payments with no bank line nearby</summary>
+			<p class="muted small">Cash, or a bank that has not been imported. For information only.</p>
+			<ul class="banklines">
+				for _, p := range sg.UnmatchedPayments {
+					<li class="bankline">
+						@paymentSide(p)
+					</li>
+				}
+			</ul>
+		</details>
+	}
+}
+
+templ bankSide(l store.OpenBankLine) {
+	<div class="matchside">
+		<div class="bankline-head">
+			<span class="pill">bank</span>
+			<span class="nowrap">{ bankDate(l.PostedOn) }</span>
+			<span class="amount">{ l.Amount.Display() }</span>
+		</div>
+		@bankText(l.Description, l.Account, l.Note, l.Reference)
+		<p class="muted small">Row { strconv.Itoa(l.Row) } of { l.FileName }</p>
+	</div>
+}
+
+templ paymentSide(p store.PaymentCandidate) {
+	<div class="matchside">
+		<div class="bankline-head">
+			<span class="pill pill-payment">recorded</span>
+			<span class="nowrap">{ p.EffectiveAt.Format("Jan 2, 2006") }</span>
+			<span class="amount">{ p.Amount.Display() }</span>
+		</div>
+		<p>
+			<a href={ tabURL(p.TabID) }>{ p.TabName }</a>
+			<span class="muted small">&middot; { string(p.Method) } &middot; recorded by { p.ActorName }</span>
+		</p>
+		if p.Memo != "" {
+			<p class="muted small banktext">{ p.Memo }</p>
+		}
+	</div>
+}
+
+func tabURL(id int64) templ.SafeURL {
+	return templ.SafeURL("/tabs/" + strconv.FormatInt(id, 10))
+}
+
+// deltaText says what confirming a match will post (spec section 8).
+func deltaText(bank, recorded money.Cents) string {
+	switch {
+	case bank > recorded:
+		return "a payment of " + (bank - recorded).Display() + " for the extra the bank received."
+	case bank < recorded:
+		return "a debit adjustment of " + (recorded - bank).Display() + ", recorded but not received."
+	}
+	return "nothing; the match is recorded."
+}
+
+func daysApart(diff int) string {
+	n := diff
+	if n < 0 {
+		n = -n
+	}
+	unit := " days"
+	if n == 1 {
+		unit = " day"
+	}
+	if diff > 0 {
+		return "Bank date " + strconv.Itoa(n) + unit + " later"
+	}
+	return "Bank date " + strconv.Itoa(n) + unit + " earlier"
+}
+
+func tieTitle(lines, payments int) string {
+	if lines == 1 {
+		return strconv.Itoa(payments) + " possible payments for one bank line"
+	}
+	if payments == 1 {
+		return strconv.Itoa(lines) + " possible bank lines for one payment"
+	}
+	return strconv.Itoa(lines) + " bank lines and " + strconv.Itoa(payments) + " payments that could pair either way"
+}
+
+// setupSection is the Reconciliation setup controls and ignore rules.
+templ setupSection(p Page, d ReconcileData) {
+	<section class="card" id="setup">
+		<h2>Setup</h2>
+		<form method="post" action="/admin/reconcile/settings" class="stack">
+			<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+			<label>
+				Date window, days either side (0 to 60)
+				<input type="number" name="date_window_days" min="0" max="60" required value={ strconv.Itoa(d.Settings.DateWindowDays) }/>
+			</label>
+			<label>
+				Amount tolerance, percent of the recorded amount (0 to 100)
+				<input type="number" name="tolerance_percent" min="0" max="100" required value={ strconv.Itoa(d.Settings.TolerancePercent) }/>
+			</label>
+			<label>
+				Tolerance at most, $ (0 to 10,000)
+				<input type="text" inputmode="decimal" name="tolerance_cap" required value={ d.Settings.ToleranceCap.String() }/>
+			</label>
+			<label>
+				Tolerance at least, $ (0 to 100)
+				<input type="text" inputmode="decimal" name="tolerance_floor" required value={ d.Settings.ToleranceFloor.String() }/>
+			</label>
+			<label>
+				Minimum line amount, $ (0 to 10,000)
+				<input type="text" inputmode="decimal" name="min_line_amount" required value={ d.Settings.MinLineAmount.String() }/>
+				<small>Smaller lines, such as monthly dividends, are not offered for matching.</small>
+			</label>
+			<label class="checkrow">
+				<input type="checkbox" name="use_names" value="1" checked?={ d.Settings.UseNames }/>
+				Use names: look for a participant&#39;s or the tab&#39;s name in the bank description
+			</label>
+			<label>
+				Flag dates that differ by more than, days (0 to 60)
+				<input type="number" name="date_flag_days" min="0" max="60" required value={ strconv.Itoa(d.Settings.DateFlagDays) }/>
+			</label>
+			<button class="primary" type="submit">Save setup</button>
+			if d.Settings.UpdatedBy != 0 {
+				<p class="muted small">Last changed { d.Settings.UpdatedAt.Format("Jan 2, 2006 15:04") } UTC by { d.Settings.UpdatedByName }.</p>
+			}
+		</form>
+		<h3>Ignore rules</h3>
+		<p class="muted small">A line whose description contains the text is imported as ignored, with the rule as the reason. Adding a rule also ignores matching lines still open.</p>
+		if len(d.Rules) > 0 {
+			<ul class="importlist">
+				for _, r := range d.Rules {
+					<li>
+						<span>{ r.FormatName }: description contains &ldquo;{ r.Contains }&rdquo;</span>
+						<form method="post" action={ ruleDeleteURL(r.ID) } class="inline">
+							<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+							<button class="link" type="submit">Remove</button>
+						</form>
+					</li>
+				}
+			</ul>
+		}
+		if len(d.Formats) == 0 {
+			<p class="muted small">Import a statement first; rules belong to a layout.</p>
+		} else {
+			<form method="post" action="/admin/reconcile/rules" class="stack">
+				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+				<label>
+					Layout
+					<select name="format_id">
+						for _, f := range d.Formats {
+							<option value={ strconv.FormatInt(f.ID, 10) }>{ f.Name }</option>
+						}
+					</select>
+				</label>
+				<label>
+					Description contains
+					<input type="text" name="contains" maxlength="120" required placeholder="Deposit Dividend"/>
+				</label>
+				<button type="submit">Add rule</button>
+			</form>
+		}
+	</section>
+}
+
+func ruleDeleteURL(id int64) templ.SafeURL {
+	return templ.SafeURL("/admin/reconcile/rules/" + strconv.FormatInt(id, 10) + "/delete")
 }

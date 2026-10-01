@@ -2,10 +2,12 @@ package store
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/johnzastrow/bitt/internal/bankcsv"
 	"github.com/johnzastrow/bitt/internal/money"
+	"github.com/johnzastrow/bitt/internal/reconcile"
 )
 
 // Bank reconciliation storage (SPEC-BANK-RECONCILE). These tables sit beside
@@ -104,4 +106,77 @@ type BankStore interface {
 	ListBankImports(ctx context.Context, limit int) ([]BankImport, error)
 	// ListBankLines returns an import's stored lines in file order.
 	ListBankLines(ctx context.Context, importID int64) ([]BankLine, error)
+
+	// GetReconcileSettings returns the setup controls and who last changed
+	// them (UpdatedBy 0 and a zero time when nobody has).
+	GetReconcileSettings(ctx context.Context) (ReconcileSettings, error)
+	// SetReconcileSettings replaces the setup controls. The caller validates;
+	// the schema refuses out-of-range values regardless.
+	SetReconcileSettings(ctx context.Context, s reconcile.Settings, by int64) error
+
+	ListIgnoreRules(ctx context.Context) ([]IgnoreRule, error)
+	// AddIgnoreRule saves a rule and, in the same transaction, marks the
+	// layout's still-open lines that match it as ignored with the rule as the
+	// reason, returning how many. ErrConflict for a rule already saved.
+	AddIgnoreRule(ctx context.Context, r IgnoreRule) (IgnoreRule, int, error)
+	// DeleteIgnoreRule removes a rule; lines it ignored stay ignored.
+	DeleteIgnoreRule(ctx context.Context, id int64) error
+
+	// ListOpenBankLines returns every line still open, with its layout, for
+	// suggestions.
+	ListOpenBankLines(ctx context.Context) ([]OpenBankLine, error)
+	// ListPaymentCandidates returns every unreversed payment entry, on any
+	// tab, effective in [from, to), with its tab's name and participants.
+	ListPaymentCandidates(ctx context.Context, from, to time.Time) ([]PaymentCandidate, error)
+}
+
+// ReconcileSettings is the stored setup with who changed it last.
+type ReconcileSettings struct {
+	reconcile.Settings
+	UpdatedBy     int64
+	UpdatedByName string
+	UpdatedAt     time.Time
+}
+
+// IgnoreRule marks a layout's lines whose description contains Contains
+// (ignoring case) as not BitTabby's, at import.
+type IgnoreRule struct {
+	ID         int64
+	FormatID   int64
+	FormatName string // read only
+	Contains   string
+	CreatedBy  int64
+	CreatedAt  time.Time
+}
+
+// Matches reports whether a description falls under the rule.
+func (r IgnoreRule) Matches(description string) bool {
+	return strings.Contains(strings.ToLower(description), strings.ToLower(r.Contains))
+}
+
+// Reason is what an ignored line records.
+func (r IgnoreRule) Reason() string {
+	return "description contains \"" + r.Contains + "\""
+}
+
+// OpenBankLine is an open line with the layout it came through.
+type OpenBankLine struct {
+	BankLine
+	FormatID int64
+	FileName string
+}
+
+// PaymentCandidate is a payment that a bank line might be.
+type PaymentCandidate struct {
+	Seq         int64
+	TabID       int64
+	TabName     string
+	Amount      money.Cents
+	Method      PaymentMethod
+	EffectiveAt time.Time
+	Memo        string
+	ActorUserID int64
+	ActorName   string
+	// Participants are the tab's people's display names.
+	Participants []string
 }

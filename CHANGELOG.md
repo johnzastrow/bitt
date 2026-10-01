@@ -48,6 +48,26 @@ instance switch that is off by default.
   export are recognised. Imports of one layout are serialised by a row lock,
   which on MariaDB turns concurrent overlapping uploads from deadlocks into a
   short queue.
+- **Suggested matches (RECON-03).** `internal/reconcile` pairs open bank
+  lines with unmatched, unreversed payments on any tab: within the date window
+  and the amount tolerance (percent of the recorded amount, held between a
+  floor and a cap), scored on amount, date, a participant's or the tab's name
+  in the description or note, and method. Pairs are assigned best first, each
+  line and payment once; when the top score is shared the group is shown as
+  "possible payments" for a person, never guessed. Each suggestion shows what
+  confirming will post (a payment for the extra, a debit adjustment for the
+  shortfall, or nothing) and whether the dates will be flagged. Read-only until
+  RECON-04 adds Confirm.
+- **Reconciliation setup**: date window, tolerance percent, cap and floor,
+  minimum line amount, use names, and the date flag, with the spec's
+  defaults. Out-of-range values are refused, by the form and again by the
+  schema; each change is logged with the before and after values and shown
+  with who made it.
+- **Ignore rules**, "description contains ..." per layout: matching lines are
+  imported as ignored with the rule as the reason, and adding a rule also
+  ignores matching lines still open. Lines below the minimum line amount (the
+  monthly dividends) are not offered and are counted rather than listed.
+- Migration 0015: `reconcile_settings`, `bank_ignore_rules`.
 - Migration 0014: `bank_formats`, `bank_imports`, `bank_lines`. Kept forever;
   nothing in them references or changes the ledger.
 
@@ -62,6 +82,9 @@ instance switch that is off by default.
   unbounded upload. The limit now goes on first; a test streams 64 MB and
   checks the server stops near the limit. The bank upload is built the same
   way.
+- **A flash message survives a redirect to a page anchor.** `redirectWith`
+  appended `?ok=...` after a `#fragment`, putting the message where the server
+  never sees it. The query now goes before the fragment.
 
 ## [1.7.0] - 2026-10-01 — Navigation moves under the avatar
 

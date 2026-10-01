@@ -18,7 +18,8 @@ form persistence), and a notifications run in August:
 | 1.5.0 | 2026-08-11 | Reminders rendered on Setup with live figures and their reach; "Send this to me now"; admins edit others' notification settings ([SPEC-REMINDER-CONTROL.md](SPEC-REMINDER-CONTROL.md)) |
 | 1.6.0 | 2026-08-11 | A dedicated payment screen `/tabs/{id}/pay` that reminder links open; login returns to the requested page (allowlisted) |
 | 1.7.0 | 2026-10-01 | Navigation moves under the avatar (RECON-00 of [SPEC-BANK-RECONCILE.md](SPEC-BANK-RECONCILE.md)); initials avatars sized correctly. Tagged; not deployed |
-| 1.8.0 | 2026-10-01 | Bank reconciliation ([SPEC-BANK-RECONCILE.md](SPEC-BANK-RECONCILE.md)); built with Go 1.26.8 (five reachable stdlib vulnerabilities in the 1.26.5 builds); migrations 0013-0018, rehearsed on a production copy. **Not yet tagged or deployed** |
+| 1.8.0 | 2026-10-01 | Bank reconciliation ([SPEC-BANK-RECONCILE.md](SPEC-BANK-RECONCILE.md)); built with Go 1.26.8 (five reachable stdlib vulnerabilities in the 1.26.5 builds); migrations 0013-0018, rehearsed on a production copy. Tagged and released; not deployed |
+| 1.8.1 | 2026-10-01 | Tab page: Record a payment in the top card, every section collapsed on open, Transfer the default method. Committed, **not yet tagged or deployed** |
 
 **Live in production at https://btabby.fluidgrid.site** — a
 Docker Compose stack on the `recipe.fluidgrid.site` host, on the host's MariaDB
@@ -33,7 +34,7 @@ the open threads.
 | Item | State |
 |------|-------|
 | Repository | `main`, public; local commits ahead of GitHub (bank reconciliation in progress) |
-| Version | 1.8.0 committed 2026-10-01, not yet tagged; 1.7.0 tagged; production runs 1.6.0 |
+| Version | 1.8.1 committed 2026-10-01, not yet tagged; 1.8.0 released (image published); production runs 1.6.0 |
 | Deployment | Live at https://btabby.fluidgrid.site. Verified 2026-10-01: container `bittabby` runs `ghcr.io/johnzastrow/bitt:1.6.0` (index `sha256:27ffbe1d…`, the image the v1.6.0 release built from `3796f6d`), healthy; host compose pins 1.6.0. **The repo's `compose.fluidgrid.yaml` still pins 1.2.0**: see Next action |
 | Scope | 54 requirements, 6 phases |
 | Stack | Go 1.26 + templ + htmx 2.0.4 (vendored); SQLite or MariaDB |

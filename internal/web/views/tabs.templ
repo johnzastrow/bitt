@@ -254,7 +254,7 @@ templ SettleConfirm(p Page, c TabCard) {
 				How was it paid?
 				<select name="method">
 					for _, m := range store.PaymentMethods() {
-						<option value={ string(m) }>{ m.Label() }</option>
+						<option value={ string(m) } selected?={ m == defaultMethod }>{ m.Label() }</option>
 					}
 				</select>
 			</label>
@@ -721,10 +721,53 @@ templ TabDetail(p Page, d TabDetailData) {
 			if d.JustInterest > 0 {
 				<p class="small posted">{ interestNote(d.JustInterest) }</p>
 			}
+			// The ordinary act, first on the page (owner's request, 2026-10-01).
+			if d.CanTransact {
+				<div class="heropay">
+					<h2>Record a payment</h2>
+						if d.SettleAmount > 0 {
+							<p class="muted small">
+								if d.IsProvider() {
+									Recording on the payee's behalf. The entry is attributed to you.
+								} else {
+									Money moves outside BitTabby -- this records that it happened.
+								}
+							</p>
+						} else {
+							<p class="muted small">Nothing is owed right now. A payment recorded anyway becomes a credit against future charges.</p>
+						}
+						<form method="post" action={ paymentAction(d.Tab.ID) } class="inlineform">
+							<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+							<input type="hidden" name="idempotency_key" value={ d.IdempotencyKey }/>
+							<input
+								type="text"
+								name="amount"
+								inputmode="decimal"
+								required
+								placeholder="0.00"
+								value={ prefill(d.SettleAmount) }
+								aria-label="Payment amount"
+							/>
+							<select name="method" aria-label="Payment method">
+								for _, m := range store.PaymentMethods() {
+									<option value={ string(m) } selected?={ m == defaultMethod }>{ m.Label() }</option>
+								}
+							</select>
+							<input type="text" name="memo" placeholder="Note (optional)" aria-label="Note"/>
+							<button class="primary" type="submit">Record payment</button>
+						</form>
+						if d.PeriodPayment > 0 && d.PeriodPayment < d.SettleAmount {
+							<p class="muted small">
+								Prefilled with one period&#39;s payment of { d.PeriodPayment.Display() }.
+								{ d.SettleAmount.Display() } is owed in total.
+							</p>
+						}
+				</div>
+			}
 		</section>
 		if d.IsPayoff() {
-			<section class="card">
-				<h2>Loan progress</h2>
+			<details class="card fold loanfold">
+				<summary><h2>Loan progress</h2> <span class="muted small">{ d.Payoff.Remaining.Display() } still owed</span></summary>
 				if d.Payoff.Principal <= 0 {
 					<p class="banner banner-error">
 						This loan has no amount yet, so progress cannot be tracked. Post the loan amount as a charge
@@ -790,7 +833,7 @@ templ TabDetail(p Page, d TabDetailData) {
 					</p>
 				}
 				}
-			</section>
+			</details>
 		}
 		if d.Upcoming.Show() {
 			<section class="card upcomingcard">
@@ -809,52 +852,12 @@ templ TabDetail(p Page, d TabDetailData) {
 				}
 			</section>
 		}
-		// Operational: the day-to-day actions and views, expanded by default.
-		<details class="group" open>
+		// Operational: the day-to-day actions and views. Collapsed when the page
+		// opens, like every section (owner's request, 2026-10-01): the balance and
+		// the payment form above are what a visit is usually for.
+		<details class="group">
 			<summary class="grouphead">Day to day</summary>
 			<div class="groupbody">
-				if d.CanTransact {
-					<section class="card">
-						<h2>Record a payment</h2>
-						if d.SettleAmount > 0 {
-							<p class="muted small">
-								if d.IsProvider() {
-									Recording on the payee's behalf. The entry is attributed to you.
-								} else {
-									Money moves outside BitTabby -- this records that it happened.
-								}
-							</p>
-						} else {
-							<p class="muted small">Nothing is owed right now. A payment recorded anyway becomes a credit against future charges.</p>
-						}
-						<form method="post" action={ paymentAction(d.Tab.ID) } class="inlineform">
-							<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
-							<input type="hidden" name="idempotency_key" value={ d.IdempotencyKey }/>
-							<input
-								type="text"
-								name="amount"
-								inputmode="decimal"
-								required
-								placeholder="0.00"
-								value={ prefill(d.SettleAmount) }
-								aria-label="Payment amount"
-							/>
-							<select name="method" aria-label="Payment method">
-								for _, m := range store.PaymentMethods() {
-									<option value={ string(m) }>{ m.Label() }</option>
-								}
-							</select>
-							<input type="text" name="memo" placeholder="Note (optional)" aria-label="Note"/>
-							<button class="primary" type="submit">Record payment</button>
-						</form>
-						if d.PeriodPayment > 0 && d.PeriodPayment < d.SettleAmount {
-							<p class="muted small">
-								Prefilled with one period&#39;s payment of { d.PeriodPayment.Display() }.
-								{ d.SettleAmount.Display() } is owed in total.
-							</p>
-						}
-					</section>
-				}
 				if d.IsProvider() {
 					<section class="card">
 						<h2>Post a charge</h2>
@@ -2149,7 +2152,7 @@ templ TabPay(p Page, d TabPayData) {
 							Method
 							<select name="method" aria-label="Payment method">
 								for _, m := range d.Methods {
-									<option value={ string(m) }>{ m.Label() }</option>
+									<option value={ string(m) } selected?={ m == defaultMethod }>{ m.Label() }</option>
 								}
 							</select>
 						</label>
@@ -2243,3 +2246,7 @@ templ tabReconSection(r *TabRecon) {
 		<p class="muted small">Shown to administrators who may reconcile. Others on the tab see only the bank date and amount beside each matched payment.</p>
 	</section>
 }
+
+// defaultMethod is preselected in every payment form: most payments arrive by
+// bank transfer (owner's request, 2026-10-01).
+const defaultMethod = store.MethodTransfer

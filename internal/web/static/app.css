@@ -1270,3 +1270,9 @@ table.grid h3 { margin-top: var(--s4); }
 .bankmark.aside { background: var(--chalk-sunk); color: var(--fg-muted); }
 .bankmark.aside::before { content: "\2014"; background: var(--slate-soft); }
 .historyfilter { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin: 0 0 var(--s3); }
+
+/* Record a payment, in the tab's top card. */
+.heropay { margin-top: var(--s4); padding-top: var(--s4); border-top: 1px solid var(--border); }
+.heropay h2 { margin-top: 0; font-size: var(--t-lg); }
+.loanfold > summary { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--s2); cursor: pointer; }
+.loanfold > summary h2 { margin: 0; }

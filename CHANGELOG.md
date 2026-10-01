@@ -7,6 +7,21 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [1.8.1] - 2026-10-01 — The tab page opens on what a visit is for
+
+### Changed
+- **Record a payment is in the tab's top card**, under the balance, rather
+  than inside "Day to day".
+- **Every section of a tab page opens collapsed** -- Day to day, Setup &
+  configuration, and a Payoff tab's Loan progress (its heading still says what
+  is owed). The balance and the payment form are what is on screen.
+- **Payments default to Transfer**, on the tab page, the payment screen a
+  reminder links to, and the one-tap settle confirmation.
+
+### Fixed
+- `TestConcurrentConfirms` could fail depending on which payment won its race
+  (CI on v1.8.0); every racing payment now differs from the line.
+
 ## [1.8.0] - 2026-10-01 — Bank reconciliation
 
 Built from [SPEC-BANK-RECONCILE.md](docs/planning/SPEC-BANK-RECONCILE.md).

@@ -48,6 +48,33 @@ jobs:
       - name: Build
         run: CGO_ENABLED=0 go build -trimpath -o /dev/null ./cmd/bittabby
 
+  # Known vulnerabilities, in our code and in the Go standard library it calls.
+  # The scan uses the Go version from go.mod, which is the one the image is
+  # built with -- and the first step fails if the Dockerfile drifts from it, so
+  # a binary cannot ship on an older, vulnerable toolchain while CI scans a
+  # newer one. (v1.8.0: production was running 1.26.5 with five reachable
+  # standard-library vulnerabilities fixed in 1.26.6.)
+  vulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Dockerfile builds with the go.mod toolchain
+        run: |
+          want=$(go mod edit -json | jq -r .Go)
+          got=$(sed -nE 's/^FROM golang:([0-9.]+)-alpine.*/\1/p' Dockerfile)
+          if [ "$want" != "$got" ]; then
+            echo "::error::Dockerfile builds with Go $got but go.mod says $want"
+            exit 1
+          fi
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
   # DEPLOY-03: the same store suite, run against a real MariaDB. It is a separate
   # job because it needs a service container the SQLite job has no use for, and
   # because a MariaDB outage should read as "the MariaDB job failed" rather than

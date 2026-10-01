@@ -39,6 +39,7 @@ CSVs." Available to administrators only, with new controls.
 | Dates | **Flag only.** A date difference is shown and stored on the match; it never changes an entry. |
 | Match parameters | **Adjustable** in the Reconciliation setup controls (section 7). |
 | Retention | **Bank lines are kept forever**, matched, recorded and ignored alike; no purge. |
+| Notes | **A note in the CSV is kept** verbatim with its line and shown wherever the line is; copying it into a ledger entry is a per-entry choice (section 8). |
 
 ## 3. RECON-01 — The "Can reconcile" control
 
@@ -82,7 +83,7 @@ stored.
 | `Account` | `PRIMARY SHARE` | optional **account** column: one export can cover several accounts; stored per line and shown |
 | `Date` | `9/1/2026` | month/day/year, no zero padding |
 | `Description` | `"Deposit Transfer` + newline + sender details` | **two lines inside quotes**; both kept; the second line often names the sender, which feeds name matching |
-| `Note` | sometimes present | optional **note** column, kept, used in matching text |
+| `Note` | sometimes present | optional **note** column: **kept verbatim** (line breaks included) on every stored line that has one, shown on every screen that shows the line, and used in matching text |
 | `Check #` | usually empty | optional **reference** column |
 | `Amount` | `$150.00`, `"$3,239.01"`, `($336.41)` | `$` and thousands separators stripped; **parentheses mean negative** (money out) |
 | `Balance` | `"$3,239.01"` | ignored |
@@ -204,6 +205,13 @@ Shown per match: the bank line (date, amount, description), the recorded payment
   stands.
 - Each posted entry's idempotency key is derived from the match
   (`recon:<match id>`), so confirming twice is a replay, not a second entry.
+- **The bank note** (if the line has one) is shown on the card. A checkbox
+  **"Include the bank note in the entry"**, off by default, appends it to the
+  memo of the entry being posted ("Bank note: ..."). Off by default because a
+  ledger memo is permanent and visible to everyone on the tab, while a bank note
+  may be the administrator's private annotation. It applies only when an entry is
+  posted (B ≠ R, or recording an unmatched line); with B = R the note stays on the
+  match record only.
 - "Confirm all exact matches" confirms every suggestion where B = R in one
   action.
 - **Undo** a match: reverses its delta entry (if any) with the normal reversal,
@@ -213,7 +221,8 @@ Shown per match: the bank line (date, amount, description), the recorded payment
 
 - **Record as a payment:** choose the tab (searched by name or participant);
   the form is prefilled with the bank amount, date and description, method
-  `transfer`. Posting it marks the line `recorded` and links the entry.
+  `transfer`, and offers the same "Include the bank note" checkbox. Posting it
+  marks the line `recorded` and links the entry.
 - **Not BitTabby:** marks the line `ignored`, with an optional note; it never
   shows again unless un-ignored.
 - **Unmatched payments** (recorded, with no bank line in the imported range) are
@@ -289,7 +298,10 @@ own.
   floor and cap, minimum amount, names on/off, date flag), and a change is
   logged; out-of-range values are refused.
 - For any tab, its reconciliation history lists each matched payment with the
-  file name, row number and original row; for any file, each row's outcome. An
+  file name, row number, original row and **bank note**; for any file, each row's
+  outcome.
+- A note survives import unchanged (multi-line included); it reaches a ledger
+  memo only when the checkbox is ticked, and never otherwise. An
   undone match still appears, marked undone.
 - A date flag appears when the dates differ by more than the setting, or straddle
   one of the tab's due dates; no entry's date changes.

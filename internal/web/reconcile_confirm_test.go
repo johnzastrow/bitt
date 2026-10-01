@@ -230,16 +230,6 @@ func TestUndoOnTheWeb(t *testing.T) {
 	h.confirmPair(t, lineByRow(t, h, 4).ID, ins.Seq, false)
 	ms, _ := h.db.ListBankMatches(t.Context(), store.BankMatchFilter{})
 
-	// The delta cannot be undone from the tab; nor can the matched payment.
-	for _, seq := range []int64{*ms[0].DeltaEntrySeq, ins.Seq} {
-		_, body := h.post(tabPath(ins.TabID)+"/entries/"+itoa(seq)+"/undo", url.Values{
-			"csrf_token": {h.csrfToken(tabPath(ins.TabID))},
-		})
-		if !strings.Contains(body, "part of a bank reconciliation") {
-			t.Errorf("tab undo of entry %d not refused: %s", seq, truncate(body))
-		}
-	}
-
 	_, body := h.post("/admin/reconcile/matches/"+itoa(ms[0].ID)+"/undo", url.Values{
 		"csrf_token": {h.csrfToken("/admin/reconcile")},
 	})
@@ -249,11 +239,13 @@ func TestUndoOnTheWeb(t *testing.T) {
 	if tabBalance(t, h, ins.TabID) != before {
 		t.Errorf("undo left the balance at %s, want %s", tabBalance(t, h, ins.TabID), before)
 	}
-	// The undone match is still listed, marked; the pair is suggested again.
+	// The unmade match is still listed, with who, when and why; the pair is
+	// suggested again.
 	_, body = h.get("/admin/reconcile")
 	recent := section(t, body, "<h2>Recent matches</h2>")
-	if !strings.Contains(recent, ">undone<") || strings.Contains(recent, "Undo this match") {
-		t.Error("the undone match is not shown as undone")
+	if !strings.Contains(recent, ">unmade<") || strings.Contains(recent, "Undo this match") ||
+		!strings.Contains(recent, "by Jane Provider: undone from Reconciliation.") {
+		t.Errorf("the unmade match is not shown with who and why: %s", recent)
 	}
 	if !strings.Contains(section(t, body, "<h2>Suggested matches</h2>"), "Insurance") {
 		t.Error("the pair is not suggested again after undo")
@@ -458,5 +450,36 @@ func TestConfirmRoutesAreGuarded(t *testing.T) {
 	}
 	if ms, _ := h.db.ListBankMatches(t.Context(), store.BankMatchFilter{}); len(ms) != 0 {
 		t.Error("a refused request matched something")
+	}
+}
+
+// Undoing a matched payment on its tab unmakes the match (decided
+// 2026-10-01): the payment and its difference are reversed together, the
+// line reopens, and the match records who did it, when and why.
+func TestTabUndoUnmakesOnTheWeb(t *testing.T) {
+	h := scenario(t)
+	ins := paymentOn(t, h, "Insurance", 119000)
+	beforePay := tabBalance(t, h, ins.TabID) - ins.Amount
+	h.confirmPair(t, lineByRow(t, h, 4).ID, ins.Seq, false)
+
+	// Alex recorded the payment, so Alex may undo it on the tab.
+	h.loginAs("alex@example.com", "a-long-enough-password")
+	_, body := h.post(tabPath(ins.TabID)+"/entries/"+itoa(ins.Seq)+"/undo", url.Values{
+		"csrf_token": {h.csrfToken(tabPath(ins.TabID))},
+	})
+	if !strings.Contains(body, "Undone.") {
+		t.Fatalf("tab undo: %s", truncate(body))
+	}
+	if got := tabBalance(t, h, ins.TabID); got != beforePay {
+		t.Errorf("balance %s, want %s: payment and difference both reversed", got, beforePay)
+	}
+	ms, _ := h.db.ListBankMatches(t.Context(), store.BankMatchFilter{TabID: ins.TabID})
+	if len(ms) != 1 || ms[0].Active() || ms[0].UndoneByName != "Alex Other" ||
+		ms[0].UndoReason != "the payment was undone on its tab" {
+		t.Errorf("match = %+v", ms)
+	}
+	h.loginAs("jane@example.com", "correct-horse-battery")
+	if lineByRow(t, h, 4).State != store.BankLineOpen {
+		t.Error("the line did not reopen")
 	}
 }

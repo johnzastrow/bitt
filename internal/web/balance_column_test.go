@@ -146,3 +146,41 @@ func cells(re *regexp.Regexp, body string) []string {
 	}
 	return out
 }
+
+// A payee sees the provider's entries as standing, not struck through: the
+// row style follows whether the entry was undone, not whether this viewer may
+// undo it. Before the fix every entry a payee had not recorded looked reversed.
+func TestHistoryStrikesOnlyReversedEntries(t *testing.T) {
+	h := newHarness(t)
+	h.completeSetup()
+	tabID := h.createPlainTab("Rent")
+	sam := h.addUser("sam@example.com", "Sam Payee", false)
+	if err := h.db.AddParticipant(t.Context(), store.Participant{TabID: tabID, UserID: sam.ID, Role: store.RolePayee}); err != nil {
+		t.Fatal(err)
+	}
+	for _, amt := range []string{"400.00", "50.00"} {
+		h.post(tabPath(tabID)+"/charges", url.Values{
+			"csrf_token": {h.csrfToken(tabPath(tabID))}, "amount": {amt}, "memo": {"Charge"},
+		})
+	}
+	// One charge undone by the provider.
+	entries, _ := h.db.ListEntries(t.Context(), tabID)
+	var undo int64
+	for _, e := range entries {
+		if e.Amount == -5000 {
+			undo = e.Seq
+		}
+	}
+	h.post(tabPath(tabID)+"/entries/"+itoa(undo)+"/undo", url.Values{"csrf_token": {h.csrfToken(tabPath(tabID))}})
+
+	for _, who := range []struct{ email, pw string }{
+		{"jane@example.com", "correct-horse-battery"},
+		{"sam@example.com", "a-long-enough-password"},
+	} {
+		h.loginAs(who.email, who.pw)
+		_, body := h.get(tabPath(tabID))
+		if n := strings.Count(body, `<tr class="reversed">`); n != 1 {
+			t.Errorf("%s sees %d struck-through rows, want only the undone charge", who.email, n)
+		}
+	}
+}

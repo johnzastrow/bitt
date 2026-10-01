@@ -19,11 +19,18 @@ import (
 // here, narrowed to entries backed by a bank line and tied to a match row in
 // the same transaction; the caller (the web layer) checks the permission.
 
-type matchStore interface {
+// MatchStore is the store's reconciliation half. It is exported so the store
+// package can assert at compile time that it satisfies it: New detects it with
+// a type assertion, and a method renamed on one side only would otherwise
+// leave the ledger silently without it.
+type MatchStore interface {
 	ConfirmBankMatch(ctx context.Context, m store.NewBankMatch, delta *store.NewEntry) (store.BankMatch, bool, error)
-	UndoBankMatch(ctx context.Context, matchID, by int64, reversal *store.NewEntry) error
+	UnmakeBankMatch(ctx context.Context, u store.UnmakeMatch) ([]store.Entry, error)
 	GetBankMatch(ctx context.Context, id int64) (store.BankMatch, error)
-	EntryHasActiveMatch(ctx context.Context, seq int64) (bool, error)
+	ReconLinkForEntry(ctx context.Context, seq int64) (store.ReconLink, error)
+	GetBankLine(ctx context.Context, id int64) (store.OpenBankLine, error)
+	RecordBankLine(ctx context.Context, lineID, by int64, e store.NewEntry) (store.Entry, error)
+	UnrecordBankLine(ctx context.Context, lineID, by int64, reversal store.NewEntry, note string) (store.Entry, error)
 }
 
 // ErrNoMatchStore means the store cannot record matches; fail closed.
@@ -103,34 +110,158 @@ func (s *Service) withNote(memo string, c Confirmation) string {
 	return memo + "\nBank note: " + c.Note
 }
 
-// UndoMatch undoes a standing match: its delta (if any) is reversed with the
-// normal reversal, the match is marked undone, and the line and payment are
-// unmatched again -- one transaction.
+// Reasons recorded on an unmade match.
+const (
+	UnmadeFromReconciliation = "undone from Reconciliation"
+	UnmadePaymentUndone      = "the payment was undone on its tab"
+	UnmadeDifferenceUndone   = "the difference was undone on its tab"
+)
+
+// UndoMatch unmakes a standing match from the Reconciliation screen: its
+// difference (if any) is reversed, the match is marked undone with who, when
+// and why, and the line and payment are unmatched again -- one transaction.
 func (s *Service) UndoMatch(ctx context.Context, matchID, actorUserID int64) error {
+	_, err := s.unmake(ctx, matchID, actorUserID, UnmadeFromReconciliation, nil)
+	return err
+}
+
+// unmake reverses a match's difference, plus extra (the payment's own
+// reversal, when the payment is what was undone), in one transaction with
+// marking the match undone. It returns the posted reversals, extra first.
+func (s *Service) unmake(ctx context.Context, matchID, actorUserID int64, reason string, extra *store.NewEntry) ([]store.Entry, error) {
 	if s.matches == nil {
-		return ErrNoMatchStore
+		return nil, ErrNoMatchStore
 	}
 	m, err := s.matches.GetBankMatch(ctx, matchID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !m.Active() {
-		return store.ErrMatchUndone
+		return nil, store.ErrMatchUndone
 	}
-	var reversal *store.NewEntry
+	var reversals []store.NewEntry
+	if extra != nil {
+		reversals = append(reversals, *extra)
+	}
 	if m.DeltaEntrySeq != nil {
 		delta, err := s.store.GetEntry(ctx, *m.DeltaEntrySeq)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		seq := delta.Seq
-		reversal = &store.NewEntry{
+		reversals = append(reversals, store.NewEntry{
 			TabID: delta.TabID, Kind: store.KindReversal, Amount: delta.Amount.Neg(),
-			Memo:        fmt.Sprintf("Bank reconciliation undone (match %d)", m.ID),
+			Memo:        fmt.Sprintf("Bank reconciliation undone (match %d): %s", m.ID, reason),
 			EffectiveAt: s.now(), ActorUserID: actorUserID, ReversesSeq: &seq, Method: store.MethodNone,
-		}
+			IdempotencyKey: fmt.Sprintf("%s:undo:%d", store.ReconKeyPrefix, m.ID),
+		})
 	}
-	err = s.matches.UndoBankMatch(ctx, matchID, actorUserID, reversal)
+	posted, err := s.matches.UnmakeBankMatch(ctx, store.UnmakeMatch{
+		MatchID: matchID, By: actorUserID, Reason: reason, Reversals: reversals,
+	})
+	if errors.Is(err, store.ErrConflict) {
+		return nil, ErrAlreadyReversed
+	}
+	return posted, err
+}
+
+// reverseReconciled handles a tab-page undo of an entry reconciliation ties
+// to (decided 2026-10-01): rather than refusing, it unmakes. Undoing a matched
+// payment reverses it and unmakes its match; undoing a difference unmakes its
+// match; undoing a payment recorded from a bank line reopens the line. Each is
+// one transaction, recorded with who and when. handled is false when the
+// entry has no tie.
+func (s *Service) reverseReconciled(ctx context.Context, original store.Entry, reversal store.NewEntry) (store.Entry, bool, error) {
+	if s.matches == nil {
+		return store.Entry{}, false, nil
+	}
+	link, err := s.matches.ReconLinkForEntry(ctx, original.Seq)
+	if err != nil {
+		return store.Entry{}, true, err
+	}
+	switch link.Kind {
+	case store.ReconMatchedPayment:
+		posted, err := s.unmake(ctx, link.MatchID, reversal.ActorUserID, UnmadePaymentUndone, &reversal)
+		if errors.Is(err, store.ErrMatchUndone) {
+			// Unmade by someone else since the lookup: the payment is now an
+			// ordinary one, and is reversed the ordinary way.
+			return store.Entry{}, false, nil
+		}
+		if err != nil {
+			return store.Entry{}, true, err
+		}
+		return posted[0], true, nil
+	case store.ReconDelta:
+		posted, err := s.unmake(ctx, link.MatchID, reversal.ActorUserID, UnmadeDifferenceUndone, nil)
+		if err != nil {
+			return store.Entry{}, true, err
+		}
+		return posted[0], true, nil
+	case store.ReconRecordedLine:
+		e, err := s.matches.UnrecordBankLine(ctx, link.LineID, reversal.ActorUserID, reversal, "undone on the tab")
+		if errors.Is(err, store.ErrConflict) {
+			err = ErrAlreadyReversed
+		}
+		return e, true, err
+	}
+	return store.Entry{}, false, nil
+}
+
+// RecordLine posts a payment recorded from an open bank line (RECON-05): the
+// bank amount, on the bank date, method as given (transfer by default), and
+// marks the line recorded -- one transaction. Like a delta, this is an AUTH-05
+// exception backed by a bank line; the caller checks Can reconcile.
+func (s *Service) RecordLine(ctx context.Context, lineID, tabID, actorUserID int64, method store.PaymentMethod,
+	memo string, at time.Time) (store.Entry, error) {
+	if s.matches == nil {
+		return store.Entry{}, ErrNoMatchStore
+	}
+	if !method.Valid() || method == store.MethodNone {
+		return store.Entry{}, fmt.Errorf("%w: %q", ErrBadMethod, method)
+	}
+	line, err := s.matches.GetBankLine(ctx, lineID)
+	if err != nil {
+		return store.Entry{}, err
+	}
+	key, err := NewIdempotencyKey()
+	if err != nil {
+		return store.Entry{}, err
+	}
+	return s.matches.RecordBankLine(ctx, lineID, actorUserID, store.NewEntry{
+		TabID: tabID, Kind: store.KindPayment, Amount: line.Amount, Method: method, Memo: memo,
+		EffectiveAt: at, ActorUserID: actorUserID,
+		IdempotencyKey: fmt.Sprintf("%s:line:%d:%s", store.ReconKeyPrefix, lineID, key),
+	})
+}
+
+// UnrecordLine reverses the payment a line was recorded as, from the
+// Reconciliation screen, and reopens the line.
+func (s *Service) UnrecordLine(ctx context.Context, lineID, actorUserID int64) error {
+	if s.matches == nil {
+		return ErrNoMatchStore
+	}
+	line, err := s.matches.GetBankLine(ctx, lineID)
+	if err != nil {
+		return err
+	}
+	if line.State != store.BankLineRecorded || line.RecordedEntrySeq == nil {
+		return store.ErrLineNotOpen
+	}
+	e, err := s.store.GetEntry(ctx, *line.RecordedEntrySeq)
+	if err != nil {
+		return err
+	}
+	seq := e.Seq
+	key, err := NewIdempotencyKey()
+	if err != nil {
+		return err
+	}
+	_, err = s.matches.UnrecordBankLine(ctx, lineID, actorUserID, store.NewEntry{
+		TabID: e.TabID, Kind: store.KindReversal, Amount: e.Amount.Neg(),
+		Memo:        "Bank line unrecorded from Reconciliation",
+		EffectiveAt: s.now(), ActorUserID: actorUserID, ReversesSeq: &seq, Method: store.MethodNone,
+		IdempotencyKey: fmt.Sprintf("%s:unrecord:%d:%s", store.ReconKeyPrefix, lineID, key),
+	}, "undone from Reconciliation")
 	if errors.Is(err, store.ErrConflict) {
 		return ErrAlreadyReversed
 	}

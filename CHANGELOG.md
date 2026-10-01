@@ -90,6 +90,26 @@ instance switch that is off by default.
 - The Reconciliation page uses more of a desktop screen, showing the bank and
   recorded sides of a match next to each other; a phone is unaffected.
 - Migration 0016: `bank_matches`.
+- **Lines with no matching payment (RECON-05).** Each bank line has its own
+  page with its history. An open line can be **recorded as a payment** on a
+  chosen tab (tabs whose name or people appear in the line listed first): the
+  bank amount on the bank date, transfer or other, a memo prefilled from the
+  line, and the same opt-in bank-note checkbox. It can also be marked **Not
+  BitTabby** with an optional note, and **un-ignored** later, including a line
+  an ignore rule caught. A recording can be undone from the line page.
+- **Manual changes unmake matches (decided 2026-10-01).** Undoing, on its tab,
+  a matched payment reverses it and unmakes the match with its difference;
+  undoing the difference unmakes the match; undoing a payment recorded from a
+  line reopens the line. Each is one transaction. Earlier in this release such
+  undos were refused.
+- **Who and when, for every reconciliation change.** A match records who
+  confirmed it and when, and once unmade, who unmade it, when and why ("undone
+  from Reconciliation", "the payment was undone on its tab", "the difference
+  was undone on its tab"). Recording, unrecording, ignoring and un-ignoring a
+  line each write a `bank_line_events` row with who and when, shown on the
+  line's page.
+- Migration 0017: `bank_line_events`; `bank_lines.recorded_entry_seq` (tied to
+  the `recorded` state by a CHECK) and `ignore_note`; `bank_matches.undo_reason`.
 - Migration 0014: `bank_formats`, `bank_imports`, `bank_lines`. Kept forever;
   nothing in them references or changes the ledger.
 
@@ -111,6 +131,15 @@ instance switch that is off by default.
   (a fieldset's default `min-width: min-content`); the People accounts table hid
   its controls behind a sideways scroll on a phone (now one card per account);
   pills could wrap mid-label.
+- **A payee no longer sees the provider's entries struck through.** The tab
+  history styled a row "reversed" whenever the viewer could not undo it, and
+  that folds in permission: a payee saw every charge, scheduled charge and fee
+  they had not recorded struck through, as did an administrator overseeing a
+  tab. The style now follows whether the entry was actually undone. (Present
+  since per-role undo; found by the UI sweep.)
+- **Tab history reads on a phone.** Five columns could not fit 360 px once a
+  memo was long; on a phone each entry is now a compact block (date, what and
+  amount, then who, the running balance and Undo).
 - **A flash message survives a redirect to a page anchor.** `redirectWith`
   appended `?ok=...` after a `#fragment`, putting the message where the server
   never sees it. The query now goes before the fragment.

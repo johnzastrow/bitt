@@ -83,6 +83,9 @@ type BankLine struct {
 	Fingerprint  string
 	State        BankLineState
 	IgnoreReason string
+	IgnoreNote   string
+	// RecordedEntrySeq is the payment the line was recorded as, while it is.
+	RecordedEntrySeq *int64
 }
 
 // BankStore covers bank statement imports.
@@ -142,16 +145,72 @@ type BankStore interface {
 	// replayed=true and posts nothing. ErrLineNotOpen and ErrPaymentMatched
 	// report the line or payment taken by something else.
 	ConfirmBankMatch(ctx context.Context, m NewBankMatch, delta *NewEntry) (BankMatch, bool, error)
-	// UndoBankMatch marks a standing match undone, posts the reversal of its
-	// delta (built by the ledger; nil when there was none), and reopens the
-	// line, in one transaction. ErrMatchUndone when it was already undone.
-	UndoBankMatch(ctx context.Context, matchID, by int64, reversal *NewEntry) error
+	// UnmakeBankMatch marks a standing match undone with who, when and why,
+	// posts the reversals the ledger built (the difference's, and the
+	// payment's when the payment itself was undone on its tab), and reopens
+	// the line, in one transaction. ErrMatchUndone when it was already undone.
+	UnmakeBankMatch(ctx context.Context, u UnmakeMatch) ([]Entry, error)
+	// ReconLinkForEntry reports what reconciliation ties to an entry: a
+	// standing match it is the payment or the difference of, or a bank line
+	// it was recorded from.
+	ReconLinkForEntry(ctx context.Context, seq int64) (ReconLink, error)
+
+	// RecordBankLine posts a payment recorded from an open line and marks the
+	// line recorded, in one transaction (RECON-05). ErrLineNotOpen otherwise.
+	RecordBankLine(ctx context.Context, lineID, by int64, e NewEntry) (Entry, error)
+	// UnrecordBankLine reverses the payment a line was recorded as and reopens
+	// the line, in one transaction.
+	UnrecordBankLine(ctx context.Context, lineID, by int64, reversal NewEntry, note string) (Entry, error)
+	// IgnoreBankLine marks an open line not BitTabby's; UnignoreBankLine opens
+	// an ignored one again. Both record who and when.
+	IgnoreBankLine(ctx context.Context, lineID, by int64, note string) error
+	UnignoreBankLine(ctx context.Context, lineID, by int64) error
+	// ListBankLineEvents returns what was done to a line, oldest first.
+	ListBankLineEvents(ctx context.Context, lineID int64) ([]BankLineEvent, error)
 	GetBankMatch(ctx context.Context, id int64) (BankMatch, error)
 	// EntryHasActiveMatch reports whether a payment has a standing match.
 	EntryHasActiveMatch(ctx context.Context, seq int64) (bool, error)
 	// ListBankMatches returns matches newest first, undone ones included,
 	// filtered by tab or import when the id is non-zero.
 	ListBankMatches(ctx context.Context, f BankMatchFilter) ([]BankMatch, error)
+}
+
+// UnmakeMatch says which match to unmake, by whom and why, and the reversals
+// to post with it (keys set by the ledger).
+type UnmakeMatch struct {
+	MatchID   int64
+	By        int64
+	Reason    string
+	Reversals []NewEntry
+}
+
+// ReconLinkKind is what an entry is to reconciliation.
+type ReconLinkKind string
+
+const (
+	ReconNone           ReconLinkKind = ""
+	ReconMatchedPayment ReconLinkKind = "matched-payment"
+	ReconDelta          ReconLinkKind = "delta"
+	ReconRecordedLine   ReconLinkKind = "recorded-line"
+)
+
+// ReconLink is an entry's tie to reconciliation, if any.
+type ReconLink struct {
+	Kind    ReconLinkKind
+	MatchID int64 // for a matched payment or a difference
+	LineID  int64 // for a payment recorded from a line
+}
+
+// BankLineEvent is one thing done to a line, with who and when.
+type BankLineEvent struct {
+	ID       int64
+	LineID   int64
+	Action   string // recorded, unrecorded, ignored, unignored
+	EntrySeq *int64
+	Note     string
+	By       int64
+	ByName   string
+	At       time.Time
 }
 
 // Reconciliation errors.
@@ -194,6 +253,8 @@ type BankMatch struct {
 	ConfirmedAt   time.Time
 	UndoneAt      *time.Time
 	UndoneBy      int64
+	UndoReason    string
+	UndoneByName  string
 
 	// Joined for display.
 	ConfirmedByName string

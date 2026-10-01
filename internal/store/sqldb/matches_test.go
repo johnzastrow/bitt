@@ -340,34 +340,134 @@ func TestCandidatesExcludeMatchedAndDeltas(t *testing.T) {
 	}
 }
 
-// Reconciliation's entries and matched payments cannot be undone from a tab;
-// only by undoing the match.
-func TestReverseRefusesReconciledEntries(t *testing.T) {
-	f := newReconFixture(t)
-	ctx := context.Background()
-	f.addLines(t, map[string]money.Cents{"a": 6000})
-	p := f.pay(t, "p", 5000)
-	m, _, err := f.confirm("a", p, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := f.led.Reverse(ctx, *m.DeltaEntrySeq, f.payer.ID, "", ""); !errors.Is(err, ledger.ErrReconciled) {
-		t.Errorf("reversing the delta: %v", err)
-	}
-	if _, _, err := f.led.Reverse(ctx, p.Seq, f.payer.ID, "", ""); !errors.Is(err, ledger.ErrReconciled) {
-		t.Errorf("reversing a matched payment: %v", err)
-	}
-	delta, _ := f.db.GetEntry(ctx, *m.DeltaEntrySeq)
-	if ledger.CanUndo(delta, nil) {
-		t.Error("CanUndo offers the delta")
-	}
-	// After undoing the match, the payment is the payer's to undo again.
-	if err := f.led.UndoMatch(ctx, m.ID, f.admin.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := f.led.Reverse(ctx, p.Seq, f.payer.ID, "", ""); err != nil {
-		t.Errorf("reversing an unmatched payment: %v", err)
-	}
+// A manual undo on the tab unmakes the match (decided 2026-10-01), in one
+// transaction, recording who, when and why; the balance ends exactly as if
+// neither the payment nor the match had happened.
+func TestTabUndoUnmakesTheMatch(t *testing.T) {
+	t.Run("undo the matched payment", func(t *testing.T) {
+		f := newReconFixture(t)
+		ctx := context.Background()
+		f.addLines(t, map[string]money.Cents{"a": 6000})
+		start := f.balance(t)
+		p := f.pay(t, "p", 5000)
+		m, _, err := f.confirm("a", p, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rev, _, err := f.led.Reverse(ctx, p.Seq, f.payer.ID, "", "")
+		if err != nil {
+			t.Fatalf("reverse matched payment: %v", err)
+		}
+		if rev.ReversesSeq == nil || *rev.ReversesSeq != p.Seq || rev.Amount != -5000 {
+			t.Errorf("returned reversal = %+v", rev)
+		}
+		if f.balance(t) != start {
+			t.Errorf("balance %s, want %s (payment and its $10 difference both gone)", f.balance(t), start)
+		}
+		um, _ := f.db.GetBankMatch(ctx, m.ID)
+		if um.Active() || um.UndoneBy != f.payer.ID || um.UndoReason != ledger.UnmadePaymentUndone ||
+			um.UndoneByName != f.payer.DisplayName || um.UndoneAt == nil {
+			t.Errorf("unmade match = %+v", um)
+		}
+		if f.lineState(t, "a") != store.BankLineOpen {
+			t.Error("line not reopened")
+		}
+		// Reversing again is refused as already reversed.
+		if _, _, err := f.led.Reverse(ctx, p.Seq, f.payer.ID, "", ""); !errors.Is(err, ledger.ErrAlreadyReversed) {
+			t.Errorf("second reverse: %v", err)
+		}
+	})
+	t.Run("undo the difference", func(t *testing.T) {
+		f := newReconFixture(t)
+		ctx := context.Background()
+		f.addLines(t, map[string]money.Cents{"a": 6000})
+		p := f.pay(t, "p", 5000)
+		afterPay := f.balance(t)
+		m, _, err := f.confirm("a", p, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := f.led.Reverse(ctx, *m.DeltaEntrySeq, f.admin.ID, "", ""); err != nil {
+			t.Fatalf("reverse the difference: %v", err)
+		}
+		if f.balance(t) != afterPay {
+			t.Errorf("balance %s, want %s (payment stands, difference gone)", f.balance(t), afterPay)
+		}
+		um, _ := f.db.GetBankMatch(ctx, m.ID)
+		if um.Active() || um.UndoReason != ledger.UnmadeDifferenceUndone {
+			t.Errorf("unmade = %+v", um)
+		}
+		// The payment is unmatched again: it can be matched afresh.
+		if _, _, err := f.confirm("a", p, false); err != nil {
+			t.Errorf("re-confirm after unmaking: %v", err)
+		}
+	})
+	t.Run("equal amounts, no difference", func(t *testing.T) {
+		f := newReconFixture(t)
+		ctx := context.Background()
+		f.addLines(t, map[string]money.Cents{"a": 5000})
+		p := f.pay(t, "p", 5000)
+		m, _, _ := f.confirm("a", p, false)
+		if _, _, err := f.led.Reverse(ctx, p.Seq, f.payer.ID, "", ""); err != nil {
+			t.Fatal(err)
+		}
+		if um, _ := f.db.GetBankMatch(ctx, m.ID); um.Active() {
+			t.Error("match still stands after its payment was undone")
+		}
+	})
+	t.Run("from Reconciliation", func(t *testing.T) {
+		f := newReconFixture(t)
+		ctx := context.Background()
+		f.addLines(t, map[string]money.Cents{"a": 5000})
+		m, _, _ := f.confirm("a", f.pay(t, "p", 5000), false)
+		if err := f.led.UndoMatch(ctx, m.ID, f.admin.ID); err != nil {
+			t.Fatal(err)
+		}
+		um, _ := f.db.GetBankMatch(ctx, m.ID)
+		if um.UndoReason != ledger.UnmadeFromReconciliation || um.UndoneByName != f.admin.DisplayName {
+			t.Errorf("unmade = %+v", um)
+		}
+	})
+	// Undo on the tab racing undo from Reconciliation: whichever order, the
+	// match ends unmade once, the difference reversed once, the payment
+	// reversed once.
+	t.Run("racing undos", func(t *testing.T) {
+		for i := 0; i < 5; i++ {
+			f := newReconFixture(t)
+			ctx := context.Background()
+			f.addLines(t, map[string]money.Cents{"a": 6000})
+			start := f.balance(t)
+			p := f.pay(t, "p", 5000)
+			m, _, _ := f.confirm("a", p, false)
+			var wg sync.WaitGroup
+			var revErr, undoErr error
+			wg.Add(2)
+			go func() { defer wg.Done(); _, _, revErr = f.led.Reverse(ctx, p.Seq, f.payer.ID, "", "") }()
+			go func() { defer wg.Done(); undoErr = f.led.UndoMatch(ctx, m.ID, f.admin.ID) }()
+			wg.Wait()
+			if revErr != nil {
+				t.Fatalf("tab undo failed: %v", revErr)
+			}
+			if undoErr != nil && !errors.Is(undoErr, store.ErrMatchUndone) {
+				t.Fatalf("reconciliation undo: %v", undoErr)
+			}
+			if f.balance(t) != start {
+				t.Fatalf("run %d: balance %s, want %s", i, f.balance(t), start)
+			}
+		}
+	})
+	// An ordinary entry with no tie reverses as before.
+	t.Run("untied entry", func(t *testing.T) {
+		f := newReconFixture(t)
+		p := f.pay(t, "p", 5000)
+		start := f.balance(t)
+		if _, _, err := f.led.Reverse(context.Background(), p.Seq, f.payer.ID, "", ""); err != nil {
+			t.Fatal(err)
+		}
+		if f.balance(t) != start-5000 {
+			t.Error("plain reverse wrong")
+		}
+	})
 }
 
 // Exit criterion: a payment and a line can each be in one active match, under
@@ -508,3 +608,7 @@ func TestMatchActiveColumnsChecked(t *testing.T) {
 		}
 	}
 }
+
+// The ledger finds the match store by type assertion; this fails to compile if
+// the two drift apart, instead of the ledger silently going without it.
+var _ ledger.MatchStore = (*DB)(nil)

@@ -143,65 +143,100 @@ func (d *DB) activeMatchForLine(ctx context.Context, lineID int64) (store.BankMa
 	return scanBankMatch(d.db.QueryRowContext(ctx, bankMatchSelect+` WHERE m.active_line_id = ?`, lineID))
 }
 
-// UndoBankMatch undoes a standing match in one transaction. The UPDATE that
-// marks it undone matches only a standing match, so of two concurrent undos
-// exactly one proceeds.
-func (d *DB) UndoBankMatch(ctx context.Context, matchID, by int64, reversal *store.NewEntry) error {
+// UnmakeBankMatch unmakes a standing match in one transaction: marks it
+// undone with who, when and why; posts the reversals (the difference's, and
+// the payment's when the payment was undone on its tab); reopens the line.
+// The UPDATE matches only a standing match, so of two concurrent unmakes
+// exactly one proceeds, and a failed reversal rolls the whole thing back.
+func (d *DB) UnmakeBankMatch(ctx context.Context, u store.UnmakeMatch) ([]store.Entry, error) {
 	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin undo match: %w", err)
+		return nil, fmt.Errorf("begin unmake match: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	var lineID int64
 	if err := tx.QueryRowContext(ctx,
-		`SELECT line_id FROM bank_matches WHERE id = ?`+d.dialect.lockRows(), matchID).Scan(&lineID); err != nil {
-		return translate(err)
+		`SELECT line_id FROM bank_matches WHERE id = ?`+d.dialect.lockRows(), u.MatchID).Scan(&lineID); err != nil {
+		return nil, translate(err)
 	}
 	res, err := tx.ExecContext(ctx,
-		`UPDATE bank_matches SET undone_at = ?, undone_by = ?, active_line_id = NULL, active_entry_seq = NULL
-		  WHERE id = ? AND undone_at = ''`, nowText(), by, matchID)
+		`UPDATE bank_matches
+		    SET undone_at = ?, undone_by = ?, undo_reason = ?, active_line_id = NULL, active_entry_seq = NULL
+		  WHERE id = ? AND undone_at = ''`, nowText(), u.By, u.Reason, u.MatchID)
 	if err != nil {
-		return translate(err)
+		return nil, translate(err)
 	}
 	if n, err := res.RowsAffected(); err != nil {
-		return fmt.Errorf("undo match rows: %w", err)
+		return nil, fmt.Errorf("unmake match rows: %w", err)
 	} else if n == 0 {
-		return store.ErrMatchUndone
+		return nil, store.ErrMatchUndone
 	}
 
-	if reversal != nil {
-		e := *reversal
-		e.IdempotencyKey = store.ReconKeyPrefix + ":undo:" + strconv.FormatInt(matchID, 10)
+	var posted []store.Entry
+	for _, r := range u.Reversals {
+		e := r
 		entryNow, err := validateNewEntry(&e)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if _, err := insertEntry(ctx, tx, e, entryNow); err != nil {
-			// A conflict here is the delta already reversed by another path.
-			// Refuse rather than leave the match undone with its money in
-			// place: the person sees the error and nothing has changed.
-			return err
+		seq, err := insertEntry(ctx, tx, e, entryNow)
+		if err != nil {
+			// A conflict is an entry already reversed by another path: refuse
+			// rather than leave the match unmade with its money in place.
+			return nil, err
 		}
+		posted = append(posted, builtEntry(e, seq, entryNow))
 	}
 
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE bank_lines SET state = 'open' WHERE id = ? AND state = 'matched'`, lineID); err != nil {
-		return translate(err)
+		return nil, translate(err)
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit undo match: %w", err)
+		return nil, fmt.Errorf("commit unmake match: %w", err)
 	}
-	return nil
+	return posted, nil
+}
+
+// ReconLinkForEntry reports what reconciliation ties to an entry.
+func (d *DB) ReconLinkForEntry(ctx context.Context, seq int64) (store.ReconLink, error) {
+	var id int64
+	err := d.db.QueryRowContext(ctx,
+		`SELECT id FROM bank_matches WHERE active_entry_seq = ?`, seq).Scan(&id)
+	switch {
+	case err == nil:
+		return store.ReconLink{Kind: store.ReconMatchedPayment, MatchID: id}, nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return store.ReconLink{}, translate(err)
+	}
+	err = d.db.QueryRowContext(ctx,
+		`SELECT id FROM bank_matches WHERE delta_entry_seq = ? AND undone_at = ''`, seq).Scan(&id)
+	switch {
+	case err == nil:
+		return store.ReconLink{Kind: store.ReconDelta, MatchID: id}, nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return store.ReconLink{}, translate(err)
+	}
+	err = d.db.QueryRowContext(ctx,
+		`SELECT id FROM bank_lines WHERE recorded_entry_seq = ?`, seq).Scan(&id)
+	switch {
+	case err == nil:
+		return store.ReconLink{Kind: store.ReconRecordedLine, LineID: id}, nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return store.ReconLink{}, translate(err)
+	}
+	return store.ReconLink{}, nil
 }
 
 const bankMatchSelect = `SELECT m.id, m.line_id, m.import_id, m.entry_seq, m.tab_id, m.delta_entry_seq,
 	        m.bank_date, m.bank_cents, m.recorded_date, m.recorded_cents, m.date_flagged,
 	        m.date_flag_reason, m.note_in_memo, m.confirmed_by, m.confirmed_at, m.undone_at,
-	        m.undone_by, u.display_name, t.name, i.file_name, l.file_row, l.original_text,
-	        l.description, l.note, de.amount_cents, de.kind
+	        m.undone_by, m.undo_reason, uu.display_name, u.display_name, t.name, i.file_name,
+	        l.file_row, l.original_text, l.description, l.note, de.amount_cents, de.kind
 	   FROM bank_matches m
 	   JOIN users u ON u.id = m.confirmed_by
+	   LEFT JOIN users uu ON uu.id = m.undone_by
 	   JOIN tabs t ON t.id = m.tab_id
 	   JOIN bank_imports i ON i.id = m.import_id
 	   JOIN bank_lines l ON l.id = m.line_id
@@ -216,10 +251,12 @@ func scanBankMatch(row interface{ Scan(...any) error }) (store.BankMatch, error)
 		confirmedAt, undone string
 		deltaCents          sql.NullInt64
 		deltaKind           sql.NullString
+		undoneByName        sql.NullString
 	)
 	if err := row.Scan(&m.ID, &m.LineID, &m.ImportID, &m.EntrySeq, &m.TabID, &delta,
 		&m.BankDate, &bank, &m.RecordedDate, &rec, &flagged, &m.DateFlagReason, &noteInMemo,
-		&m.ConfirmedBy, &confirmedAt, &undone, &undoneBy, &m.ConfirmedByName, &m.TabName,
+		&m.ConfirmedBy, &confirmedAt, &undone, &undoneBy, &m.UndoReason, &undoneByName,
+		&m.ConfirmedByName, &m.TabName,
 		&m.FileName, &m.Row, &m.Raw, &m.Description, &m.Note, &deltaCents, &deltaKind); err != nil {
 		return store.BankMatch{}, translate(err)
 	}
@@ -229,7 +266,7 @@ func scanBankMatch(row interface{ Scan(...any) error }) (store.BankMatch, error)
 	}
 	m.BankAmount, m.RecordedAmount = money.Cents(bank), money.Cents(rec)
 	m.DateFlagged, m.NoteInMemo = flagged != 0, noteInMemo != 0
-	m.UndoneBy = undoneBy.Int64
+	m.UndoneBy, m.UndoneByName = undoneBy.Int64, undoneByName.String
 	m.DeltaAmount, m.DeltaKind = money.Cents(deltaCents.Int64), store.EntryKind(deltaKind.String)
 	var err error
 	if m.ConfirmedAt, err = parseTime(confirmedAt); err != nil {

@@ -1131,3 +1131,31 @@ details.card > summary { cursor: pointer; font-weight: 600; }
 }
 /* Form fields do not need the wide page's full width. */
 .wide #setup form.stack { max-width: 36rem; }
+
+/* Tab history on a phone: five columns and a long memo cannot fit 360 px.
+   Each entry becomes a small block instead: date, what and amount on top, the
+   memo running below, then who, the running balance and Undo. Wider screens
+   keep the table. */
+@media (max-width: 39.99rem) {
+  table.history thead { display: none; }
+  table.history, table.history tbody { display: block; }
+  table.history tr {
+    display: grid;
+    grid-template-columns: 3.25rem minmax(0, 1fr) auto;
+    grid-template-areas:
+      "when what amount"
+      "when who  balance"
+      "when who  undo";
+    column-gap: var(--s2);
+    padding: var(--s2) 0;
+    border-bottom: 1px solid var(--border);
+  }
+  table.history td { display: block; border: none; padding: 2px 0; min-width: 0; }
+  table.history td:nth-child(1) { grid-area: when; }
+  table.history td:nth-child(2) { grid-area: what; overflow-wrap: break-word; }
+  table.history td:nth-child(3) { grid-area: who; }
+  table.history td:nth-child(4) { grid-area: amount; }
+  table.history td:nth-child(5) { grid-area: balance; font-size: var(--t-sm); }
+  table.history td:nth-child(5)::before { content: "bal. "; color: var(--fg-muted); font-family: var(--font); }
+  table.history td:nth-child(6) { grid-area: undo; text-align: right; }
+}

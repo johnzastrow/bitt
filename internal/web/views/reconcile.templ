@@ -332,6 +332,7 @@ templ ReconcileImport(p Page, imp store.BankImport, lines []store.BankLine) {
 								<summary>Original row</summary>
 								<pre class="rawrow">{ l.Raw }</pre>
 							</details>
+							<p class="small"><a href={ lineURL(l.ID) }>Line details and history</a></p>
 						</li>
 					}
 				</ul>
@@ -442,7 +443,10 @@ templ bankSide(l store.OpenBankLine) {
 			<span class="amount">{ l.Amount.Display() }</span>
 		</div>
 		@bankText(l.Description, l.Account, l.Note, l.Reference)
-		<p class="muted small">Row { strconv.Itoa(l.Row) } of { l.FileName }</p>
+		<p class="muted small">
+			Row { strconv.Itoa(l.Row) } of { l.FileName } &middot;
+			<a href={ lineURL(l.ID) }>Line details, record or ignore</a>
+		</p>
 	</div>
 }
 
@@ -627,7 +631,7 @@ templ matchesSection(p Page, ms []store.BankMatch) {
 							<span class="nowrap">{ bankDate(m.BankDate) }</span>
 							<span class="amount">{ m.BankAmount.Display() }</span>
 							if !m.Active() {
-								<span class="pill">undone</span>
+								<span class="pill">unmade</span>
 							}
 							if m.DateFlagged {
 								<span class="pill pill-fault">date flagged</span>
@@ -644,6 +648,11 @@ templ matchesSection(p Page, ms []store.BankMatch) {
 							Row { strconv.Itoa(m.Row) } of { m.FileName } &middot; confirmed by { m.ConfirmedByName }
 							{ m.ConfirmedAt.Format("Jan 2, 2006 15:04") } UTC
 						</p>
+						if !m.Active() {
+							<p class="muted small">
+								Unmade { m.UndoneAt.Format("Jan 2, 2006 15:04") } UTC by { m.UndoneByName }: { m.UndoReason }.
+							</p>
+						}
 						if m.Active() {
 							<form method="post" action={ undoURL(m.ID) } class="inline">
 								<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
@@ -669,4 +678,199 @@ func matchDeltaText(m store.BankMatch) string {
 		return "Posted a debit adjustment of " + (-m.DeltaAmount).Display() + "."
 	}
 	return "Nothing posted."
+}
+
+func lineURL(id int64) templ.SafeURL {
+	return templ.SafeURL("/admin/reconcile/lines/" + strconv.FormatInt(id, 10))
+}
+
+func linePostURL(id int64, action string) templ.SafeURL {
+	return templ.SafeURL("/admin/reconcile/lines/" + strconv.FormatInt(id, 10) + "/" + action)
+}
+
+// TabChoice is a tab a line could be recorded on.
+type TabChoice struct {
+	ID     int64
+	Name   string
+	People string
+	Likely bool // its name or a participant's appears in the line
+}
+
+// LineData is one bank line's page (RECON-05).
+type LineData struct {
+	Line        store.OpenBankLine
+	Events      []store.BankLineEvent
+	Matches     []store.BankMatch
+	Recorded    *store.Entry
+	RecordedTab string
+	Tabs        []TabChoice // open lines only
+	Memo        string
+}
+
+// ReconcileLine shows a bank line, what has happened to it and who did it,
+// and the action its state allows.
+templ ReconcileLine(p Page, d LineData) {
+	@Layout(p) {
+		<p class="muted small"><a href="/admin/reconcile">Reconciliation</a></p>
+		<h1>Bank line</h1>
+		<section class="card">
+			<div class="bankline-head">
+				<span class="pill">{ string(d.Line.State) }</span>
+				<span class="nowrap">{ bankDate(d.Line.PostedOn) }</span>
+				<span class="amount">{ d.Line.Amount.Display() }</span>
+			</div>
+			@bankText(d.Line.Description, d.Line.Account, d.Line.Note, d.Line.Reference)
+			<p class="muted small">Row { strconv.Itoa(d.Line.Row) } of { d.Line.FileName }</p>
+			<details class="small">
+				<summary>Original row</summary>
+				<pre class="rawrow">{ d.Line.Raw }</pre>
+			</details>
+		</section>
+		switch d.Line.State {
+			case store.BankLineOpen:
+				@recordLineForm(p, d)
+				<section class="card">
+					<h2>Not BitTabby</h2>
+					<p class="muted small">For money that has nothing to do with a tab. The line is hidden until un-ignored.</p>
+					<form method="post" action={ linePostURL(d.Line.ID, "ignore") } class="stack">
+						<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+						<label>
+							Note (optional)
+							<input type="text" name="note" maxlength="500" placeholder="Refund from the utility"/>
+						</label>
+						<button type="submit">Mark Not BitTabby</button>
+					</form>
+				</section>
+			case store.BankLineRecorded:
+				<section class="card">
+					<h2>Recorded as a payment</h2>
+					if d.Recorded != nil {
+						<p>
+							{ d.Recorded.Amount.Display() } on <a href={ tabURL(d.Recorded.TabID) }>{ d.RecordedTab }</a>,
+							{ string(d.Recorded.Method) }.
+						</p>
+						<p class="muted small banktext">{ d.Recorded.Memo }</p>
+					}
+					<form method="post" action={ linePostURL(d.Line.ID, "unrecord") } class="inline">
+						<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+						<button type="submit">Undo the recording</button>
+					</form>
+					<p class="muted small">Reverses the payment and opens the line again. Undoing the payment on its tab does the same.</p>
+				</section>
+			case store.BankLineIgnored:
+				<section class="card">
+					<h2>Ignored</h2>
+					<p>{ d.Line.IgnoreReason }</p>
+					if d.Line.IgnoreNote != "" {
+						<p class="muted small banktext">{ d.Line.IgnoreNote }</p>
+					}
+					<form method="post" action={ linePostURL(d.Line.ID, "unignore") } class="inline">
+						<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+						<button type="submit">Un-ignore</button>
+					</form>
+				</section>
+		}
+		<section class="card">
+			<h2>History</h2>
+			if len(d.Events) == 0 && len(d.Matches) == 0 {
+				<p class="muted">Imported; nothing done to it since.</p>
+			}
+			<ul class="statuslist">
+				for _, m := range d.Matches {
+					<li>
+						Matched to <a href={ tabURL(m.TabID) }>{ m.TabName }</a> by { m.ConfirmedByName },
+						{ m.ConfirmedAt.Format("Jan 2, 2006 15:04") } UTC. { matchDeltaText(m) }
+						if m.Active() {
+							<form method="post" action={ undoURL(m.ID) } class="inline">
+								<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+								<button class="link" type="submit">Undo this match</button>
+							</form>
+						} else {
+							<br/>
+							<span class="muted small">
+								Unmade { m.UndoneAt.Format("Jan 2, 2006 15:04") } UTC by { m.UndoneByName }: { m.UndoReason }.
+							</span>
+						}
+					</li>
+				}
+				for _, ev := range d.Events {
+					<li>
+						{ eventText(ev.Action) } by { ev.ByName }, { ev.At.Format("Jan 2, 2006 15:04") } UTC.
+						if ev.Note != "" {
+							<span class="muted small">{ ev.Note }</span>
+						}
+					</li>
+				}
+			</ul>
+		</section>
+	}
+}
+
+func eventText(action string) string {
+	switch action {
+	case "recorded":
+		return "Recorded as a payment"
+	case "unrecorded":
+		return "Recording undone"
+	case "ignored":
+		return "Marked Not BitTabby"
+	case "unignored":
+		return "Un-ignored"
+	}
+	return action
+}
+
+templ recordLineForm(p Page, d LineData) {
+	<section class="card">
+		<h2>Record as a payment</h2>
+		<p class="muted small">
+			For money that arrived but was never recorded. Posts { d.Line.Amount.Display() } on
+			{ bankDate(d.Line.PostedOn) } to the tab you choose, attributed to you.
+		</p>
+		if len(d.Tabs) == 0 {
+			<p class="muted">There are no open tabs to record it on.</p>
+		} else {
+			<form method="post" action={ linePostURL(d.Line.ID, "record") } class="stack">
+				<input type="hidden" name="csrf_token" value={ p.CSRFToken }/>
+				<label>
+					Tab
+					<select name="tab_id" required>
+						for _, t := range d.Tabs {
+							<option value={ strconv.FormatInt(t.ID, 10) }>{ tabChoiceLabel(t) }</option>
+						}
+					</select>
+					<small>Tabs whose name or people appear in the line are listed first.</small>
+				</label>
+				<label>
+					How it arrived
+					<select name="method">
+						<option value="transfer" selected>Transfer</option>
+						<option value="other">Other</option>
+					</select>
+				</label>
+				<label>
+					Note on the entry
+					<input type="text" name="memo" maxlength="500" value={ d.Memo }/>
+				</label>
+				if d.Line.Note != "" {
+					<label class="checkrow small">
+						<input type="checkbox" name="include_note" value="1"/>
+						Include the bank note in the entry (everyone on the tab will see it)
+					</label>
+				}
+				<button class="primary" type="submit">Record payment</button>
+			</form>
+		}
+	</section>
+}
+
+func tabChoiceLabel(t TabChoice) string {
+	label := t.Name
+	if t.People != "" {
+		label += " (" + t.People + ")"
+	}
+	if t.Likely {
+		label += " -- likely"
+	}
+	return label
 }

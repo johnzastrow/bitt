@@ -172,7 +172,7 @@ func (d *DB) DeleteIgnoreRule(ctx context.Context, id int64) error {
 
 const bankLineSelect = `SELECT l.id, l.import_id, l.file_row, l.original_text, l.account, l.posted_on,
 	        l.amount_cents, l.description, l.note, l.reference, l.fingerprint, l.state,
-	        l.ignore_reason, i.format_id, i.file_name
+	        l.ignore_reason, l.ignore_note, l.recorded_entry_seq, i.format_id, i.file_name
 	   FROM bank_lines l
 	   JOIN bank_imports i ON i.id = l.import_id`
 
@@ -181,11 +181,16 @@ func scanOpenBankLine(row interface{ Scan(...any) error }) (store.OpenBankLine, 
 		l     store.OpenBankLine
 		cents int64
 		state string
+		rec   sql.NullInt64
 	)
 	if err := row.Scan(&l.ID, &l.ImportID, &l.Row, &l.Raw, &l.Account, &l.PostedOn, &cents,
 		&l.Description, &l.Note, &l.Reference, &l.Fingerprint, &state, &l.IgnoreReason,
-		&l.FormatID, &l.FileName); err != nil {
+		&l.IgnoreNote, &rec, &l.FormatID, &l.FileName); err != nil {
 		return store.OpenBankLine{}, translate(err)
+	}
+	if rec.Valid {
+		v := rec.Int64
+		l.RecordedEntrySeq = &v
 	}
 	l.Amount, l.State = money.Cents(cents), store.BankLineState(state)
 	return l, nil

@@ -288,8 +288,12 @@ func sortedKeys(m map[int64]bool) []int64 {
 	return out
 }
 
-// nameHit reports whether any word of three or more letters from the names
-// appears as a whole word in the text, ignoring case and punctuation.
+// NameHit reports whether any word of three or more letters from the names
+// appears as a whole word in the text, ignoring case and punctuation. The
+// record form uses it to put likely tabs first.
+func NameHit(text string, names []string) bool { return nameHit(text, names) }
+
+// nameHit is NameHit.
 func nameHit(text string, names []string) bool {
 	words := map[string]bool{}
 	for _, w := range splitWords(text) {

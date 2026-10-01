@@ -465,6 +465,7 @@ func (s *Server) getTab(w http.ResponseWriter, r *http.Request) {
 			ActorID:     e.ActorUserID,
 			ActorAvatar: actor.AvatarKey,
 			CanUndo:     canUndo,
+			Reversed:    reversed[e.Seq],
 			Balance:     running,
 		})
 		running -= e.Amount

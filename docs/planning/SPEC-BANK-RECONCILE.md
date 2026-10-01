@@ -351,7 +351,13 @@ own.
    undone only from Reconciliation (the ledger refuses a tab-page undo); the
    delta is dated noon on the bank date in the instance timezone; a due-date
    straddle means one date on or before a due date and the other after it.
-5. RECON-05: record and ignore.
+5. RECON-05: record and ignore. **Built 2026-10-01** (migration 0017;
+   unreleased). Owner's addition the same day: record date, time and user for
+   every match, and let manual data changes unmake matches. So a tab-page undo
+   of a matched payment, a difference, or a recorded line's payment unmakes or
+   reopens in one transaction instead of being refused, and every line action
+   is a `bank_line_events` row. Each line has a page with its actions and
+   history.
 6. Screens and an end-to-end walk on a phone width; a release.
 
 ## 15. Open questions

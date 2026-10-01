@@ -426,10 +426,6 @@ func (s *Server) postUndo(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ledger.ErrNotReversible):
 		redirectWith(w, r, tabPath(id), "err", "A reversal cannot itself be undone.")
 		return
-	case errors.Is(err, ledger.ErrReconciled):
-		redirectWith(w, r, tabPath(id), "err",
-			"That entry is part of a bank reconciliation. An administrator can undo the match from Reconciliation.")
-		return
 	case err != nil:
 		s.serverError(w, r, err)
 		return

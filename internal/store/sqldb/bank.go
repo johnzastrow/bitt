@@ -255,7 +255,8 @@ func (d *DB) ListBankImports(ctx context.Context, limit int) ([]store.BankImport
 func (d *DB) ListBankLines(ctx context.Context, importID int64) ([]store.BankLine, error) {
 	rows, err := d.db.QueryContext(ctx,
 		`SELECT id, import_id, file_row, original_text, account, posted_on, amount_cents,
-		        description, note, reference, fingerprint, state, ignore_reason
+		        description, note, reference, fingerprint, state, ignore_reason, ignore_note,
+		        recorded_entry_seq
 		   FROM bank_lines WHERE import_id = ? ORDER BY file_row`, importID)
 	if err != nil {
 		return nil, translate(err)
@@ -267,10 +268,16 @@ func (d *DB) ListBankLines(ctx context.Context, importID int64) ([]store.BankLin
 			l     store.BankLine
 			cents int64
 			state string
+			rec   sql.NullInt64
 		)
 		if err := rows.Scan(&l.ID, &l.ImportID, &l.Row, &l.Raw, &l.Account, &l.PostedOn, &cents,
-			&l.Description, &l.Note, &l.Reference, &l.Fingerprint, &state, &l.IgnoreReason); err != nil {
+			&l.Description, &l.Note, &l.Reference, &l.Fingerprint, &state, &l.IgnoreReason,
+			&l.IgnoreNote, &rec); err != nil {
 			return nil, translate(err)
+		}
+		if rec.Valid {
+			v := rec.Int64
+			l.RecordedEntrySeq = &v
 		}
 		l.Amount, l.State = money.Cents(cents), store.BankLineState(state)
 		out = append(out, l)

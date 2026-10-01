@@ -161,6 +161,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /admin/reconcile/confirm", s.requireReconcile(http.HandlerFunc(s.postReconcileConfirm)))
 	mux.Handle("POST /admin/reconcile/confirm-exact", s.requireReconcile(http.HandlerFunc(s.postReconcileConfirmExact)))
 	mux.Handle("POST /admin/reconcile/matches/{id}/undo", s.requireReconcile(http.HandlerFunc(s.postReconcileUndo)))
+	mux.Handle("GET /admin/reconcile/lines/{id}", s.requireReconcile(http.HandlerFunc(s.getReconcileLine)))
+	mux.Handle("POST /admin/reconcile/lines/{id}/record", s.requireReconcile(http.HandlerFunc(s.postRecordLine)))
+	mux.Handle("POST /admin/reconcile/lines/{id}/unrecord", s.requireReconcile(http.HandlerFunc(s.postUnrecordLine)))
+	mux.Handle("POST /admin/reconcile/lines/{id}/ignore", s.requireReconcile(http.HandlerFunc(s.postIgnoreLine)))
+	mux.Handle("POST /admin/reconcile/lines/{id}/unignore", s.requireReconcile(http.HandlerFunc(s.postUnignoreLine)))
 
 	return s.securityHeaders(s.recoverPanic(mux))
 }

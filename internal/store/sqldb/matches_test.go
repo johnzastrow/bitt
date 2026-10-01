@@ -480,7 +480,10 @@ func TestConcurrentConfirms(t *testing.T) {
 	f.addLines(t, map[string]money.Cents{"one": 5000})
 	var pays []store.Entry
 	for i := 0; i < 8; i++ {
-		pays = append(pays, f.pay(t, fmt.Sprint("race", i), 5000+money.Cents(i)))
+		// Never exactly the line: whichever wins must post a difference, which the
+		// concurrent-undo step below needs. (Including 5000 made that depend on
+		// which payment won the race, and CI caught it.)
+		pays = append(pays, f.pay(t, fmt.Sprint("race", i), 5001+money.Cents(i)))
 	}
 	before := f.balance(t)
 	var wg sync.WaitGroup

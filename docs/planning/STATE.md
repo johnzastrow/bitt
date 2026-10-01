@@ -1,13 +1,24 @@
 # BitTabby — Current State
 
-**Updated:** 2026-07-27
+**Updated:** 2026-10-01 (brought up to v1.6.0; the project has been idle since 2026-08-11)
 
 ## Where things stand
 
 **Shipped and deployed, past v1.** All 54 v1 requirements delivered and tagged
 `v1.0.0`; since then `v1.1.0` (admin test notification), `v1.1.1` (MariaDB
-no-op-save fix + logging), and `v1.2.0` (per-tab administrator role + new-tab
-form persistence). **Live in production at https://btabby.fluidgrid.site** — a
+no-op-save fix + logging), `v1.2.0` (per-tab administrator role + new-tab
+form persistence), and a notifications run in August:
+
+| Version | Date | What |
+|---------|------|------|
+| 1.3.0 | 2026-08-07 | Event notices: payment made (to every party; a receipt for the payer) and payment missed (payee and Provider), derived from the ledger; per-tick send ceiling `BITT_NOTIFY_MAX_PER_TICK` ([SPEC-EVENT-NOTICES.md](SPEC-EVENT-NOTICES.md)) |
+| 1.3.1 | 2026-08-10 | Outgoing email carries `Date` and `Message-ID` |
+| 1.4.0 | 2026-08-11 | `{payment}` template variable; reminders on Payoff tabs quote the installment, not the whole loan |
+| 1.4.1 | 2026-08-11 | Migration `0012`: negative (overdue) lead times can be stored |
+| 1.5.0 | 2026-08-11 | Reminders rendered on Setup with live figures and their reach; "Send this to me now"; admins edit others' notification settings ([SPEC-REMINDER-CONTROL.md](SPEC-REMINDER-CONTROL.md)) |
+| 1.6.0 | 2026-08-11 | A dedicated payment screen `/tabs/{id}/pay` that reminder links open; login returns to the requested page (allowlisted) |
+
+**Live in production at https://btabby.fluidgrid.site** — a
 Docker Compose stack on the `recipe.fluidgrid.site` host, on the host's MariaDB
 (`btabby` database), `network_mode: host` behind the host's apt Caddy, matching
 the other sites there. The repo is public at github.com/johnzastrow/bitt (MIT),
@@ -19,16 +30,16 @@ the open threads.
 
 | Item | State |
 |------|-------|
-| Repository | `main`, public, working tree clean |
-| Version | 1.2.0 |
-| Deployment | Live at https://btabby.fluidgrid.site (host MariaDB, Caddy, ~/bittdocker) |
+| Repository | `main`, public, working tree clean, in sync with GitHub |
+| Version | 1.6.0 (released 2026-08-11; Release workflow green) |
+| Deployment | Live at https://btabby.fluidgrid.site. Verified 2026-10-01: container `bittabby` runs `ghcr.io/johnzastrow/bitt:1.6.0` (index `sha256:27ffbe1d…`, the image the v1.6.0 release built from `3796f6d`), healthy; host compose pins 1.6.0. **The repo's `compose.fluidgrid.yaml` still pins 1.2.0**: see Next action |
 | Scope | 54 requirements, 6 phases |
 | Stack | Go 1.26 + templ + htmx 2.0.4 (vendored); SQLite or MariaDB |
 | Phase 1 | Complete — walking skeleton |
 | Phase 2 | Complete — the settle loop |
 | Phase 3 | Complete — recurrence |
 | Phase 4 | Complete — payoff tabs, late fees, interest |
-| Phase 5 | Complete — notifications (email/ntfy, per-tab and instance settings) |
+| Phase 5 | Complete — notifications (email/ntfy, per-tab and instance settings); follow-ups finished in 1.3.0 to 1.6.0 |
 | Phase 6 | Complete — Docker, deploy, backup/restore, MariaDB, and the PWA (UI-05) |
 
 ## What works today
@@ -54,6 +65,13 @@ people can be detached as well as attached, and a tab can be archived -- which
 stops it billing and drops it down the dashboard without touching a single
 entry.
 
+Notifications (email and ntfy) cover the whole cycle: reminders before a due
+date, a notice when a payment is made, and an overdue notice when one is missed.
+A tab's Setup screen shows each reminder rendered with its live figures, who it
+reaches by channel (and why anyone is unreachable), and a "Send this to me now"
+rehearsal. A reminder's link opens a one-payment screen, through sign-in if
+needed.
+
 ## Requirements delivered
 
 | Phase | Requirements |
@@ -67,8 +85,11 @@ entry.
 
 ## Verification performed
 
+(These are the v1 checks. Each later release's CHANGELOG entry records its own,
+and current coverage is in [HANDOFF-OPS.md](HANDOFF-OPS.md).)
+
 - Full suite green, including under `-race`
-- Coverage: fee 96%, money 96%, ledger ~90%, schedule 87%, sqlite ~73%, web ~71%, auth 44%
+- Coverage at v1: fee 96%, money 96%, ledger ~90%, schedule 87%, sqlite ~73%, web ~71%, auth 44%
 - Migration `0003_schedules` applied to an existing Phase 2 database without
   incident, and the demo tab kept its balance
 - Live binary walked end to end over HTTP: a tab anchored ten weeks back posted
@@ -91,19 +112,24 @@ entry.
 
 ## Next action
 
-**v1 is feature-complete (54/54).** UI-05 (the PWA) landed in 0.8.2: a web app
-manifest, home-screen icons rasterised from the logo, a root-scoped service
-worker that caches the static shell (network-first for navigations, a styled
-offline page as the only fallback), and cache-versioning derived from the
-existing `AssetVersion` digest. Verified headless, including the offline path.
+Nothing is in progress: v1.6.0 is released and live, and both August specs are
+built. The deploy and `v1.0.0` items that used to be listed here were done in
+July.
 
-Two things remain, both non-feature:
+Before the next feature:
 
-1. **Deploy to `btabby.fluidgrid.site`** — a Docker Compose stack on the
-   `recipe.fluidgrid.site` host, behind the existing Caddy reverse proxy, on the
-   host's MariaDB. See [DEPLOY-FLUIDGRID.md](DEPLOY-FLUIDGRID.md) for the plan.
-2. **Release polish** — a milestone audit against the original intent, then tag
-   `v1.0.0` and let the release workflow publish the first image.
+1. **Bring the repo's compose pin up to 1.6.0.** The repo's
+   `compose.fluidgrid.yaml` says `bitt:1.2.0`; the host's `~/bittdocker/` copy
+   says 1.6.0 and production runs it (verified 2026-10-01). Redeploy runbook
+   step 2 did not reach the repo for 1.3.0 to 1.6.0. Diff the host's file against
+   the repo's (other edits may have been made there too), commit the result, so
+   the next `scp` of the repo file does not roll production back to 1.2.0.
+2. **Update [PROJECT.md](../PROJECT.md).** Its Out of Scope still lists
+   notifications as deferred; they shipped (Phase 5, 1.3.0 to 1.6.0).
+
+Then pick from the open threads in [HANDOFF-OPS.md](HANDOFF-OPS.md): per-payee
+balances (needs scoping; changes the one-balance-per-tab core), HTTPS 404s for
+unknown subdomains, and deeper coverage.
 
 ## Working agreement
 

@@ -642,10 +642,15 @@ func TestPayoffPrimaryButtonPaysThePeriod(t *testing.T) {
 		t.Errorf("the confirmation does not mention the full balance: %s", truncate(confirm))
 	}
 
-	// "Other amount" prefills the full payoff, which is where a loan is cleared.
+	// "Other amount" starts at the monthly payment too (owner's request,
+	// 2026-10-01: every payment field on a loan), and states the full balance
+	// beside it, so paying the loan off is one edit away.
 	_, custom := h.get(tabPath(tabID) + "/settle?custom=1")
-	if !strings.Contains(custom, `value="5000.00"`) {
-		t.Errorf("Other amount does not prefill the full payoff: %s", truncate(custom))
+	if !strings.Contains(custom, `value="250.00"`) {
+		t.Errorf("Other amount does not prefill the monthly payment: %s", truncate(custom))
+	}
+	if !strings.Contains(custom, "$5,000.00") {
+		t.Errorf("Other amount does not state the full balance: %s", truncate(custom))
 	}
 }
 

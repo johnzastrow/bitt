@@ -20,6 +20,7 @@ form persistence), and a notifications run in August:
 | 1.7.0 | 2026-10-01 | Navigation moves under the avatar (RECON-00 of [SPEC-BANK-RECONCILE.md](SPEC-BANK-RECONCILE.md)); initials avatars sized correctly. Tagged; not deployed |
 | 1.8.0 | 2026-10-01 | Bank reconciliation ([SPEC-BANK-RECONCILE.md](SPEC-BANK-RECONCILE.md)); built with Go 1.26.8 (five reachable stdlib vulnerabilities in the 1.26.5 builds); migrations 0013-0018, rehearsed on a production copy. Tagged and released; not deployed |
 | 1.8.1 | 2026-10-01 | Tab page: Record a payment in the top card, every section collapsed on open, Transfer the default method. **Released and deployed 2026-10-02** |
+| 1.8.2 | 2026-10-02 | Loan payment fields start at the monthly payment; the tab page field matches its note. Committed, **not yet tagged or deployed** |
 
 **Live in production at https://btabby.fluidgrid.site** — a
 Docker Compose stack on the `recipe.fluidgrid.site` host, on the host's MariaDB

@@ -7,6 +7,21 @@ versioning. Pre-1.0, the minor version tracks the delivered phase.
 The version is defined once, in `internal/version`, shown in the app footer and
 in the `/healthz` response, and a build stamps in the commit and date.
 
+## [1.8.2] - 2026-10-02 — Loan payments start at the monthly payment
+
+### Changed
+- **Every payment field on a loan starts at the monthly payment**, not the
+  whole loan: the tab page, the payment screen, the one-tap confirmation, and
+  the card's "Other amount" (which used to start at the full payoff). The
+  amount is capped at what is left, so the last payment never overshoots, and
+  the full balance is still stated beside the field. A loan with no monthly
+  payment set still starts at the balance.
+
+### Fixed
+- **The tab page's payment field showed the whole balance** while the note
+  under it said "Prefilled with one period's payment". The field now matches
+  the note, on Services tabs too (one period's recurring charge).
+
 ## [1.8.1] - 2026-10-01 — The tab page opens on what a visit is for
 
 ### Changed

@@ -70,6 +70,17 @@ func detailPrefill(d TabDetailData) money.Cents {
 	return d.SettleAmount
 }
 
+// OtherPrefill starts the card's "other amount" field. On a loan it is the
+// monthly payment, like every other payment field on a loan (owner's request,
+// 2026-10-01); on a Services tab it stays the whole balance, the usual reason
+// to pay a different amount.
+func (c TabCard) OtherPrefill() money.Cents {
+	if c.Tab.Kind == store.TabPayoff && c.PeriodPayment > 0 {
+		return c.PeriodPayment
+	}
+	return c.SettleAmount
+}
+
 // PrimaryAmount is what the main button pays: the expected period payment when
 // one is defined, otherwise the whole balance. Both are already capped at what
 // is owed, so this is never more than the balance.
@@ -230,7 +241,7 @@ templ SettleConfirm(p Page, c TabCard) {
 						inputmode="decimal"
 						required
 						autofocus
-						value={ prefill(c.SettleAmount) }
+						value={ prefill(c.OtherPrefill()) }
 						placeholder="0.00"
 						aria-label="Payment amount"
 					/>
@@ -639,6 +650,17 @@ type TabRecon struct {
 	Recorded []store.OpenBankLine
 }
 
+// PaymentPrefill is what the tab's payment field starts at: one period's
+// payment -- a loan's monthly installment, a Services tab's recurring charge --
+// capped at what is owed, or the whole balance when the tab has no periodic
+// amount. It is what the note under the field says it is.
+func (d TabDetailData) PaymentPrefill() money.Cents {
+	if d.PeriodPayment > 0 {
+		return d.PeriodPayment
+	}
+	return d.SettleAmount
+}
+
 // IsProvider reports whether the viewer bills on this tab.
 func (d TabDetailData) IsProvider() bool { return d.Role == store.RoleProvider }
 
@@ -745,7 +767,7 @@ templ TabDetail(p Page, d TabDetailData) {
 								inputmode="decimal"
 								required
 								placeholder="0.00"
-								value={ prefill(d.SettleAmount) }
+								value={ prefill(d.PaymentPrefill()) }
 								aria-label="Payment amount"
 							/>
 							<select name="method" aria-label="Payment method">

@@ -35,7 +35,7 @@ the open threads.
 |------|-------|
 | Repository | `main`, public; local commits ahead of GitHub (bank reconciliation in progress) |
 | Version | 1.8.1 (released 2026-10-01; Release and CI green) |
-| Deployment | Live at https://btabby.fluidgrid.site. Deployed 2026-10-02 00:07 UTC: container `bittabby` runs `ghcr.io/johnzastrow/bitt:1.8.1`, healthy; migrations 0013-0018 applied; every tab's balance and entry count identical before and after. Pre-deploy backup `~/bittdocker/backups/btabby-pre-1.8.1-20261002T0007Z.sql`; previous compose kept as `compose.fluidgrid.yaml.pre-1.8.1`. **The repo's `compose.fluidgrid.yaml` still pins 1.2.0** (the host file is authoritative): see Next action |
+| Deployment | Live at https://btabby.fluidgrid.site. Deployed 2026-10-02 00:07 UTC: container `bittabby` runs `ghcr.io/johnzastrow/bitt:1.8.1`, healthy; migrations 0013-0018 applied; every tab's balance and entry count identical before and after. Pre-deploy backup `~/bittdocker/backups/btabby-pre-1.8.1-20261002T0007Z.sql`; previous compose kept as `compose.fluidgrid.yaml.pre-1.8.1`. The repo's `compose.fluidgrid.yaml` was synced from the host on 2026-10-02 and pins 1.8.1; it differs only in the SMTP login, a placeholder in the repo |
 | Scope | 54 requirements, 6 phases |
 | Stack | Go 1.26 + templ + htmx 2.0.4 (vendored); SQLite or MariaDB |
 | Phase 1 | Complete — walking skeleton |

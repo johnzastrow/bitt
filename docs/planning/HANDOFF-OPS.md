@@ -50,9 +50,12 @@ the memory file `bitt-production-deployment`.
 
 1. Bump `internal/version` and add a CHANGELOG entry; commit; `git tag vX.Y.Z`
    and push the tag — the Release workflow builds and pushes the amd64 image.
-2. Bump the pinned tag in `compose.fluidgrid.yaml`; **commit it**. (Skipped for
-   1.3.0 to 1.6.0: the host was edited directly and the repo still says 1.2.0.
-   Copying the repo file over the host's would roll production back.)
+2. Bump the pinned tag in the host's `~/bittdocker/compose.fluidgrid.yaml` in
+   place (sed the `image:` line), and the same line in the repo copy; **commit
+   it**. The repo copy was synced from the host on 2026-10-02 and is identical
+   except for `BITT_SMTP_USERNAME`, which is a placeholder in the repo so the
+   real login is not published. Never copy the repo file over the host's: that
+   line would replace the real login.
 3. **If the release includes a migration**, back up first:
    `RP=$(grep -m1 ^DB_ROOT_PASSWORD= ~/actadocker/.env | cut -d= -f2-)` then
    `mysqldump -uroot -p"$RP" --single-transaction --routines --triggers btabby > ~/bittdocker/backups/btabby-pre-X.Y.Z.sql`

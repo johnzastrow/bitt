@@ -26,7 +26,7 @@
 services:
   bittabby:
     # Pin a released tag in production so a redeploy is a deliberate version bump.
-    image: ghcr.io/johnzastrow/bitt:1.2.0
+    image: ghcr.io/johnzastrow/bitt:1.8.1
     container_name: bittabby
     restart: unless-stopped
 
@@ -82,6 +82,20 @@ services:
       # BITT_SMTP_USERNAME: bitt@fluidgrid.site
       # BITT_SMTP_PASSWORD: ${BITT_SMTP_PASSWORD}
       # BITT_EMAIL_FROM: BitTabby <bitt@fluidgrid.site>
+      BITT_SMTP_HOST: mail.smtp2go.com
+      BITT_SMTP_PORT: "2525"
+      # The real login is set on the host only; the repo copy keeps a
+      # placeholder so the address is not published. This is the one line in
+      # which this file differs from the host's.
+      BITT_SMTP_USERNAME: smtp-login@example.com
+      BITT_SMTP_PASSWORD: ${BITT_SMTP_PASSWORD:?set BITT_SMTP_PASSWORD in .env}
+      # Driven from .env so the sending identity lives in one place, beside the
+      # password, rather than half here and half there.
+      BITT_EMAIL_FROM: ${BITT_EMAIL_FROM:?set BITT_EMAIL_FROM in .env}
+      BITT_NTFY_URL: ${BITT_NTFY_URL:?set BITT_NTFY_URL in .env}
+      BITT_NTFY_TOKEN: ${BITT_NTFY_TOKEN:?set BITT_NTFY_TOKEN in .env}
+
+
 
     # No data volume: with MariaDB the container holds no state, which also lets
     # the root filesystem be read-only. If it ever fails to start with a

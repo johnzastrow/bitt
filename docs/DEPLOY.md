@@ -24,7 +24,7 @@ short.
 ## Quick start with Docker
 
 ```bash
-git clone https://github.com/johnzastrow/bitt.git && cd bitt
+git clone https://github.com/johnzastrow/bittabby.git && cd bittabby
 
 mkdir -p secrets
 head -c 32 /dev/urandom | base64 > secrets/tick_secret
@@ -270,8 +270,11 @@ The downtime is a few seconds.
 ```bash
 docker compose stop bittabby
 
+# The volume is named <project>_bitt-data, and Compose takes the project name
+# from the folder: bittabby_bitt-data for a clone made as above.
+# `docker volume ls` shows the exact name.
 docker run --rm \
-  -v bitt_bitt-data:/data:ro \
+  -v bittabby_bitt-data:/data:ro \
   -v "$PWD:/backup" \
   alpine tar czf /backup/bitt-$(date +%F).tgz -C /data .
 

@@ -25,7 +25,7 @@ form persistence), and a notifications run in August:
 **Live in production at https://btabby.fluidgrid.site** — a
 Docker Compose stack on the `recipe.fluidgrid.site` host, on the host's MariaDB
 (`btabby` database), `network_mode: host` behind the host's apt Caddy, matching
-the other sites there. The repo is public at github.com/johnzastrow/bitt (MIT),
+the other sites there. The repo is public at github.com/johnzastrow/bittabby (MIT),
 images publish to `ghcr.io/johnzastrow/bitt` (**amd64 only**, by policy).
 
 **Start the next session from [HANDOFF-OPS.md](HANDOFF-OPS.md)** — it covers the

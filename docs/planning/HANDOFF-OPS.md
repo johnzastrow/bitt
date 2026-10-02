@@ -11,7 +11,7 @@ to start from.
 
 ## Current state in one paragraph
 
-BitTabby is at **v1.6.0**, public at github.com/johnzastrow/bitt (MIT), imaged at
+BitTabby is at **v1.6.0**, public at github.com/johnzastrow/bittabby (MIT), imaged at
 `ghcr.io/johnzastrow/bitt` (**amd64 only**), and **live at
 https://btabby.fluidgrid.site** on the `recipe.fluidgrid.site` host. It runs as a
 Docker Compose stack on the host's MariaDB, `network_mode: host`, behind the

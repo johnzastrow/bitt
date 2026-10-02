@@ -20,7 +20,7 @@ form persistence), and a notifications run in August:
 | 1.7.0 | 2026-10-01 | Navigation moves under the avatar (RECON-00 of [SPEC-BANK-RECONCILE.md](SPEC-BANK-RECONCILE.md)); initials avatars sized correctly. Tagged; not deployed |
 | 1.8.0 | 2026-10-01 | Bank reconciliation ([SPEC-BANK-RECONCILE.md](SPEC-BANK-RECONCILE.md)); built with Go 1.26.8 (five reachable stdlib vulnerabilities in the 1.26.5 builds); migrations 0013-0018, rehearsed on a production copy. Tagged and released; not deployed |
 | 1.8.1 | 2026-10-01 | Tab page: Record a payment in the top card, every section collapsed on open, Transfer the default method. **Released and deployed 2026-10-02** |
-| 1.8.2 | 2026-10-02 | Loan payment fields start at the monthly payment; the tab page field matches its note. Committed, **not yet tagged or deployed** |
+| 1.8.2 | 2026-10-02 | Loan payment fields start at the monthly payment; the tab page field matches its note. **Released and deployed 2026-10-02** (11:26 UTC; balances identical) |
 
 **Live in production at https://btabby.fluidgrid.site** — a
 Docker Compose stack on the `recipe.fluidgrid.site` host, on the host's MariaDB
@@ -35,8 +35,8 @@ the open threads.
 | Item | State |
 |------|-------|
 | Repository | `main`, public; local commits ahead of GitHub (bank reconciliation in progress) |
-| Version | 1.8.1 (released 2026-10-01; Release and CI green) |
-| Deployment | Live at https://btabby.fluidgrid.site. Deployed 2026-10-02 00:07 UTC: container `bittabby` runs `ghcr.io/johnzastrow/bitt:1.8.1`, healthy; migrations 0013-0018 applied; every tab's balance and entry count identical before and after. Pre-deploy backup `~/bittdocker/backups/btabby-pre-1.8.1-20261002T0007Z.sql`; previous compose kept as `compose.fluidgrid.yaml.pre-1.8.1`. The repo's `compose.fluidgrid.yaml` was synced from the host on 2026-10-02 and pins 1.8.1; it differs only in the SMTP login, a placeholder in the repo |
+| Version | 1.8.2 (released and deployed 2026-10-02; Release and CI green) |
+| Deployment | Live at https://btabby.fluidgrid.site. Deployed 2026-10-02 00:07 UTC: container `bittabby` runs `ghcr.io/johnzastrow/bitt:1.8.2` (since 2026-10-02 11:26 UTC; 1.8.1 from 00:07), healthy; migrations 0013-0018 applied; every tab's balance and entry count identical before and after. Pre-deploy backup `~/bittdocker/backups/btabby-pre-1.8.1-20261002T0007Z.sql`; previous compose kept as `compose.fluidgrid.yaml.pre-1.8.1`. The repo's `compose.fluidgrid.yaml` was synced from the host on 2026-10-02 and pins 1.8.1; it differs only in the SMTP login, a placeholder in the repo |
 | Scope | 54 requirements, 6 phases |
 | Stack | Go 1.26 + templ + htmx 2.0.4 (vendored); SQLite or MariaDB |
 | Phase 1 | Complete — walking skeleton |
